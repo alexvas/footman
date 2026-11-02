@@ -3,19 +3,18 @@
 Standalone Python project for executing an operator-configured command against a
 staged Git snapshot through stdio MCP.
 
-**Status:** dispatcher scaffold with ported filesystem and process helpers.
-These helpers do not establish completion of any dispatcher implementation phase.
-Snapshot capture, Docker lifecycle, output
-retention and the MCP server are not implemented. Starting with `--config`
-currently fails explicitly without reading the file or executing any command.
-The MCP SDK is pinned as `mcp==1.26.0` in `[project].dependencies` and
-`uv.lock`. No `src/` module imports it yet: protocol implementation belongs to
-Phase 8, and the SDK is currently exercised only by the exact-wheel installation
-smoke. Development tools and the build backend retain exact version pins.
+**Under development.** Not all described capabilities are implemented.
+Implementation progress is tracked in the [change tasks](openspec/changes/add-privileged-test-dispatcher/tasks.md);
+verification results are recorded in evidence reports. See [testing documentation](docs/testing.md)
+for their storage location and applicability rules; these temporary reports may
+not be available.
+
+See [operator configuration](docs/configuration.md) and the
+[annotated example](examples/footman.toml) for configuration details.
 
 ## Development
 
-Requires Python 3.14+ and `uv`. The planned run identity uses the standard-library
+Requires Python 3.14+ and `uv`. Run identity uses the standard-library
 `uuid.uuid7()`; no UUID compatibility implementation is required.
 
 ```sh
@@ -31,7 +30,7 @@ adds the Ruff lint/format, syntax-compilation and `ty` checks over one Python
 source inventory and returns the first failing status; see
 [docs/python-checks.md](docs/python-checks.md).
 
-The planned server invocation (not yet functional) is:
+The server entry point is:
 
 ```sh
 footman --config /absolute/path/config.toml
@@ -39,7 +38,7 @@ footman --config /absolute/path/config.toml
 
 `footman` is the process entry point used by an MCP client to start the stdio
 service, not an interface for directly executing tests. There are no `run` or
-`mcp` subcommands. Requests will be made through the MCP
+`mcp` subcommands. The dispatch interface is the MCP
 `run_privileged_command` tool, not a direct command-execution CLI.
 
 ## Layout
@@ -49,6 +48,9 @@ service, not an interface for directly executing tests. There are no `run` or
 - `src/footman/filesystem/`, `src/footman/process.py`: descriptor, stream and subprocess helpers ported from Jigbox.
 - `scripts/`: green gate and read-only source/type check entry points.
 - `tests/`: scaffold, foundation (`test_foundation.py`, `test_foundation_ownership.py`), helper lifecycle, check-tooling and verification-policy suites; `dispatcher_harness.py` and `docker_cli_stub.py` support the disposable Git and Docker-free CLI fixtures. See [docs/testing.md](docs/testing.md).
+- `tests/test_configuration.py`: configuration, request-boundary and startup-lifetime suite.
+- `docs/configuration.md`: operator configuration schema and authority.
+- `examples/footman.toml`: annotated operator configuration example.
 - `docs/testing.md`: verification commands and limitations.
 - `docs/python-checks.md`: source inventory, tool installation, parallel test running and the gate contract.
 - `openspec/changes/add-privileged-test-dispatcher/`: implementation contract.

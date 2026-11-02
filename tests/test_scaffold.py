@@ -50,11 +50,17 @@ def test_help() -> None:
     assert result.stderr == ""
 
 
-def test_scaffold_fails_explicitly_without_protocol_output() -> None:
-    result = invoke("--config", "not-read-by-scaffold.toml")
-    assert result.returncode == 2
+def test_missing_configuration_file_refuses_startup(tmp_path: Path) -> None:
+    missing = tmp_path / "absent-configuration.toml"
+    assert not missing.exists()
+    result = invoke("--config", str(missing))
+    assert result.returncode != 0
     assert result.stdout == ""
-    assert "MCP server is not implemented yet" in result.stderr
+    assert result.stderr
+    assert "configuration" in result.stderr.lower()
+    assert "load" in result.stderr.lower()
+    assert not missing.exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize("subcommand", ["run", "mcp"])

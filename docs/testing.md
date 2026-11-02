@@ -55,19 +55,18 @@ discover` run, run that as well: pytest does not replace an explicitly required
 verification.
 
 `tests/test_scaffold.py` checks package import, startup argument parsing, absence
-of direct-dispatch subcommands and explicit failure of the unimplemented server.
+of direct-dispatch subcommands and missing-configuration startup refusal.
 These scaffold checks alone do not establish any dispatcher capability.
 The Phase 1 suite below adds installation and disposable-harness coverage.
 
-The assertion in `test_scaffold_fails_explicitly_without_protocol_output` is a
-temporary stub check, not a permanent configuration contract. Phase 2 explicitly
-replaces it with a missing-file process test using a guaranteed absent path under
-`tmp_path`: require nonzero exit, empty stdout and nonempty stderr identifying a
-configuration-load failure, not the generic not-implemented error. Do not pin an
-exact nonzero code or full diagnostic wording. Record the replacement's RED
-failure against the stub and make it GREEN with the loader. Keep a separate
-process test for invalid fields in an existing TOML file. Do not create a valid
-TOML merely to assert startup failure: valid service startup need not fail.
+`test_missing_configuration_file_refuses_startup` permanently replaces the
+old temporary unimplemented-server assertion. It uses a guaranteed absent path
+under `tmp_path`: nonzero exit, empty stdout and nonempty stderr identifying a
+configuration-load failure, without pinning a code or full diagnostic wording.
+The separate `test_invalid_existing_toml_refuses_startup` checks invalid fields
+in an existing file, field-specific diagnostics and absence of run side effects.
+Do not create a valid TOML merely to assert startup failure: valid service startup
+need not fail.
 
 Run all scaffold coverage, including that permanent replacement, in later
 regression runs. Do not skip/xfail/filter a temporary assertion or mark the whole
@@ -118,6 +117,32 @@ provenance outside the checkout. Test scratch directories are pytest-owned;
 Git fixtures and stub call records live only below those directories. Stub
 cleanup never enumerates or removes real containers. Remove only the recorded
 external environment when no longer needed; retain evidence separately.
+
+## Phase 2 configuration suite
+
+Prerequisites are the same as the Phase 1 suite; Docker is not required.
+Run this command for configuration RED and subsequent regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_configuration.py tests/test_scaffold.py -n 2 --dist loadfile --tb=short -q
+```
+
+The missing-file startup replacement alone can be recorded before the remaining
+configuration tests are authored:
+
+```sh
+.venv/bin/python -m pytest tests/test_scaffold.py -n 2 --dist loadfile --tb=short -q
+```
+
+The configuration suite covers strict fields/types, canonical overlap and
+symlink ancestors, numeric bounds, templates, phase-only rejection before the
+downstream callback, immutable configuration across edits/restarts, process-level
+startup refusal, and config-reader failure/interruption/repeat-release branches.
+The example is loaded against disposable fixture paths. See
+[configuration.md](configuration.md) and [the annotated TOML](../examples/footman.toml).
+The internal application boundary is not MCP registration or a direct CLI.
+Run both the Phase 1 and Phase 2 commands above for Phase 2 validation, as well
+as the unscoped full green gate and build/help/installation checks.
 
 ## Descriptor, stream and process helpers
 

@@ -1,0 +1,30 @@
+# Operator-owned configuration, loaded once at startup; restart after edits.
+version = 1
+# Relative host paths resolve against THIS FILE's directory, never caller cwd.
+repository = "repository"
+snapshot_directory = "snapshots"
+# Storage must be outside the repository and not overlap each other.
+# {utc_datetime} is recommended for repeat use, but collisions still fail.
+# Static results/once or results/{phase} are valid: existing destinations
+# make subsequent runs fail; no overwrite, renaming or automatic retry.
+output_dir = "results/{phase}/{utc_datetime}"
+
+# Prepare the image yourself. It must supply the command, a long-running main
+# process and readiness; Footman does not build images or infer readiness.
+# The Docker daemon must see the host snapshot path for this bind mount.
+container_start_argv = [
+  "docker", "run", "--detach",
+  "--mount", "type=bind,src={snapshot_path},dst=/workspace",
+  "prepared-build-image", "sleep", "infinity",
+]
+container_snapshot_directory = "/workspace"
+# Relative, normalized inside the container mount, not a host working path.
+working_directory = "."
+# Optional: defaults to root. Privileged staged code is NOT a security sandbox.
+user = "root"
+# Literal argv; no shell parsing, rewriting, implicit flags or phase selection.
+# Alternatives: ["./gradlew", "test"] or ["npm", "test"].
+command_argv = ["cargo", "test", "--locked"]
+# Finite numbers, 0 < timeout <= 86400; 0 < cleanup grace <= 300 (seconds).
+timeout_seconds = 3600
+cleanup_grace_seconds = 10

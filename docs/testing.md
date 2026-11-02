@@ -42,6 +42,7 @@ uv sync --extra dev --locked
 .venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q
 uv build
 uv run --locked footman --help
+uv run --locked python -m footman --help
 scripts/check-green
 ```
 
@@ -55,8 +56,8 @@ verification.
 
 `tests/test_scaffold.py` checks package import, startup argument parsing, absence
 of direct-dispatch subcommands and explicit failure of the unimplemented server.
-These tests do not establish phase 1 completion or any dispatcher capability.
-In particular, Docker isolation fixtures and RED evidence have not been delivered.
+These scaffold checks alone do not establish any dispatcher capability.
+The Phase 1 suite below adds installation and disposable-harness coverage.
 
 The assertion in `test_scaffold_fails_explicitly_without_protocol_output` is a
 temporary stub check, not a permanent configuration contract. Phase 2 explicitly
@@ -80,6 +81,43 @@ virtual environment. Outside the checkout, with `PYTHONPATH` unset, import
 `footman.process`, invoke the installed `footman --help`, and run the installed
 `python -m footman --help`. Record the exact commands and exit statuses. Do not
 treat editable-package import success as wheel-installation verification.
+
+## Phase 1 foundation suite
+
+Prerequisites: Linux/POSIX, an unprivileged user, Python 3.14+, Git and uv,
+with `uv sync --extra dev --locked` completed. No Docker access is needed.
+Register and run this suite for RED and every later foundation regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_foundation.py tests/test_foundation_ownership.py tests/test_scaffold.py -n 2 --dist loadfile --tb=short -q
+```
+
+The installation test builds one exact wheel and installs it into a fresh venv
+outside the checkout with PYTHONPATH removed; it checks explicit lifecycle
+imports and both installed help entry points. Isolated negative controls use
+`FOOTMAN_FOUNDATION_CONTROL=missing-module`, `missing-executable`, or
+`mutate-fixture` before the same command. Each must exit nonzero with an
+assertion failure; they never edit production code or the developer index.
+
+For VALIDATE, run the same foundation suite in a fresh non-editable environment
+(the absolute test paths load repository test support, never checkout `src/`).
+From the repository root, after the documented `uv build`:
+
+```sh
+repo=$PWD
+smoke=$(mktemp -d /tmp/footman-foundation.XXXXXX)
+uv venv --python python3.14 "$smoke/venv"
+uv pip install --python "$smoke/venv/bin/python" "$repo/dist/footman-0.1.0-py3-none-any.whl" 'pytest==8.4.2' 'pytest-xdist==3.8.0'
+cd "$smoke"
+env -u PYTHONPATH "$smoke/venv/bin/python" -m pytest "$repo/tests/test_foundation.py" "$repo/tests/test_foundation_ownership.py" "$repo/tests/test_scaffold.py" -n 2 --dist loadfile --tb=short -q
+```
+
+Record the exact wheel path/digest, environment path, each command status and
+complete pytest output. The nested installation smoke also verifies module
+provenance outside the checkout. Test scratch directories are pytest-owned;
+Git fixtures and stub call records live only below those directories. Stub
+cleanup never enumerates or removes real containers. Remove only the recorded
+external environment when no longer needed; retain evidence separately.
 
 ## Descriptor, stream and process helpers
 
@@ -148,9 +186,19 @@ count override. Document the exact mandated full-suite command once; additional
 parallel phase-suite examples are allowed. There is no fence-label bypass for
 serial commands. Intentionally serial policy probes remain in test code, not
 verification-suite examples. See `docs/python-checks.md` for the same contract.
-Do not skip required
-real MCP client or Docker tests. Runtime Git/Docker and an operator-prepared image
-will be required for integration tests, but not for current scaffold tests.
+Development phases 1–9 run inside the Docker-free development container:
+`tests/` is the complete development suite, using disposable real Git repositories,
+a real MCP client when delivered, and the controlled Docker CLI executable stub.
+No Docker socket, daemon, image or npm is required for this gate. The stub records
+literal argv and fixture-owned identities and scripts responses, bytes, delays
+and failures; it does not prove actual container behavior.
+
+Phase 10 separately introduces `host_tests/` and the mandatory real-Docker host
+acceptance gate against an exact installed wheel and an operator-prepared image.
+That suite is not part of development discovery; missing host prerequisites fail
+host acceptance, never become skips. Passing development checks does not establish
+final host acceptance. Until phase 10 creates that package, static roots remain
+`src/`, `tests/`, `scripts/`, and ty checks `src/` only.
 Never exercise index mutation or broad container cleanup against this repository;
 use disposable repositories and recorded fixture-owned container IDs.
 

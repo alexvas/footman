@@ -169,7 +169,15 @@ Some contracts are only meaningful for an unprivileged user (the unreadable
 `tests/test_python_syntax_compilation.py`) and some require the project
 virtual environment. Those are recorded as prerequisites: the test fails with
 an actionable message instead of skipping, because this repository has no
-approved skip exceptions. Docker and npm are not required by the current suite.
+approved skip exceptions. The complete `tests/` development gate is Docker-free:
+phases 1–9 use real disposable Git repositories and a controlled Docker CLI stub,
+not Docker access or npm. Real MCP clients are required when their suites arrive.
+Phase 10 adds separately discovered `host_tests/` and mandatory real-Docker host
+acceptance against an exact installed wheel and an operator-prepared image;
+development success cannot replace that gate. Missing host prerequisites fail
+host acceptance rather than skipping. This boundary is currently documentation
+only: retain the three source roots and `src/`-only ty scope until phase 10
+creates the host package and updates the inventories together.
 
 ### Capturing complete gate output
 

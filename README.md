@@ -3,7 +3,9 @@
 Standalone Python project for executing an operator-configured command against a
 staged Git snapshot through stdio MCP.
 
-**Status:** project scaffold only. Snapshot capture, Docker lifecycle, output
+**Status:** dispatcher scaffold with ported filesystem and process helpers.
+These helpers do not establish completion of any dispatcher implementation phase.
+Snapshot capture, Docker lifecycle, output
 retention and the MCP server are not implemented. Starting with `--config`
 currently fails explicitly without reading the file or executing any command.
 The MCP SDK will be selected and pinned when protocol implementation begins;
@@ -35,10 +37,17 @@ service, not an interface for directly executing tests. There are no `run` or
 
 - `pyproject.toml`, `uv.lock`: package/build metadata and locked dependencies.
 - `src/footman/`: package and operator entry point.
-- `tests/`: scaffold tests; add behavior-specific suites during implementation.
+- `src/footman/filesystem/`, `src/footman/process.py`: descriptor, stream and subprocess helpers ported from Jigbox.
+- `tests/`: scaffold, helper lifecycle and verification-policy suites; see [docs/testing.md](docs/testing.md).
 - `docs/testing.md`: verification commands and limitations.
 - `openspec/changes/add-privileged-test-dispatcher/`: implementation contract.
 
 This repository is the standalone implementation project. No further transfer
 of the planning artifacts is required. See [testing documentation](docs/testing.md)
 for test prerequisites and evidence requirements.
+
+### Descriptor and stream lifecycle
+
+Before adding code that owns a descriptor or stream, read the contract and illustrative examples in [docs/filesystem-lifecycle.md](docs/filesystem-lifecycle.md). Every new ownership path must name one shared `footman.filesystem` owner and add lifecycle tests; the mandatory rule is also recorded in the root [AGENTS.md](AGENTS.md).
+
+For subprocess coordination, use `OwnedProcess` and the launch-configured policies in [docs/process-lifecycle.md](docs/process-lifecycle.md), rather than independent pipe or wait/reap cleanup. The guide distinguishes bounded shutdown from incomplete cleanup and local child exit from managed-action settlement.

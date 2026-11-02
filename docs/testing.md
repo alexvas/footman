@@ -140,7 +140,15 @@ The full-suite command includes:
 ## Future implementation
 
 Follow the change's RED → GREEN → INTROSPECT → VALIDATE phase gates. Register each
-new phase suite's exact command here before recording RED. Do not skip required
+new phase suite's exact command here before recording RED. Phase suites may
+select narrower test paths but do not replace the mandated full-suite G run.
+Every fenced pytest suite command must include `-n <N>` (an integer from 1
+through 1024) and `--dist loadfile`, with no disabled xdist or alternate worker
+count override. Document the exact mandated full-suite command once; additional
+parallel phase-suite examples are allowed. There is no fence-label bypass for
+serial commands. Intentionally serial policy probes remain in test code, not
+verification-suite examples. See `docs/python-checks.md` for the same contract.
+Do not skip required
 real MCP client or Docker tests. Runtime Git/Docker and an operator-prepared image
 will be required for integration tests, but not for current scaffold tests.
 Never exercise index mutation or broad container cleanup against this repository;

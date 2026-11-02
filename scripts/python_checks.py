@@ -62,7 +62,7 @@ from footman.filesystem.descriptors import (  # noqa: E402 -- CLI path is set fi
     DirectoryDescriptor,
     OwnedDescriptor,
 )
-from footman.filesystem.operations import PosixDescriptorOps  # noqa: E402
+from footman.filesystem.operations import PosixDescriptorOps  # noqa: E402 -- CLI path is set first.
 from footman.process import (  # noqa: E402 -- CLI path is set first.
     OwnedProcess,
     ProcessResult,

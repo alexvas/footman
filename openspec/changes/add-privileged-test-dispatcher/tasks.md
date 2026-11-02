@@ -16,6 +16,12 @@ This checklist is a delivery contract, not a list of suggestions. Implement it a
 - Supervise started runs through completion even if the MCP client disconnects. Enforce startup/execution timeout and bounded cleanup. Never report aggregate success with incomplete output or unresolved resources.
 - Do not infer test layout, add build/test flags, interpret test counts, provision project identities, build consumer images, claim hermeticity or claim repository readiness. Cargo, Gradle and npm are interchangeable configuration examples, not runtime dependencies. Staging is a mistake guard, not approval to execute hostile code as root.
 
+### Existing foundation and mandatory adapter ownership
+
+The scaffold and lifecycle primitives already exist (foundation port `905e8be`); do not recreate them or claim their passing suites complete dispatcher phases. Follow design decision 6 and `docs/filesystem-lifecycle.md` / `docs/process-lifecycle.md`. Use explicit filesystem submodule imports, directory capabilities, immediate raw-fd adoption, sole stream owners, `closefd=False` wrappers and `CleanupFailures` for independent releases. Managed Git/Docker children and test helpers use `OwnedProcess.launch`; never implement parallel reader, close/reap/signal or shutdown mechanisms. Keep Docker/Git/publication/recursive-deletion policy in domain adapters.
+
+For every new acquisition, wrapper, transfer or cleanup branch, add operation-plus-close, sole-close, interruption and repeat-cleanup tests, plus independent release, handoff and concurrency where applicable. Run them in the phase introducing the branch, not only phase 6 or 9. Retain the same owners through incomplete cleanup and observe them without retry or renewed budgets. Existing helper suites remain mandatory regression coverage.
+
 ### Required test matrices
 
 Each matrix is normative. A task referencing a matrix must cover every listed case, with named assertions. Do not replace real-container checks with mocks. Use mocks/fault injection for destructive or hard-to-reproduce failures; real-container tests must additionally verify actual Docker semantics.
@@ -30,6 +36,8 @@ Each matrix is normative. A task referencing a matrix must cover every listed ca
 
 **R — Results and lifecycle:** command exits 0 and nonzero; command exits 0 with zero tests still means command success only; startup/execution deadline; signal/interruption; local Docker-client death while descendants survive; known-ID container removal and confirmation; failed removal; snapshot retained until removal confirmed; root-owned snapshot files; symlink-safe deletion confined to the successfully reserved snapshot; a reservation loser never deletes the winner's directory; unrelated containers untouched; startup loses valid attributable ID (report potentially unresolved resources, no guessed cleanup or startup retry); concurrent independent requests; client disconnect does not abandon or duplicate the run; initial manifest survives interruption; atomic finalization failure cannot report success.
 
+**A — Adapter ownership and persistence:** apply the mandatory branch fault matrix above to output reservation/files, config reads, private index, raw export, Git/Docker children, manifest publication and snapshot deletion. Verify no borrowed-pipe release or double ownership; every independent release attempted once; operation authority preserved over ordinary close failure; interruption preserved; repeat/concurrent cleanup once-only; helper failure identity/kind preserved and rebased to ACTION/None; one collection per child; local child exit distinct from container removal and helper settlement; shared execution deadline; one total cleanup budget including helper cleanup and local reserve; incomplete owners retained through read-only observation. Inject writer callback errors that the coordinator treats as diagnostic-only, EOF/read failure/abort, flush/close failure and code-zero conflicts; the domain sink must independently prevent success and report incomplete output. Include helper `done` with `cleanup_complete` false and exhausted-budget observations without renewed work.
+
 ### Result contract and failure rules
 
 - MCP result fields are `outcome`, `return_code`, `stdoutPath`, `stderrPath`, `startupStdoutPath`, `startupStderrPath` and `resultPath`. Include a path field only when that file was created, and use an absolute host path. A normal retained run includes all five path fields. Explain absent/incomplete files in structured failure diagnostics; do not return fabricated paths as retained evidence.
@@ -42,6 +50,7 @@ Each matrix is normative. A task referencing a matrix must cover every listed ca
 
 - Every phase executes RED → GREEN → INTROSPECT → VALIDATE in that order. Do not start GREEN until every RED task in that phase is complete. Do not start INTROSPECT until GREEN is complete, or VALIDATE until INTROSPECT is complete. A later phase may start only after every task in its dependencies is checked complete.
 - RED completion requires executing the specified new tests and recording failures attributable to missing required behavior. Syntax errors, missing tools and broken fixtures are not acceptable RED evidence. A passing new test must be strengthened to demonstrate the missing behavior, or its already implemented behavior must be documented with an explicit negative control that fails the assertion; do not deliberately break working production code.
+- Every delivered GREEN/INTROSPECT/VALIDATE candidate must run `scripts/check-green` from the repository root without scope/fix arguments, following `docs/testing.md` and `docs/python-checks.md`. Attempt every independent check and preserve the first failing status. Also run mandated build/help and applicable exact-wheel installation checks; phase suites do not replace the full gate or real Docker/MCP acceptance. Documented RED remains exempt, with exact output/status and missing-behavior attribution.
 - GREEN completion requires the named tests to pass with the implementation, without weakening tests. Internal dispatch entry points used by tests are not a public direct-execution CLI.
 - INTROSPECT produces a written checklist of the named review items and file/test references. Correct discovered defects before passing the gate. Add a regression test first for each defect and rerun the affected checks. Unresolved contract defects block the phase.
 - VALIDATE runs the phase suite and all earlier phase suites without exclusions. This requires preserving behavior coverage, not preserving assertions tied to a temporary scaffold: phase 2 explicitly replaces the not-implemented startup test with permanent missing-file coverage before validation. Do not skip, xfail or filter the obsolete test; replace it as specified and keep the replacement in every later regression run. A task is complete only when its stated assertion or artifact can be checked independently. Do not mark a phase complete based solely on a narrative claim.
@@ -60,12 +69,12 @@ The explicit edges are: `1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9`. Eac
 **Deliverables:** installable executable scaffold, pinned runtime/SDK dependencies, isolated test harness, testing documentation, foundation evidence.
 
 ### RED
-- [ ] 1.1 Write an installation smoke test for the standalone executable. Completion: running it against the empty project fails specifically because the executable is not installed.
+- [ ] 1.1 Review and extend installation smoke coverage for the existing executable and lifecycle modules. Completion: missing executable/module behavior is detected by a documented isolated negative control; preserve existing working code and record actual RED output/status rather than claiming this repository is empty.
 - [ ] 1.2 Write a harness-isolation test using a disposable Git repository. Completion: its negative control detects an intentional fixture mutation without touching the developer repository.
 
 ### GREEN
-- [ ] 1.3 Implement the executable package scaffold with pinned dependencies. Completion: the installation smoke test passes in a clean temporary environment.
-- [ ] 1.4 Implement disposable Git/Docker test fixtures with ownership tracking. Completion: the harness-isolation test passes and cleanup operates only on recorded fixture paths/IDs.
+- [ ] 1.3 Integrate the existing executable scaffold and lifecycle foundation with pinned dependencies. Completion: the installation smoke test passes for the exact built wheel in a fresh environment outside the checkout with PYTHONPATH unset, importing all explicit filesystem modules and footman.process and checking both executable/module help entry points; do not reimplement owners.
+- [ ] 1.4 Implement disposable Git/Docker test fixtures using the shared owners and recorded resource identities. Completion: isolation and matrix A fault tests pass; fixture cleanup operates only on recorded paths/IDs, with no independent raw-child control or duplicate release authority.
 - [ ] 1.5 Publish testing prerequisites and literal suite commands for the chosen toolchain. Completion: another invocation from a clean checkout can execute the foundation command exactly as documented.
 
 ### INTROSPECT
@@ -111,7 +120,7 @@ The explicit edges are: `1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9`. Eac
 ### GREEN
 - [ ] 3.4 Implement request identity using one standard-library `uuid.uuid7()` call and Crockford serialization. Completion: identity tests pass with timestamps derived only from that UUID's `time`, with no fallback implementation, second clock read or ID regeneration.
 - [ ] 3.5 Implement single-pass output-template expansion. Completion: timestamp/phase/path tests pass using the fixed request identity without recursive substitution or collision renaming.
-- [ ] 3.6 Implement exclusive run-directory and fixed-file reservation. Completion: collision, symlink, permissions and creation-failure tests pass without overwriting preexisting bytes.
+- [ ] 3.6 Implement exclusive run-directory and fixed-file reservation through directory capabilities and sole file owners. Completion: collision, symlink, permissions, creation-failure and matrix A ownership tests pass without overwriting preexisting bytes; all acquired resources remain protected on partial setup failure.
 - [ ] 3.7 Document output reservation and retention policy. Completion: the document names all five files, shared UUIDv7/millisecond identity, supported placeholders, static/phase-only collision behavior, sensitive/large output and manual retention without automatic evidence deletion.
 
 ### INTROSPECT
@@ -132,8 +141,8 @@ The explicit edges are: `1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9`. Eac
 
 ### GREEN
 - [ ] 4.4 Implement exclusive run-ID snapshot reservation. Completion: reservation tests pass for canonical-root confinement, existing-path/symlink rejection and same-ID collision without regeneration, renaming or touching the winner's path.
-- [ ] 4.5 Implement private-index tree capture with sanitized Git redirection after successful snapshot reservation. Completion: capture tests pass for ordinary/linked worktrees, unresolved entries, split-index policy and concurrent replacement.
-- [ ] 4.6 Implement raw tree/blob export without following exported symlinks. Completion: export tests pass for mode-specific file/directory/symlink creation, exact bytes/targets and explicit rejection of gitlinks, unsupported modes, unsafe paths and unsafe symlink chains.
+- [ ] 4.5 Implement private-index tree capture with sanitized Git redirection after successful snapshot reservation, using shared file owners and OwnedProcess for managed Git children. Completion: capture tests pass for ordinary/linked worktrees, unresolved entries, split-index policy, concurrent replacement and matrix A operation/cleanup faults.
+- [ ] 4.6 Implement raw tree/blob export using directory capabilities, sole file owners and process streaming without following exported symlinks. Completion: export tests pass for mode-specific creation, exact bytes/targets and explicit rejection of gitlinks, unsupported modes, unsafe paths/chains; matrix A covers sink errors, partial export and independent resource release.
 - [ ] 4.7 Document snapshot identity and limitations. Completion: documentation states exclusive run-ID path ownership/collision failure, mode-specific export, staged-only inputs, no `.git`, no ignored artifacts, split-index policy and no commit/ref/index/workdir mutation.
 
 ### INTROSPECT
@@ -147,6 +156,8 @@ The explicit edges are: `1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9`. Eac
 **Depends on:** phase 4.
 **Deliverables:** launch parser/inspection, exact exec adapter, real-container execution tests, operator launch documentation and evidence.
 
+Local process/pipe ownership through `OwnedProcess` is mandatory already in phases 4–5; phase 6 adds Docker domain supervision, not basic safe child acquisition. Startup/execution share a request deadline, and local cleanup allocations must fit the single run cleanup allowance.
+
 Tests in this phase must use fixture-owned fallback cleanup for containers, because production lifecycle supervision is delivered in phase 6. The fallback must record IDs, never scan for arbitrary containers to remove, and must not be used as proof of production cleanup.
 
 ### RED
@@ -156,7 +167,7 @@ Tests in this phase must use fixture-owned fallback cleanup for containers, beca
 ### GREEN
 - [ ] 5.3 Implement literal snapshot-path substitution and startup contract parsing. Completion: launcher tests pass for valid output and reject every invalid stdout/status case without command execution.
 - [ ] 5.4 Implement exact-ID container inspection. Completion: inspection tests pass for running state, image identity and canonical snapshot mount, rejecting each mismatch before exec.
-- [ ] 5.5 Implement configured container execution. Completion: exact-execution tests pass for image executables and snapshot wrappers, including unavailable user/executable/cwd and nonzero exit.
+- [ ] 5.5 Implement configured container execution through OwnedProcess.launch, also using it for managed launch/inspection children. Completion: exact-execution and matrix A process-integration tests pass for image executables and snapshot wrappers, unavailable user/executable/cwd and nonzero exit; no borrowed-pipe release, duplicate collection or custom readers/reaping.
 - [ ] 5.6 Document the launch/execution contract. Completion: instructions show dedicated `docker run` outputting only its ID, operator-prepared keep-alive/readiness, mount-syntax limitations and interchangeable command examples without adding implicit flags.
 
 ### INTROSPECT
@@ -178,9 +189,9 @@ A local Docker process exiting is not evidence that the container stopped. A lau
 - [ ] 6.2 Write cleanup tests for matrix R's known-ID/unknown-ID and snapshot cases. Completion: absent cleanup fails ordered-removal assertions and tests detect any deletion of an unrelated sentinel container/path.
 
 ### GREEN
-- [ ] 6.3 Implement startup/execution deadline enforcement with separate cleanup grace. Completion: supervision tests finish within documented test tolerances and distinguish local-client termination from confirmed container removal.
-- [ ] 6.4 Implement recorded-ID removal with bounded confirmation. Completion: cleanup tests pass on normal/failure/timeout paths; unknown-ID startup reports unresolved resources without guessed removal or retry.
-- [ ] 6.5 Implement confined no-follow snapshot cleanup. Completion: root-owned/symlink tests either safely delete the owned snapshot after confirmed container removal or explicitly retain/report it without touching sentinels.
+- [ ] 6.3 Implement one shared startup/inspection/execution deadline and one separate total cleanup allowance using launch-selected StopPolicy/StopStage caps and a local-cleanup reserve. Completion: supervision and matrix A budget tests pass within documented tolerances; helpers consume remaining allowance, not fresh grace, and local-client termination does not prove container removal.
+- [ ] 6.4 Implement recorded-ID removal/confirmation as a domain ManagedAction with nonblocking protocol boundaries and separately owned default-policy helper children. Completion: normal/failure/timeout tests and matrix A verify failure identity/kind handoff to ACTION/None, done versus cleanup_complete, retained owners/continuation and bounded cleanup_status/wait_cleanup observations without renewed work; unknown-ID startup reports unresolved resources without guessed removal or retry.
+- [ ] 6.5 Implement confined no-follow snapshot cleanup using directory capabilities and sole owners. Completion: root-owned/symlink and matrix A branch-fault tests either safely delete the owned snapshot after confirmed container removal or retain/report it without touching sentinels; owner validation/permission failures do not justify weakened confinement.
 - [ ] 6.6 Document incomplete-run reconciliation. Completion: instructions use recorded run/container/snapshot identities, explain unconfirmed resources and prohibit broad container deletion or blind retries.
 
 ### INTROSPECT
@@ -201,8 +212,8 @@ A local Docker process exiting is not evidence that the container stopped. A lau
 - [ ] 7.3 Write outcome tests for matrix R's status cases. Completion: tests reject aggregate success for timeout, interruption, storage failure or unresolved cleanup even when command status is 0.
 
 ### GREEN
-- [ ] 7.4 Implement lossless separate stream retention. Completion: stream tests pass for simultaneous large output and injected storage failure, with no startup/diagnostic contamination of command bytes.
-- [ ] 7.5 Implement initial and atomic final `result.json` persistence. Completion: manifest tests pass, including readable interrupted initial state and unsuccessful failed finalization.
+- [ ] 7.4 Implement lossless separate sinks over OwnedProcess.stream with explicit domain persistence status. Completion: simultaneous large output and matrix A tests cover diagnostic-only callback exceptions, write/flush/close failure and EOF/read-failed/aborted streams; code zero cannot mask incomplete retention, no unbounded capture or startup/diagnostic contamination is allowed.
+- [ ] 7.5 Implement initial and atomic final result.json persistence with a domain-owned same-directory temporary-file/publication protocol. Completion: manifest and matrix A tests pass for readable interrupted initial state, operation-plus-close, sole-close, interruption/repeat cleanup and unsuccessful failed finalization; no temporary fd/stream loses its sole owner.
 - [ ] 7.6 Document deterministic outcome precedence. Completion: a decision table covers every outcome, signal/unknown status and conflicting failure case, preserves cleanup detail and assigns no successful outcome to unresolved runs.
 - [ ] 7.7 Implement result aggregation from lifecycle observations. Completion: outcome tests pass against the documented decision table without inventing command return codes or interpreting test output.
 - [ ] 7.8 Document result fields and evidence limitations. Completion: examples show code 0, nonzero, null code, retained initial manifest and incomplete storage without claiming workdir testing or verification sufficiency.
@@ -251,7 +262,7 @@ This phase verifies integration; it must not be the first phase to test configur
 - [ ] 9.4 Close portability defects exposed by relocation. Completion: installation and the annotated example pass at a fresh location without consumer-specific prerequisites or source-project absolute paths.
 
 ### INTROSPECT
-- [ ] 9.5 Produce the acceptance coverage map. Completion: every spec requirement/scenario and each C/S/O/L/R matrix case links to a named executed test and its current result; no required case is unmapped or replaced with a skip.
+- [ ] 9.5 Produce the acceptance coverage map. Completion: every spec requirement/scenario and each C/S/O/L/R/A matrix case links to a named executed test and its current result; no required case is unmapped or replaced with a skip.
 - [ ] 9.6 Audit the complete phase graph and delivered scope. Completion: the review confirms all phases have RED/GREEN/INTROSPECT/VALIDATE evidence, dependencies point only backward and the implementation contains no out-of-scope public capability.
 
 ### VALIDATE

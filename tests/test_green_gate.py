@@ -10,6 +10,8 @@ that runs it, and ``docs/python-checks.md`` records the commanded scope.
 from __future__ import annotations
 
 import importlib.util
+import re
+import shlex
 import shutil
 import sys
 import tomllib
@@ -65,6 +67,179 @@ def load_gate():
 def test_local_plan_preserves_every_required_command():
     gate = load_gate()
     assert gate.COMMANDS == EXPECTED_COMMANDS
+
+
+DOCUMENTED_GATE_PATHS = ("docs/testing.md", "docs/python-checks.md", "README.md")
+
+
+def assert_documented_suite(text):
+    command = " ".join(EXPECTED_COMMANDS[-1])
+    assert text.count(command) == 1, "document the exact full-suite command once"
+    # Runnable phase-suite examples may narrow scope, but remain parallel.
+    # Prose describing intentionally serial policy probes is not a suite command.
+    for body in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S):
+        for line in body.splitlines():
+            argv = shlex.split(line)
+            invocation = next(
+                (index for index, arg in enumerate(argv) if Path(arg).name == "pytest"),
+                None,
+            )
+            if invocation is None:
+                continue
+            args = argv[invocation + 1 :]
+            if args in (["--version"], ["--help"]):
+                continue
+            workers = []
+            distributions = []
+            index = 0
+            while index < len(args):
+                arg = args[index]
+                assert not arg.startswith("--numprocesses"), "use one -n setting"
+                if arg in ("-n", "--dist"):
+                    assert index + 1 < len(args), "missing parallel option value"
+                    value = args[index + 1]
+                    index += 1
+                elif arg.startswith("-n"):
+                    value = arg[2:].removeprefix("=")
+                    arg = "-n"
+                elif arg.startswith("--dist="):
+                    value = arg.partition("=")[2]
+                    arg = "--dist"
+                else:
+                    index += 1
+                    continue
+                if arg == "-n":
+                    workers.append(value)
+                else:
+                    distributions.append(value)
+                index += 1
+            assert len(workers) == 1, "use exactly one parallel worker setting"
+            assert workers[0].isascii() and workers[0].isdecimal()
+            assert 1 <= int(workers[0]) <= 1024
+            assert distributions == ["loadfile"], "use exactly one loadfile setting"
+            assert not any("no:xdist" in arg for arg in args)
+
+
+@pytest.mark.parametrize("relative", DOCUMENTED_GATE_PATHS)
+def test_documented_suite_matches_gate(relative):
+    path = REPO_ROOT / relative
+    assert path.is_file(), f"missing gate documentation: {relative}"
+    assert_documented_suite(path.read_text())
+
+
+@pytest.mark.parametrize("relative", ("docs/testing.md", "docs/python-checks.md"))
+def test_instruction_referenced_testing_guides_exist(relative):
+    assert (REPO_ROOT / relative).is_file()
+    assert relative in (REPO_ROOT / "AGENTS.md").read_text()
+    tasks = REPO_ROOT / "openspec/changes/add-privileged-test-dispatcher/tasks.md"
+    # The change may eventually be archived; its instructions must remain valid.
+    if tasks.is_file():
+        assert relative in tasks.read_text()
+
+
+def test_documented_worker_override_matches_gate_contract():
+    text = " ".join((REPO_ROOT / "docs/python-checks.md").read_text().split())
+    assert "`scripts/check-green` uses eight workers by default." in text
+    assert (
+        "`GREEN_CHECKS_WORKERS` changes only the pytest parallelism, never the suite "
+        "or the other checks, and accepts any integer from `1` through `1024`; "
+        "an invalid value fails before any check runs:"
+    ) in text
+    assert "GREEN_CHECKS_WORKERS=4 scripts/check-green" in text
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        ".venv/bin/python -m pytest tests -q",
+        ".venv/bin/python -m pytest tests -n 4 --dist loadfile --tb=short -q",
+    ),
+)
+def test_documentation_command_drift_is_detected(replacement):
+    with pytest.raises(AssertionError):
+        assert_documented_suite(f"```sh\n{replacement}\n```\n")
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    (
+        ".venv/bin/python -m pytest",
+        "pytest",
+        ".venv/bin/pytest",
+        "uv run --locked pytest",
+    ),
+)
+@pytest.mark.parametrize(
+    "options",
+    ("-n 8 --dist loadfile", "-n8 --dist=loadfile", "-n=8 --dist=loadfile"),
+)
+def test_parallel_phase_suite_is_allowed(launcher, options):
+    command = " ".join(EXPECTED_COMMANDS[-1])
+    phase = f"{launcher} tests/test_scaffold.py {options} --tb=short -q"
+    assert_documented_suite(f"```sh\n{command}\n{phase}\n```\n")
+
+
+@pytest.mark.parametrize("probe", ("pytest --version", "pytest --help"))
+def test_pure_pytest_tool_probe_is_allowed(probe):
+    command = " ".join(EXPECTED_COMMANDS[-1])
+    assert_documented_suite(f"```sh\n{command}\n{probe}\n```\n")
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    (
+        ".venv/bin/python -m pytest",
+        "pytest",
+        ".venv/bin/pytest",
+        "uv run --locked pytest",
+    ),
+)
+@pytest.mark.parametrize(
+    "options",
+    (
+        "-q",
+        "--version -q",
+        "-n 8 --dist loadfile -n0",
+        "-n 8 --dist loadfile -n=0",
+        "-n8 --dist=loadfile -n=8",
+        "-n 8 --dist loadfile --dist=each",
+        "-n8 --dist=loadfile --dist loadfile",
+        "-n0 --dist=loadfile",
+        "-n=1025 --dist=loadfile",
+        "-n8 --dist=each",
+        "-n8 --dist=loadfile --numprocesses=0",
+        "-n8 --dist=loadfile -pno:xdist",
+    ),
+)
+def test_direct_and_attached_option_bypasses_are_rejected(launcher, options):
+    command = " ".join(EXPECTED_COMMANDS[-1])
+    phase = f"{launcher} tests/test_scaffold.py {options}"
+    with pytest.raises(AssertionError):
+        assert_documented_suite(f"```sh\n{command}\n{phase}\n```\n")
+
+
+@pytest.mark.parametrize(
+    "phase",
+    (
+        ".venv/bin/python -m pytest tests/test_scaffold.py -q",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 0 --dist loadfile",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist each",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist loadfile -p no:xdist",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist loadfile --numprocesses=0",
+    ),
+)
+def test_invalid_phase_suite_is_rejected_even_with_old_escape_hatch(phase):
+    command = " ".join(EXPECTED_COMMANDS[-1])
+    with pytest.raises(AssertionError):
+        assert_documented_suite(
+            f"```sh\n{command}\n```\n```sh non-mandated\n{phase}\n```\n"
+        )
+
+
+def test_duplicate_full_suite_example_is_rejected():
+    command = " ".join(EXPECTED_COMMANDS[-1])
+    with pytest.raises(AssertionError):
+        assert_documented_suite(f"```sh\n{command}\n{command}\n```\n")
 
 
 @pytest.mark.parametrize("omitted", range(len(EXPECTED_COMMANDS)))

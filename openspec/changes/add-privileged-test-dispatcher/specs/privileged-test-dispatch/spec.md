@@ -210,6 +210,40 @@ The dispatcher SHALL enforce `timeout_seconds` for startup/execution and `cleanu
 - **WHEN** an MCP client disconnects after execution starts
 - **THEN** the run remains supervised to a retained outcome without automatic retry
 
+### Requirement: Single-owner resource integration
+Every descriptor, directory capability, fd-owning stream and managed child SHALL have one release authority throughout its lifecycle. Independent releases SHALL each be attempted once. Operation failures SHALL remain authoritative over ordinary close failures; sole close failures SHALL remain observable. Interruption SHALL retain authority. Repeated or concurrent cleanup SHALL NOT repeat release or restart cleanup work.
+
+#### Scenario: Operation and close both fail
+- **WHEN** an export or output operation fails and an independent resource release also fails
+- **THEN** the operation failure remains authoritative over the ordinary close failure, both are retained, and other independent releases are attempted
+
+#### Scenario: Sole close failure
+- **WHEN** execution and writes succeed but closing a retained output resource fails
+- **THEN** the close failure is observable and the run is not reported as successful
+
+#### Scenario: Repeated or concurrent cleanup
+- **WHEN** multiple callers request cleanup for the same run resources
+- **THEN** they observe the same ownership/continuation without repeating releases, restarting actions or renewing cleanup budgets
+
+#### Scenario: Interrupted resource operation
+- **WHEN** resource handling is interrupted
+- **THEN** interruption remains authoritative, applicable independent cleanup is attempted, and any incomplete ownership remains supervised and reported
+
+### Requirement: Independent cleanup and persistence observations
+The dispatcher SHALL distinguish local child exit, external container removal, helper-resource settlement and output persistence. Startup/execution operations SHALL share the request execution deadline. Cleanup stages, helper execution and local cleanup SHALL fit one cleanup allowance with a local-cleanup reserve. Observing incomplete cleanup SHALL NOT renew that allowance or initiate replacement cleanup.
+
+#### Scenario: Output callback fails with zero command status
+- **WHEN** a stream writer fails but the process coordinator treats the callback exception as diagnostic-only and the command exits zero
+- **THEN** the dispatcher independently records the persistence failure and reports unsuccessful incomplete output
+
+#### Scenario: Helper done before resource settlement
+- **WHEN** a cleanup helper reports its work done but its readers, child or release attempts have not settled
+- **THEN** cleanup remains incomplete and the run cannot report aggregate success
+
+#### Scenario: Cleanup budget exhausted
+- **WHEN** the cleanup allowance expires with pending resources and a caller subsequently observes cleanup
+- **THEN** observation uses the retained owners and continuation without a new action or cleanup budget, and unresolved resources remain reported
+
 ### Requirement: Limited success claim
 The dispatcher SHALL report execution of the configured command for the captured snapshot only. It SHALL NOT claim that unstaged workdir edits were tested, that tests were sufficient or that the repository is ready for integration.
 

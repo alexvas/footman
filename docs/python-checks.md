@@ -132,6 +132,15 @@ The mandated suite command distributes **whole files** across workers:
 .venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q
 ```
 
+Document the exact mandated full-suite command above once in each testing
+guide or README. Additional phase-suite commands may select narrower test
+paths for RED/regression recording, but do not replace G. Every fenced pytest
+suite example must use `-n <N>` (an integer from 1 through 1024) and
+`--dist loadfile`, without disabling xdist or overriding the worker count with
+another option. Bare serial suite commands and fence-label bypasses are not
+accepted; intentionally serial policy probes belong in test code, not as
+verification-suite examples.
+
 `--dist loadfile` keeps every test of one module on one worker, so module-level
 fixtures, module-scoped clocks and import-time state are never shared across
 processes. Workers are separate interpreters: `tests/conftest.py` and
@@ -198,13 +207,40 @@ expressed without changing an enforced contract. Use the narrowest code, place
 the rationale next to the directive, and record the accepted reason here.
 Blanket per-file suppressions and rule disabling are not accepted.
 
-The reviewed exception currently in force:
+The reviewed directives currently in force (locations identify the suppressed
+constructs; line numbers may move):
 
-- **`E402` in `scripts/python_checks.py`** where the repository import path is
-  prepared before the `footman.filesystem` and `footman.process` imports, so the
-  tooling runs from a checkout or a copied tool tree without an installed
-  package. Moving those imports above the path setup would change that
-  supported behaviour.
+- **`B904` in `src/footman/process.py`** at `raise result` in launch cleanup
+  and `raise exc` in context exit: preserve the authoritative cleanup cause and
+  secondary diagnostics, or the original non-Exception primary unchanged.
+  Adding exception chaining would rewrite its lifecycle context.
+- **`B023` in `src/footman/process.py`** at the `StopContext` construction:
+  the action runs within that loop iteration; binding the loop values as
+  parameters would change the enforced callback signature.
+- **`B905` in `src/footman/process.py`** at the zip calls in
+  `_complete` and `_continue_cleanup` pairing `self._action_prepared` with
+  `self._action_results` (action-prepared flags and action results), and in
+  `_snapshot_locked` pairing `ProcessStream` with `self._outcomes`: these pair
+  fixed action slots or enum-defined outcome slots, not independent
+  variable-length inputs.
+- **`B010` in `src/footman/process.py`** at both `setattr(error, "cleanup", self)`
+  calls: dynamic cleanup-observation attachment is intentional; the type checker
+  rejects direct attribute assignment on `BaseException`.
+- **`E402` in `scripts/green_checks.py`** at the `python_checks` import and
+  **`E402` in `scripts/python_checks.py`** at the descriptors, operations and
+  process imports: CLI import-path preparation must happen first so the tools
+  run from a checkout or copied tool tree without an installed package.
+
+The `# noqa: F401` on `import footman.filesystem.cleanup` inside
+`tests/test_filesystem_cleanup.py`'s `_ISOLATED_PROBE` string is probe-source
+text, not an in-force directive in the checked inventory: Ruff (including
+RUF100) does not evaluate string contents. It records the probe's intentional
+import-for-side-effect if that generated source is linted separately.
+
+Any new suppression must be added to this ledger with its specific rationale,
+with the rationale also placed next to the directive. Review existing entries
+when moving or removing directives; do not remove load-bearing suppressions
+merely because their constructs are unusual.
 
 ## No hosted continuous integration yet
 

@@ -6,6 +6,7 @@ An agent needs to request execution of a configured command as a privileged user
 
 ## What Changes
 
+- Reuse the existing `footman.filesystem` descriptor/directory/stream owners and `footman.process` process coordinator. Implement Git, Docker, output persistence and reconciliation as domain adapters, not parallel resource-lifecycle implementations.
 - Build a standalone stdio MCP server with one shared dispatch implementation; it has no direct command-execution CLI.
 - Introduce an operator-owned configuration file specifying the repository, container-launch argv template, execution user, command argv, mount location, working directory, snapshot storage, output-directory template and timeout.
 - Generate one UUIDv7 per accepted request using Python 3.14+ `uuid.uuid7()`. Derive the millisecond UTC timestamp from that UUID and serialize all 128 bits as a fixed-width, 26-character lowercase Crockford Base32 `run_id`.
@@ -28,5 +29,7 @@ None.
 ## Impact
 
 This repository is the standalone dispatcher project; implementation belongs at its root. The plan is portable and requires no knowledge of any consumer's workflow, test organization, domain, packaging or permission model.
+
+The resource-lifecycle foundation is already present; its helper tests do not establish dispatcher completion. This change integrates those primitives without moving Docker, Git, recursive snapshot cleanup or manifest-publication policy into the filesystem foundation.
 
 Dependencies are Python 3.14+, host Git and Docker CLI, an operator-prepared image containing the tools required by the configured command (for example Cargo, Gradle or npm), and an MCP SDK selected and pinned during implementation. The dispatcher does not arrange consumer test suites, parse test counts, judge test completeness, provision application-specific users or create container images. It launches and cleans up a dedicated container per run using the configured launch contract. It reports command execution, not project correctness or commit readiness.

@@ -19,8 +19,15 @@ Requires Python 3.14+ and `uv`. The planned run identity uses the standard-libra
 ```sh
 uv sync --extra dev --locked
 uv run --locked footman --help
-uv run --locked python -m pytest
+.venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q
+scripts/check-green
 ```
+
+The pytest command is the mandated full-suite run: `pytest-xdist` distributes
+whole files across eight workers. `scripts/check-green` is the permanent gate: it
+adds the Ruff lint/format, syntax-compilation and `ty` checks over one Python
+source inventory and returns the first failing status; see
+[docs/python-checks.md](docs/python-checks.md).
 
 The planned server invocation (not yet functional) is:
 
@@ -38,8 +45,10 @@ service, not an interface for directly executing tests. There are no `run` or
 - `pyproject.toml`, `uv.lock`: package/build metadata and locked dependencies.
 - `src/footman/`: package and operator entry point.
 - `src/footman/filesystem/`, `src/footman/process.py`: descriptor, stream and subprocess helpers ported from Jigbox.
-- `tests/`: scaffold, helper lifecycle and verification-policy suites; see [docs/testing.md](docs/testing.md).
+- `scripts/`: green gate and read-only source/type check entry points.
+- `tests/`: scaffold, helper lifecycle, check-tooling and verification-policy suites; see [docs/testing.md](docs/testing.md).
 - `docs/testing.md`: verification commands and limitations.
+- `docs/python-checks.md`: source inventory, tool installation, parallel test running and the gate contract.
 - `openspec/changes/add-privileged-test-dispatcher/`: implementation contract.
 
 This repository is the standalone implementation project. No further transfer

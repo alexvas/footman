@@ -1,6 +1,13 @@
 # Repository agent rules
 
 Read and follow [docs/testing.md](docs/testing.md) for testing instructions.
+Run `scripts/check-green` from the repository root on the final candidate state;
+it runs the Ruff lint, Ruff format, syntax-compilation and `ty` checks over one
+deterministic Python inventory, then the mandated full-suite parallel pytest
+command. Attempt every independent check, preserve the first failing status, and
+never add scope or fix arguments to narrow it. See
+[docs/python-checks.md](docs/python-checks.md) for installation, source
+selection, parallelism and the reviewed suppressions.
 G applies to a delivered GREEN/INTROSPECT/VALIDATE candidate state and requires
 all mandated checks to pass without skips, xfails or xpasses. A phase suite's
 documented RED recording is exempt from G: capture its exact command, complete
@@ -51,5 +58,7 @@ cleanup, plus independent cleanup, handoff, or concurrency where applicable.
 
 See `docs/filesystem-lifecycle.md` for the full contract and illustrative
 examples. Lifecycle tests live in `tests/test_filesystem_*.py` and
-`tests/test_process_*.py`. Guard suites are `tests/test_green_skip_policy.py`
-and `tests/test_lifecycle_doc_links.py`; see `docs/testing.md` for their scope.
+`tests/test_process_*.py`. Guard suites are `tests/test_green_skip_policy.py`,
+`tests/test_green_gate.py` and `tests/test_lifecycle_doc_links.py`; the ported
+check-tooling contracts are `tests/test_python_*.py`; see `docs/testing.md` for
+their scope.

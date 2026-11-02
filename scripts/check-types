@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ty="$repo_root/.venv/bin/ty"
+
+if [ ! -x "$ty" ]; then
+    echo "error: $ty is required; run 'uv sync --extra dev --locked' (see docs/python-checks.md)" >&2
+    exit 127
+fi
+
+cd "$repo_root"
+exec "$ty" check --output-format concise src

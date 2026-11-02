@@ -21,7 +21,6 @@ from footman.filesystem.cleanup import (
     attach_secondary,
     carry_secondary_diagnostics,
 )
-
 from tests.foundation_imports import (
     FORBIDDEN_DOMAIN_MODULES,
     FOUNDATION_MODULES,
@@ -111,8 +110,6 @@ def _raiser(exc: BaseException):
 
 def _secondary_of(exc: BaseException) -> list[BaseException]:
     return getattr(exc, "_transaction_secondary", [])
-
-
 
 
 class _DiagnosticError(Exception):
@@ -285,7 +282,6 @@ class AttachSecondaryContractTests(unittest.TestCase):
 
 
 class CarrySecondaryDiagnosticsContractTests(unittest.TestCase):
-
     def test_generic_slot_source_is_carried(self) -> None:
         first = OSError("first")
         second = OSError("second")
@@ -322,17 +318,13 @@ class CarrySecondaryDiagnosticsContractTests(unittest.TestCase):
         self.assertLessEqual(len(notes[0]), 240)
 
 
-
 class FoundationOwnershipTests(unittest.TestCase):
-
-
     def test_shared_callables_are_owned_by_the_foundation(self) -> None:
         self.assertEqual(CleanupFailures.__module__, "footman.filesystem.cleanup")
         self.assertEqual(attach_secondary.__module__, "footman.filesystem.cleanup")
         self.assertEqual(
             carry_secondary_diagnostics.__module__, "footman.filesystem.cleanup"
         )
-
 
     def test_public_signatures_are_exact(self) -> None:
         cleanup_init = inspect.signature(CleanupFailures.__init__)
@@ -378,11 +370,23 @@ class FoundationImportBoundaryTests(unittest.TestCase):
     def test_injected_domain_imports_are_rejected_in_every_module(self):
         for filename in FOUNDATION_MODULES:
             source = (_PACKAGE / filename).read_text(encoding="utf-8")
-            for module in (*FORBIDDEN_DOMAIN_MODULES, "footman", "footman.filesystem", "third_party"):
-                for injection in (f"import {module} as _probe", f"from {module} import probe"):
+            for module in (
+                *FORBIDDEN_DOMAIN_MODULES,
+                "footman",
+                "footman.filesystem",
+                "third_party",
+            ):
+                for injection in (
+                    f"import {module} as _probe",
+                    f"from {module} import probe",
+                ):
                     with self.subTest(filename=filename, injection=injection):
-                        with self.assertRaisesRegex(AssertionError, "non-foundation import"):
-                            assert_foundation_imports(source + "\n" + injection, filename)
+                        with self.assertRaisesRegex(
+                            AssertionError, "non-foundation import"
+                        ):
+                            assert_foundation_imports(
+                                source + "\n" + injection, filename
+                            )
             with self.assertRaisesRegex(AssertionError, "non-foundation import"):
                 assert_foundation_imports(
                     source + "\nfrom footman.filesystem import cleanup", filename

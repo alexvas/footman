@@ -1,11 +1,10 @@
 """Check lifecycle-guide file links and ATX-heading anchors, with negative controls."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import pytest
-
 
 GUIDES = ("filesystem-lifecycle.md", "process-lifecycle.md")
 DOCS = Path(__file__).resolve().parents[1] / "docs"
@@ -45,7 +44,11 @@ def assert_local_links(source, guide):
         url = urlsplit(target)
         if url.scheme or url.netloc:
             continue
-        path = (guide.parent / unquote(url.path)).resolve() if url.path else guide.resolve()
+        path = (
+            (guide.parent / unquote(url.path)).resolve()
+            if url.path
+            else guide.resolve()
+        )
         assert path.is_file(), f"{guide.name}: broken link {target}"
         if url.fragment:
             assert path.suffix == ".md", f"{guide.name}: unsupported fragment {target}"
@@ -62,11 +65,14 @@ def test_local_guide_links_resolve(name):
 
 
 @pytest.mark.parametrize("name", GUIDES)
-@pytest.mark.parametrize("target, message", [
-    ("missing-lifecycle-probe.md", "broken link"),
-    ("#nonexistent-probe-heading", "broken anchor"),
-    ("process-lifecycle.md#nonexistent-probe-heading", "broken anchor"),
-])
+@pytest.mark.parametrize(
+    "target, message",
+    [
+        ("missing-lifecycle-probe.md", "broken link"),
+        ("#nonexistent-probe-heading", "broken anchor"),
+        ("process-lifecycle.md#nonexistent-probe-heading", "broken anchor"),
+    ],
+)
 def test_scratch_guide_rejects_injected_link(tmp_path, name, target, message):
     guide = DOCS / name
     scratch = tmp_path / name

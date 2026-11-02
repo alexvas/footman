@@ -23,7 +23,6 @@ from footman.filesystem.descriptors import (
     OwnedDescriptor,
     UnsafeDescriptorError,
 )
-
 from tests.foundation_imports import FOUNDATION_MODULES, assert_foundation_imports
 
 _LIVE_FD = 7

@@ -2,13 +2,24 @@
 
 ## Green gate (G)
 
+Run the whole gate from the repository root with `scripts/check-green`. It runs
+the Ruff lint, Ruff format, syntax-compilation and type checks recorded in
+[python-checks.md](python-checks.md), then the mandated full-suite parallel
+pytest command below. It attempts every independent check, keeps the first
+failing status, fails on incomplete process cleanup, and accepts no scope or fix
+arguments. `GREEN_CHECKS_WORKERS` changes only the pytest worker count (an
+integer from 1 to 1024); it never narrows the suite or the other checks.
+`tests/test_green_gate.py` pins that plan, the worker range and the preserved
+statuses.
+
 A successful full pytest run requires no skips, xfails or xpasses, including
 collection and fixture-setup skips. `tests/green_skip_policy.py`, registered in
 `tests/conftest.py`, reports each violation and makes an otherwise successful
 session exit nonzero. There are currently no approved skip exceptions. Missing
 prerequisites must be resolved, not hidden by skipping tests. Existing failures
 or interruptions retain their nonzero exit status. `tests/test_green_skip_policy.py`
-checks the policy through isolated pytest subprocesses.
+checks the policy through isolated pytest subprocesses under both the serial and
+the parallel invocation, so a worker cannot hide a skip from the controller.
 
 G applies to a delivered GREEN/INTROSPECT/VALIDATE candidate state: the full-suite,
 build, help and applicable installation checks below must succeed. A phase
@@ -28,10 +39,19 @@ Run from the repository root:
 
 ```sh
 uv sync --extra dev --locked
-uv run --locked python -m pytest
+.venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q
 uv build
 uv run --locked footman --help
+scripts/check-green
 ```
+
+The pytest command is the mandated full-suite run: `pytest-xdist` distributes
+whole files (`--dist loadfile`) across eight workers, so module-level fixtures
+and import-time state never cross processes. Use this command, not a serial or
+narrowed variant, for G; `docs/python-checks.md` records the parallelism rules
+and the gate entry points. If a task explicitly requires a serial `unittest
+discover` run, run that as well: pytest does not replace an explicitly required
+verification.
 
 `tests/test_scaffold.py` checks package import, startup argument parsing, absence
 of direct-dispatch subcommands and explicit failure of the unimplemented server.
@@ -81,6 +101,21 @@ Foundation imports in all four modules are restricted to stdlib and explicit
 Upstream Jigbox phase/task labels in test comments are provenance only, not
 coverage claims for Footman's OpenSpec phases.
 
+## Python source and tooling checks
+
+`scripts/python_checks.py` builds one deterministic Python inventory over `src/`,
+`tests/` and `scripts/` and feeds it to Ruff lint, Ruff format and syntax
+compilation; `scripts/check-types` type checks the package. Installation,
+source-selection rules, the parallelism contract and the gate entry points are in
+[python-checks.md](python-checks.md). `tests/test_python_source_selection.py`,
+`tests/test_python_syntax_compilation.py`, `tests/test_python_ruff_parity.py`,
+`tests/test_python_check_status.py` and `tests/test_python_check_lifecycle.py`
+are the ported Jigbox tooling contracts; `tests/test_green_gate.py` pins the
+gate plan itself. Every new ownership branch in the tooling (one descriptor per
+source read, one directory capability per traversed directory, one process owner
+per check command) has the mandated operation-plus-close, sole-close,
+interruption and repeat-cleanup cases.
+
 ## Writing verification helpers
 
 In verification helpers and pytest plugins, use explicit
@@ -93,7 +128,8 @@ ordinary `assert` statements to retain pytest assertion introspection.
 The full-suite command includes:
 
 - `tests/test_green_skip_policy.py`: isolated pytest runs proving skip/xfail/xpass
-  rejection and preservation of existing failures and interruptions.
+  rejection and preservation of existing failures and interruptions, under both
+  the serial and the mandated parallel invocation.
 - `tests/test_lifecycle_doc_links.py`: relative file links and Markdown heading
   anchors in both lifecycle guides, with injected broken links/anchors in scratch
   copies. Anchors use lowercase ATX-heading slugs, stripped punctuation and

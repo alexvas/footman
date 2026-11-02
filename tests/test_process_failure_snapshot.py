@@ -100,7 +100,3 @@ def test_prepared_factory_failure_returns_owner_without_exception_snapshot():
     assert result.returncode is None and result.stdout == result.stderr == b""
     assert owner.wait_cleanup(0.1).complete
     assert not hasattr(error, "process_result")
-
-
-
-

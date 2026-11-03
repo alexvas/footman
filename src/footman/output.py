@@ -10,11 +10,9 @@ import errno
 import os
 import re
 import threading
-import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import Self
 
 from footman.configuration import Configuration, validate_request
@@ -25,8 +23,8 @@ from footman.filesystem.descriptors import (
     OwnedDescriptor,
 )
 from footman.filesystem.operations import PosixDescriptorOps
+from footman.identity import RequestIdentity
 
-_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
 _PLACEHOLDER = re.compile(r"\{(phase|utc_datetime)\}")
 _FILENAMES = (
     "stdout.txt",
@@ -37,29 +35,27 @@ _FILENAMES = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class RequestIdentity:
-    uuid: uuid.UUID
-    run_id: str
-    utc_timestamp: str
-    utc_datetime: str
+@dataclass(slots=True)
+class _BorrowState:
+    released: bool = False
 
-    @classmethod
-    def create(cls) -> Self:
-        value = uuid.uuid7()
-        integer = value.int
-        digits = []
-        for _ in range(26):
-            digits.append(_ALPHABET[integer & 31])
-            integer >>= 5
-        # Integer epoch arithmetic preserves millisecond boundaries exactly.
-        instant = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=value.time)
-        return cls(
-            value,
-            "".join(reversed(digits)),
-            instant.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-            instant.strftime("%Y%m%dT%H%M%S") + f"{value.time % 1000:03d}Z",
-        )
+
+@dataclass(frozen=True, slots=True)
+class BorrowedDescriptor:
+    """Non-owning view; callers must settle writers before reservation close."""
+
+    _number: int
+    _state: _BorrowState
+
+    @property
+    def released(self) -> bool:
+        return self._state.released
+
+    @property
+    def fd(self) -> int:
+        if self.released:
+            raise RuntimeError("output handles have already been released")
+        return self._number
 
 
 def expand_output(
@@ -100,12 +96,23 @@ class OutputReservation:
         self.directory = directory
         self.identity = identity
         self.phase = phase
-        self.paths: dict[str, Path] = {}
-        self.files: dict[str, OwnedDescriptor] = {}
+        self._paths: dict[str, Path] = {}
+        self._files: dict[str, OwnedDescriptor] = {}
+        self._views: dict[str, BorrowedDescriptor] = {}
+        self._borrow_state = _BorrowState()
         self._directories: list[DirectoryDescriptor] = []
         self._lock = threading.RLock()
         self._closed = False
         self.cleanup_failure: BaseException | None = None
+
+    @property
+    def paths(self) -> MappingProxyType[str, Path]:
+        return MappingProxyType(self._paths)
+
+    @property
+    def files(self) -> MappingProxyType[str, BorrowedDescriptor]:
+        """Borrowed descriptors only; ownership never leaves this reservation."""
+        return MappingProxyType(self._views)
 
     def close(self, primary: BaseException | None = None) -> None:
         # Serialize the complete release, not merely the claim. A concurrent
@@ -114,8 +121,9 @@ class OutputReservation:
             if self._closed:
                 return
             self._closed = True
+            self._borrow_state.released = True
             failures = CleanupFailures(primary)
-            for owner in reversed(tuple(self.files.values())):
+            for owner in reversed(tuple(self._files.values())):
                 failures.run(owner.close, ordinary=(OSError,))
             for directory in reversed(self._directories):
                 failures.run(directory.close, ordinary=(OSError,))
@@ -190,13 +198,25 @@ class OutputReservation:
             parent = child
         leaf = parent.create_directory(destination.name, mode=0o700)
         self._directories.append(leaf)
+        # No-follow traversal prevents link substitution, not relocation of an
+        # already-open ancestor. Verify the acquired capability before files.
+        acquired = Path(os.readlink(f"/proc/self/fd/{leaf.fd}"))
+        if acquired != destination:
+            raise OSError("acquired output directory moved from its configured path")
+        for forbidden in (
+            config.repository.resolve(),
+            config.snapshot_directory.resolve(),
+        ):
+            if acquired.is_relative_to(forbidden) or forbidden.is_relative_to(acquired):
+                raise OSError("acquired output overlaps repository or snapshot storage")
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC
         for name in _FILENAMES:
             label = f"retained output {name}"
             fd = os.open(name, flags, 0o600, dir_fd=leaf.fd)
             owner = OwnedDescriptor(ops, fd, label=label)
-            self.files[name] = owner
-            self.paths[name] = destination / name
+            self._files[name] = owner
+            self._paths[name] = destination / name
+            self._views[name] = BorrowedDescriptor(owner.fd, self._borrow_state)
             ops.fchmod(owner.fd, 0o600)
 
 

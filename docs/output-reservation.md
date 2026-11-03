@@ -37,7 +37,16 @@ remains. A phase-only template collides when the same phase is reused. Prefer
 
 At request time, canonical ancestors and repository/snapshot overlap are checked
 again. Directory capabilities walk components without following symlinks;
-replaced roots and symlinked parents are rejected. All writes are relative to
+replaced roots and symlinked parents are rejected. Before creating files, the
+acquired directory's Linux `/proc/self/fd` path must equal the requested path,
+and the configured repository/snapshot paths are resolved again to check for
+overlap. That second overlap check detects a forbidden configured path replaced
+by a symlink into, or above, the output destination after preflight. It does not
+track directory identity: renaming a repository/snapshot root elsewhere while
+leaving its configured path absent is not detected by resolving that old path.
+An unavailable descriptor-path lookup fails closed. The acquired-path comparison
+detects an already-open output ancestor moved during traversal; neither check
+is a lease against later renames. All writes are relative to
 the exclusively created directory capability. Output must remain outside the
 development repository and snapshot storage. Operators must protect storage
 parents against unauthorized renames or mutation; this is not a hostile-code
@@ -59,8 +68,16 @@ start empty; initial/final manifest persistence and stream draining are delivere
 in Phase 7. An empty `result.json` is not a completed or running manifest. Neither
 reservation nor a command's exit status establishes useful test coverage.
 
-Each file descriptor has one `OwnedDescriptor`; directories have their own
-`DirectoryDescriptor` capabilities. Independent releases are attempted once,
+`footman.identity.RequestIdentity` supplies the shared identity independently of
+output reservation. Each file descriptor has one private `OwnedDescriptor`;
+directories have their own `DirectoryDescriptor` capabilities. The reservation's
+`files` mapping exposes only immutable borrowed views with `fd` and `released`,
+not close or transfer authority. Its `paths` mapping is read-only too. Views stop
+providing descriptor numbers when release starts. Callers must settle writers
+before closing the reservation: a borrowed integer fd does not synchronize an
+in-flight write with cleanup. Concurrent cleanup callers wait for the serialized
+release to finish; `cleanup_failure` retains its failure without retrying closes.
+Independent releases are attempted once,
 including after interruption or partial setup. Operation failures remain
 primary over ordinary close errors; sole close errors remain observable.
 Repeated/concurrent cleanup does not retry release. Closing capabilities does

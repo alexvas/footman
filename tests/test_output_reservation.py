@@ -7,8 +7,9 @@ import os
 import stat
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import UTC, datetime, timedelta
-from threading import Barrier
+from threading import Barrier, Event
 from unittest.mock import Mock
 
 import pytest
@@ -66,7 +67,7 @@ def test_uuid_identity_roundtrip_exact_milliseconds(monkeypatch, milliseconds, p
     module = output_module()
     original = supplied_uuid(milliseconds, payload)
     generate = Mock(return_value=original)
-    monkeypatch.setattr(module.uuid, "uuid7", generate)
+    monkeypatch.setattr(uuid, "uuid7", generate)
     identity = module.RequestIdentity.create()
     generate.assert_called_once_with()
     assert identity.uuid == original
@@ -107,7 +108,7 @@ def test_stalled_backward_clock_uses_returned_uuid_only(monkeypatch, config):
     # Logical UUID time can move forward despite wall-clock stalls/backsteps.
     values = [supplied_uuid(ms) for ms in [1793529000999, 1793529001000, 1793529001001]]
     generate = Mock(side_effect=values)
-    monkeypatch.setattr(module.uuid, "uuid7", generate)
+    monkeypatch.setattr(uuid, "uuid7", generate)
     identities = [module.RequestIdentity.create() for _ in values]
     assert generate.call_count == 3
     for identity, original in zip(identities, values, strict=True):
@@ -227,7 +228,7 @@ def test_concurrent_identical_path_one_winner_no_regeneration(config, monkeypatc
     barrier = Barrier(8)
     original = supplied_uuid(1793529000123)
     generate = Mock(return_value=original)
-    monkeypatch.setattr(module.uuid, "uuid7", generate)
+    monkeypatch.setattr(uuid, "uuid7", generate)
 
     def attempt(_):
         barrier.wait()
@@ -290,7 +291,7 @@ def test_rejected_input_generates_no_identity_or_resources(
 ):
     module = output_module()
     generate = Mock()
-    monkeypatch.setattr(module.uuid, "uuid7", generate)
+    monkeypatch.setattr(uuid, "uuid7", generate)
     with pytest.raises(RequestError):
         module.reserve_request(config, input_value)
     generate.assert_not_called()
@@ -407,6 +408,89 @@ def test_close_authority_independent_release_repeat_and_concurrency(
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda _: reserved.close(), range(8)))
     assert len(released) == count
+
+
+@pytest.mark.parametrize("close_type", [None, OSError, KeyboardInterrupt])
+@pytest.mark.parametrize("primary_type", [None, ValueError, KeyboardInterrupt])
+def test_inflight_cleanup_invalidates_views_and_waits_for_release(
+    config, monkeypatch, close_type, primary_type
+):
+    module = output_module()
+    reserved = module.reserve_request(config, {"phase": "inflight"})
+    acquired = [owner.fd for owner in reserved._files.values()] + [
+        owner.fd for owner in reserved._directories
+    ]
+    view = reserved.files["stdout.txt"]
+    entered, unblock, second_started = Event(), Event(), Event()
+    original_close = module.PosixDescriptorOps.close
+    closed = []
+    failure = close_type("blocked close failure") if close_type else None
+    primary = primary_type("active operation failure") if primary_type else None
+
+    def close(ops, fd):
+        closed.append(fd)
+        if len(closed) == 1:
+            entered.set()
+            if not unblock.wait(5.0):
+                raise AssertionError("blocked release was not unblocked")
+        original_close(ops, fd)
+        if len(closed) == 1 and failure is not None:
+            raise failure
+
+    def first_close():
+        # Capture process-control exceptions too, without losing their identity
+        # or letting a worker's KeyboardInterrupt interrupt the test runner.
+        try:
+            reserved.close(primary)
+        except BaseException as error:
+            return error
+        return None
+
+    def second_close():
+        second_started.set()
+        return reserved.close()
+
+    monkeypatch.setattr(module.PosixDescriptorOps, "close", close)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(first_close)
+        second = None
+        try:
+            assert entered.wait(2.0)
+            assert view.released
+            with pytest.raises(RuntimeError, match="released"):
+                _ = view.fd
+            second = pool.submit(second_close)
+            assert second_started.wait(2.0)
+            with pytest.raises(FutureTimeoutError):
+                second.result(timeout=0.1)
+            assert not second.done()
+            assert len(closed) == 1
+        finally:
+            unblock.set()
+        result = first.result(timeout=2.0)
+        assert second is not None
+        assert second.result(timeout=2.0) is None
+
+    if primary_type is KeyboardInterrupt:
+        expected = primary
+    elif close_type is KeyboardInterrupt:
+        expected = failure
+    elif primary is None:
+        expected = failure
+    else:
+        expected = None
+    assert result is expected
+    assert reserved.cleanup_failure is expected
+    if failure is not None and primary is not None:
+        authority = expected if expected is not None else primary
+        displaced = failure if authority is primary else primary
+        assert displaced in getattr(authority, "_transaction_secondary", [])
+    assert sorted(closed) == sorted(acquired)
+    assert len(closed) == len(set(closed))
+    assert all(borrowed.released for borrowed in reserved.files.values())
+    before = list(closed)
+    reserved.close()
+    assert closed == before
 
 
 def test_setup_operation_plus_close_failure(config, monkeypatch):
@@ -747,6 +831,189 @@ def test_context_operation_is_preserved_on_independent_close_failures(
     assert len(set(released)) == len(released)
     reserved.close()
     assert len(set(released)) == len(released)
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_acquired_directory_move_fails_before_file_creation(
+    config, tmp_path, monkeypatch, close_fails
+):
+    module = output_module()
+    original = module.DirectoryDescriptor.create_directory
+    moved = tmp_path / "moved-output"
+    released = []
+    close = module.PosixDescriptorOps.close
+
+    def create(parent, name, **kwargs):
+        child = original(parent, name, **kwargs)
+        if name == "race":
+            (config.output_root / "race").rename(moved)
+        return child
+
+    def release(ops, fd):
+        released.append(fd)
+        close(ops, fd)
+        if close_fails:
+            raise OSError("independent close failure")
+
+    selected = dataclasses.replace(config, output_suffix=("race",))
+    monkeypatch.setattr(module.DirectoryDescriptor, "create_directory", create)
+    monkeypatch.setattr(module.PosixDescriptorOps, "close", release)
+    with pytest.raises(module.OutputError) as caught:
+        module.reserve_request(selected, {})
+    assert caught.value.paths == {}
+    assert list(moved.iterdir()) == []
+    assert len(released) == len(set(released))
+    if close_fails:
+        assert getattr(caught.value, "_transaction_secondary", [])
+
+
+@pytest.mark.parametrize("forbidden_name", ["repository", "snapshot_directory"])
+@pytest.mark.parametrize("close_fails", [False, True])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_forbidden_root_symlink_replacement_during_walk(
+    config, monkeypatch, forbidden_name, close_fails, interrupted
+):
+    module = output_module()
+    selected = dataclasses.replace(config, output_suffix=("race",))
+    forbidden = getattr(selected, forbidden_name)
+    forbidden.mkdir(exist_ok=True)
+    create = module.DirectoryDescriptor.create_directory
+    setup = module.OutputReservation._setup
+    close = module.PosixDescriptorOps.close
+    reservations, acquired, closed, close_errors = [], [], [], []
+    interruption = KeyboardInterrupt("interrupted overlap cleanup")
+
+    def capture(reserved, settings):
+        reservations.append(reserved)
+        setup(reserved, settings)
+
+    def replace_root(parent, name, **kwargs):
+        child = create(parent, name, **kwargs)
+        if name == "race":
+            # Preflight has passed. Redirect only the forbidden configured
+            # path, leaving the acquired output path equal to its destination.
+            forbidden.rmdir()
+            forbidden.symlink_to(selected.output_root / "race" / "sub")
+            acquired.extend(owner.fd for owner in reservations[0]._directories)
+            acquired.append(child.fd)
+        return child
+
+    def release(ops, fd):
+        closed.append(fd)
+        close(ops, fd)
+        if interrupted and len(closed) == 1:
+            raise interruption
+        if close_fails:
+            failure = OSError("independent overlap close failure")
+            close_errors.append(failure)
+            raise failure
+
+    monkeypatch.setattr(module.OutputReservation, "_setup", capture)
+    monkeypatch.setattr(module.DirectoryDescriptor, "create_directory", replace_root)
+    monkeypatch.setattr(module.PosixDescriptorOps, "close", release)
+    expected = KeyboardInterrupt if interrupted else module.OutputError
+    with pytest.raises(expected) as caught:
+        module.reserve_request(selected, {})
+    if interrupted:
+        assert caught.value is interruption
+        secondaries = getattr(interruption, "_transaction_secondary", [])
+        domain = next(
+            error for error in secondaries if isinstance(error, module.OutputError)
+        )
+    else:
+        domain = caught.value
+    assert domain.outcome == "output_failed"
+    assert "acquired output overlaps" in str(domain.__cause__)
+    assert domain.paths == {}
+    assert forbidden.is_symlink()
+    assert list((selected.output_root / "race").iterdir()) == []
+    assert acquired
+    assert sorted(closed) == sorted(acquired)
+    assert len(closed) == len(set(closed))
+    if close_fails:
+        secondaries = getattr(caught.value, "_transaction_secondary", [])
+        assert close_errors
+        assert all(error in secondaries for error in close_errors)
+    if interrupted:
+        assert reservations[0].cleanup_failure is interruption
+    before = list(closed)
+    reservations[0].close()
+    assert closed == before
+
+
+@pytest.mark.parametrize("stage", ["acquired-path", "borrowed-view"])
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_new_setup_branches_release_once(
+    config, monkeypatch, stage, interrupted, close_fails
+):
+    module = output_module()
+    failure = (
+        KeyboardInterrupt("interrupted setup") if interrupted else OSError("setup")
+    )
+    reservations = []
+    closed = []
+    setup = module.OutputReservation._setup
+    close = module.PosixDescriptorOps.close
+    readlink = os.readlink
+
+    def capture(reserved, settings):
+        reservations.append(reserved)
+        setup(reserved, settings)
+
+    def release(ops, fd):
+        closed.append(fd)
+        close(ops, fd)
+        if close_fails:
+            raise OSError("secondary close failure")
+
+    def fail_view(*args):
+        raise failure
+
+    def fail_path(path, *args, **kwargs):
+        if str(path).startswith("/proc/self/fd/"):
+            raise failure
+        return readlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.OutputReservation, "_setup", capture)
+    monkeypatch.setattr(module.PosixDescriptorOps, "close", release)
+    if stage == "acquired-path":
+        monkeypatch.setattr(os, "readlink", fail_path)
+    else:
+        monkeypatch.setattr(module, "BorrowedDescriptor", fail_view)
+    expected = KeyboardInterrupt if interrupted else module.OutputError
+    with pytest.raises(expected) as caught:
+        module.reserve_request(config, {"phase": "fault"})
+    if interrupted:
+        assert caught.value is failure
+    else:
+        assert caught.value.__cause__ is failure
+    assert len(closed) >= 1
+    assert len(closed) == len(set(closed))
+    before = list(closed)
+    reservations[0].close()
+    assert closed == before
+    assert len(reservations[0].paths) == (1 if stage == "borrowed-view" else 0)
+    if close_fails:
+        assert getattr(caught.value, "_transaction_secondary", [])
+
+
+def test_output_views_do_not_expose_release_authority(config):
+    module = output_module()
+    with module.reserve_request(config, {"phase": "borrowed"}) as reserved:
+        view = reserved.files["stdout.txt"]
+        assert not hasattr(view, "close")
+        assert not hasattr(view, "detach")
+        with pytest.raises(TypeError):
+            reserved.files["stdout.txt"] = view
+        with pytest.raises(TypeError):
+            reserved.paths["stdout.txt"] = reserved.directory / "wrong"
+        os.write(view.fd, b"borrowed")
+    assert view.released
+    with pytest.raises(RuntimeError, match="released"):
+        _ = view.fd
+    assert read_bytes(reserved.paths["stdout.txt"]) == b"borrowed"
+    reserved.close()
 
 
 def test_capability_failure_is_domain_output_failure(config, monkeypatch):

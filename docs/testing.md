@@ -144,6 +144,23 @@ The internal application boundary is not MCP registration or a direct CLI.
 Run both the Phase 1 and Phase 2 commands above for Phase 2 validation, as well
 as the unscoped full green gate and build/help/installation checks.
 
+## Phase 3 output reservation suite
+
+Use the Phase 1 prerequisites; no Docker access is needed. Run this exact
+command for reservation RED and subsequent regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_output_reservation.py -n 2 --dist loadfile --tb=short -q
+```
+
+This suite covers one UUIDv7 and its Crockford/millisecond identity, single-pass
+output expansion, exclusive directories/fixed files, collision races, symlink
+replacement, restrictive modes and ownership/failure cleanup. Storage setup must
+finish before any snapshot or launch callback. See
+[output-reservation.md](output-reservation.md) for paths, identity and retention.
+For validation also run the Phase
+1 and Phase 2 commands, the unscoped green gate, build/help and exact-wheel smoke.
+
 ## Descriptor, stream and process helpers
 
 `tests/test_filesystem_*.py` and `tests/test_process_*.py` cover the helpers

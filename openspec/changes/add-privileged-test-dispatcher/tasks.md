@@ -127,21 +127,21 @@ The explicit edges are: `1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 1
 **Deliverables:** UUIDv7/Crockford request identity and shared millisecond timestamp, output path expansion/reservation, fixed output handles, reservation documentation, reservation suite and evidence.
 
 ### RED
-- [ ] 3.1 Write request-identity tests for matrix O's UUIDv7/Crockford/time cases. Completion: absent identity logic fails round-trip, alphabet/width/leading-zero, version/variant, single-generation and exact timestamp-equality assertions, including supplied UUID times at millisecond boundaries and stalled/backward-clock cases.
-- [ ] 3.2 Write reservation tests for matrix O's path, collision and permission cases. Completion: absent reservation logic causes failures, including exactly one winner for concurrent identical paths and failure of repeated static/phase-only destinations.
-- [ ] 3.3 Write pre-execution storage-failure tests. Completion: injected directory/file creation failure fails the tests unless downstream snapshot/launch calls remain zero.
+- [x] 3.1 Write request-identity tests for matrix O's UUIDv7/Crockford/time cases. Completion: absent identity logic fails round-trip, alphabet/width/leading-zero, version/variant, single-generation and exact timestamp-equality assertions, including supplied UUID times at millisecond boundaries and stalled/backward-clock cases.
+- [x] 3.2 Write reservation tests for matrix O's path, collision and permission cases. Completion: absent reservation logic causes failures, including exactly one winner for concurrent identical paths and failure of repeated static/phase-only destinations.
+- [x] 3.3 Write pre-execution storage-failure tests. Completion: injected directory/file creation failure fails the tests unless downstream snapshot/launch calls remain zero.
 
 ### GREEN
-- [ ] 3.4 Implement request identity using one standard-library `uuid.uuid7()` call and Crockford serialization. Completion: identity tests pass with timestamps derived only from that UUID's `time`, with no fallback implementation, second clock read or ID regeneration.
-- [ ] 3.5 Implement single-pass output-template expansion. Completion: timestamp/phase/path tests pass using the fixed request identity without recursive substitution or collision renaming.
-- [ ] 3.6 Implement exclusive run-directory and fixed-file reservation through directory capabilities and sole file owners. Completion: collision, symlink, permissions, creation-failure and matrix A ownership tests pass without overwriting preexisting bytes; all acquired resources remain protected on partial setup failure.
-- [ ] 3.7 Document output reservation and retention policy. Completion: the document names all five files, shared UUIDv7/millisecond identity, supported placeholders, static/phase-only collision behavior, sensitive/large output and manual retention without automatic evidence deletion.
+- [x] 3.4 Implement request identity using one standard-library `uuid.uuid7()` call and Crockford serialization. Completion: identity tests pass with timestamps derived only from that UUID's `time`, with no fallback implementation, second clock read or ID regeneration.
+- [x] 3.5 Implement single-pass output-template expansion. Completion: timestamp/phase/path tests pass using the fixed request identity without recursive substitution or collision renaming.
+- [x] 3.6 Implement exclusive run-directory and fixed-file reservation through directory capabilities and sole file owners. Completion: collision, symlink, permissions, creation-failure and matrix A ownership tests pass without overwriting preexisting bytes; all acquired resources remain protected on partial setup failure.
+- [x] 3.7 Document output reservation and retention policy. Completion: the document names all five files, shared UUIDv7/millisecond identity, supported placeholders, static/phase-only collision behavior, sensitive/large output and manual retention without automatic evidence deletion.
 
 ### INTROSPECT
-- [ ] 3.8 Audit request identity and filesystem containment. Completion: the review records UUID/time/encoding provenance, canonical-ancestor checks, no-follow operations and failure paths, with no independent timestamp or path that overwrites existing evidence or escapes configured storage.
+- [x] 3.8 Audit request identity and filesystem containment. Completion: the review records UUID/time/encoding provenance, canonical-ancestor checks, no-follow operations and failure paths, with no independent timestamp or path that overwrites existing evidence or escapes configured storage.
 
 ### VALIDATE
-- [ ] 3.9 Validate reservation delivery. Completion: documented reservation and all earlier suites pass, with UUID/time, race-test and storage-failure results in a self-contained, currently applicable verification summary.
+- [x] 3.9 Validate reservation delivery. Completion: documented reservation and all earlier suites pass, with UUID/time, race-test and storage-failure results in a self-contained, currently applicable verification summary.
 
 ## 4. Phase 4 — Immutable staged snapshot export
 

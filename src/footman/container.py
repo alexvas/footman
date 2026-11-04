@@ -25,6 +25,7 @@ from footman.process import (
     ProcessResult,
     ProcessStream,
     StopPolicy,
+    StopStage,
     StreamOutcome,
 )
 from footman.snapshot import SnapshotReservation
@@ -175,6 +176,7 @@ class ContainerExecution:
         self.local_grace_seconds = config.cleanup_grace_seconds / 10
         self.cleanup_allowance_reserved = config.cleanup_grace_seconds / 2
         self.failure: BaseException | None = None
+        self.command_cleanup_action: Any = None
 
     @property
     def cleanup_status(self) -> tuple[LifecycleResult, ...]:
@@ -223,11 +225,29 @@ class ContainerExecution:
             remaining = self._remaining()
             if operation is not None:
                 operation.started_at = _timestamp()
+            action = self.command_cleanup_action if configured_command else None
+            grace = self.local_grace_seconds
+            policy = StopPolicy((), grace)
+            total = grace
+            if action is not None:
+                action.identity = self.container_id
+                policy = StopPolicy(
+                    (
+                        StopStage(
+                            grace * 5,
+                            action=action,
+                            run_on_normal=True,
+                            local_stop_before=True,
+                        ),
+                    ),
+                    grace,
+                )
+                total = grace * 6
             with self._launch(
                 argv,
                 deadline_seconds=remaining,
-                grace_seconds=self.local_grace_seconds,
-                stop_policy=StopPolicy((), self.local_grace_seconds),
+                grace_seconds=total,
+                stop_policy=policy,
                 capture_limit=0,
             ) as owner:
                 self.processes.append(owner)

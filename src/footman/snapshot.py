@@ -189,6 +189,9 @@ class SnapshotReservation:
         self._exported = False
         self._export_complete = False
         self._closed = False
+        self._removal_attempted = False
+        self._removal_deadline: float | None = None
+        self.removal_failure: BaseException | None = None
         self._lock = threading.RLock()
         self._deadline = time.monotonic() + timeout_seconds
         self._grace = grace_seconds
@@ -339,6 +342,71 @@ class SnapshotReservation:
         if Path(os.readlink(f"/proc/self/fd/{self._root.fd}")) != self.path:
             raise SnapshotError("snapshot capability moved from its reserved path")
         return self._root
+
+    def remove(self, *, deadline: float | None = None) -> None:
+        """Delete only this live reservation; caller confirms external absence.
+
+        One attempt, including failed/interrupted removal. No chmod, following
+        links, ambient recursion or reopening after an ambiguous close. Retained
+        export capabilities remain owned by close(), independently of deletion.
+        """
+        with self._lock:
+            if self._removal_attempted:
+                return
+            self._removal_attempted = True
+            self._removal_deadline = deadline
+            try:
+                root = self._leaf()
+                parent = self._directories[self._directories.index(root) - 1]
+                self._validate_cleanup_directory(parent, self.path.parent)
+                self._same_cleanup_child(parent, self.path.name, root)
+                self._remove_contents(root, self.path)
+                self._validate_cleanup_directory(parent, self.path.parent)
+                self._same_cleanup_child(parent, self.path.name, root)
+                parent.remove_child_directory(self.path.name)
+            except BaseException as error:
+                self.removal_failure = error
+                raise
+
+    def _validate_cleanup_directory(
+        self, directory: DirectoryDescriptor, path: Path
+    ) -> None:
+        if (
+            self._removal_deadline is not None
+            and time.monotonic() >= self._removal_deadline
+        ):
+            raise SnapshotError("snapshot cleanup allowance exhausted")
+        if Path(os.readlink(f"/proc/self/fd/{directory.fd}")) != path:
+            raise SnapshotError("cleanup capability moved from reserved path")
+        if self._ops.fstat(directory.fd).st_uid != os.geteuid():
+            raise SnapshotError("cleanup directory owner validation failed")
+
+    def _same_cleanup_child(
+        self, parent: DirectoryDescriptor, name: str, child: DirectoryDescriptor
+    ) -> None:
+        actual = parent.stat_child(name)
+        opened = self._ops.fstat(child.fd)
+        if (actual.st_dev, actual.st_ino) != (opened.st_dev, opened.st_ino):
+            raise SnapshotError("cleanup entry identity changed")
+
+    def _remove_contents(self, directory: DirectoryDescriptor, path: Path) -> None:
+        self._validate_cleanup_directory(directory, path)
+        for name in directory.list_names():
+            self._validate_cleanup_directory(directory, path)
+            entry = directory.stat_child(name)
+            if entry.st_uid != os.geteuid():
+                raise SnapshotError("cleanup entry owner validation failed")
+            if stat.S_ISDIR(entry.st_mode):
+                with directory.open_directory(name) as child:
+                    self._same_cleanup_child(directory, name, child)
+                    self._remove_contents(child, path / name)
+                    self._validate_cleanup_directory(directory, path)
+                    self._same_cleanup_child(directory, name, child)
+                    directory.remove_child_directory(name)
+            else:
+                # Includes symlinks: unlink the entry, never its target.
+                self._validate_cleanup_directory(directory, path)
+                directory.unlink_child(name)
 
     def _new_file(self, parent: DirectoryDescriptor, name: str) -> OwnedDescriptor:
         base = parent.child_basename(name)

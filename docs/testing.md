@@ -220,6 +220,21 @@ full green gate, build/help and exact-wheel installation checks. Infrastructure
 summaries preserve raw sensitive prefixes; see [configuration.md](configuration.md)
 for copy prerequisites, non-root permissions and all five files' access/retention.
 
+## Phase 6 supervised lifecycle suite
+
+Use the Phase 1 prerequisites; Docker is not required. Run this exact command
+for supervision/cleanup RED and subsequent regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_dispatch_lifecycle.py tests/test_dispatch_cleanup_faults.py -n 2 --dist loadfile --tb=short -q
+```
+
+The suite exercises shared deadlines, independent requests, recorded-ID removal
+and the separate complete-empty-listing confirmation protocol, snapshot retention
+and no-follow cleanup. See [incomplete-run reconciliation](reconciliation.md). Its Docker CLI scenarios are simulations, not real Docker
+removal or copy proofs. Validation also runs every earlier phase suite, the
+unscoped green gate, build/help and exact-wheel installation checks.
+
 ## Descriptor, stream and process helpers
 
 `tests/test_filesystem_*.py` and `tests/test_process_*.py` cover the helpers

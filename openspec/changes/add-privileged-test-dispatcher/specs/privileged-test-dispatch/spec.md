@@ -7,7 +7,7 @@ Execute an operator-configured command as a privileged container user against a 
 ## ADDED Requirements
 
 ### Requirement: Operator configuration
-The dispatcher SHALL read and validate versioned configuration once at startup, immutable until restart. It SHALL define repository, launch argv template, user, command argv, mount destination, cwd, snapshot storage, output template and positive bounded `timeout_seconds`/`cleanup_grace_seconds`. Statically detectable invalid fields, values and paths SHALL prevent startup. Requests SHALL NOT override command or environment. TOML edits SHALL take effect only after restart.
+The dispatcher SHALL validate versioned configuration once at startup, immutable until restart. It SHALL define repository, launch argv template, required `image_id`, user, command argv, snapshot destination, cwd, snapshot storage, output template and positive bounded `timeout_seconds`/`cleanup_grace_seconds`. Static field, value and path errors SHALL prevent startup. Requests SHALL NOT override command or environment. TOML edits SHALL take effect only after restart.
 
 #### Scenario: Invalid configuration
 - **WHEN** configuration contains an empty command, unknown field or working directory outside the snapshot
@@ -18,7 +18,7 @@ The dispatcher SHALL read and validate versioned configuration once at startup, 
 - **THEN** it exits nonzero with empty stdout and a nonempty stderr diagnostic identifying the configuration-load failure, without serving requests or creating run resources
 
 #### Scenario: Runtime-only validation failure
-- **WHEN** valid startup configuration later encounters an output/snapshot reservation collision, a disappeared path or a mismatched actual container mount
+- **WHEN** valid startup configuration later encounters an output/snapshot reservation collision, a disappeared path, a failed container identity/running-state check or failed snapshot transfer
 - **THEN** the affected request fails with an unsuccessful tool result and applicable cleanup, rather than being treated as a startup configuration error
 
 #### Scenario: Configured command
@@ -32,6 +32,24 @@ The dispatcher SHALL read and validate versioned configuration once at startup, 
 #### Scenario: Configuration applied after restart
 - **WHEN** the server restarts after the TOML file changes
 - **THEN** it loads and validates the new file once, uses it if valid, and refuses startup if invalid
+
+### Requirement: Launch image configuration
+`image_id` SHALL be a required string matching either `sha256:[0-9A-Fa-f]{64}` or `[0-9A-Fa-f]{12,64}` in its entirety. It SHALL contribute to the effective configuration identity. Format validation SHALL NOT imply image existence or trigger image build/pull.
+
+#### Scenario: Invalid launch image configuration
+- **WHEN** `image_id` is absent, non-string, malformed, outside the allowed lengths or a tag instead of an image ID
+- **THEN** startup exits nonzero with a configuration diagnostic before serving requests or creating run output, snapshots, containers or configured-command side effects
+
+#### Scenario: Valid launch image configuration
+- **WHEN** configuration supplies a full prefixed image ID or an unprefixed 12–64-character hexadecimal ID such as `d9e853e87e55`
+- **THEN** startup accepts that field and includes it in effective configuration identity, without assuming image existence or building/pulling an image
+
+### Requirement: Image identity operator instructions
+Operator documentation SHALL describe obtaining local image IDs through `docker image ls` or a full ID by tag through `docker image inspect`, and updating configuration and restarting Footman after rebuilding the image.
+
+#### Scenario: Obtain and refresh the configured image ID
+- **WHEN** an operator prepares or rebuilds an image tagged `footman-sandbox:latest`
+- **THEN** instructions show copying the ID column from `docker image ls` or the full output of `docker image inspect --format '{{.Id}}' footman-sandbox:latest` into `image_id`, and restarting Footman to load the updated value
 
 ### Requirement: Run identity and timestamp
 Each accepted request SHALL generate one UUIDv7 with Python 3.14+ `uuid.uuid7()`. Its epoch-millisecond `UUID.time` SHALL define the fixed UTC `utc_timestamp` and `{utc_datetime}`. `run_id` SHALL encode all 128 bits, most significant digit first, as exactly 26 lowercase Crockford Base32 characters using `0123456789abcdefghjkmnpqrstvwxyz`, with leading zeroes, no separators and no check symbol.
@@ -93,32 +111,128 @@ Export SHALL create exact-byte regular files for modes `100644`/`100755`, direct
 - **THEN** export fails before container launch without writing through that link
 
 ### Requirement: Parameterized container launch
-The dispatcher SHALL launch a new dedicated container using a configured argv template with `{snapshot_path}` replaced by the canonical temporary snapshot path, without shell evaluation, word splitting or recursive substitution. The template SHALL mount this path at the configured container destination. Invalid placeholders or an incorrect mount SHALL fail dispatch.
+The dispatcher SHALL launch a new dedicated container by replacing only the validated image operand with the configured image ID. Docker SHALL resolve the literal operand locally at launch under its name/ID semantics with `--pull=never`, without implicit pulling or a separate pull fallback. Substitution SHALL NOT use shell evaluation, word splitting or recursion.
 
-#### Scenario: Snapshot path with spaces
-- **WHEN** the temporary snapshot path contains spaces
-- **THEN** substitution preserves it within its original argument without creating additional arguments
+#### Scenario: Fixed launch image
+- **WHEN** a request launches a container after the operator retargets the image's original tag
+- **THEN** launch argv still uses the configured `image_id` literally, with abbreviated-ID resolution performed by Docker
+
+#### Scenario: Unresolved launch image
+- **WHEN** Docker returns a resolution error for the configured operand
+- **THEN** mandatory `--pull=never` prevents pulling even if the hexadecimal operand is interpreted as an image name; the dispatcher retains the literal operand, Docker's status and diagnostics, returns failure without pull fallback, and does not inspect, copy or execute the configured command
+
+### Requirement: Local image resolution limitation
+Footman SHALL guarantee literal operand substitution and disabled pulling, not ID-only Docker resolution or failure for every absent ID. Image inspection SHALL remain diagnostic for image identity, without an equality gate. Operator documentation SHALL explain that local hexadecimal-name tags may resolve instead of intended IDs and assign avoidance of conflicting local names to the operator.
+
+#### Scenario: Local hexadecimal-name collision
+- **WHEN** the configured operand is `d9e853e87e55` and Docker successfully resolves a local `d9e853e87e55:latest` tag to another image, including when the intended ID is absent
+- **THEN** Footman preserves the literal operand and never-pull policy, records the observed image identity separately, and does not reject dispatch solely for that image mismatch; container identity/running-state and copy/execution checks still apply
+
+### Requirement: Constrained launch template
+Startup SHALL validate `docker run --detach=true --pull=never [OPTION ...] -- {image_id} [COMMAND_ARG ...]` under design §1. Options SHALL be `--name=value`, split at the first `=`, with nonempty names and no further `detach` or `pull`. The sole placeholder SHALL be standalone `{image_id}` at the image operand immediately after the delimiter. Command arguments SHALL be literal and placeholder-free. Invalid shapes/placeholders SHALL fail before run-resource acquisition.
+
+#### Scenario: Constrained image operand
+- **WHEN** launch argv is `docker run --detach=true --pull=never --privileged=true -- {image_id} sleep infinity`
+- **THEN** startup accepts its shape and launch replaces exactly the image operand with the configured ID, leaving options and command arguments unchanged
+
+#### Scenario: Missing or conflicting pull policy
+- **WHEN** a template omits the fixed `--pull=never` prefix element, replaces it with `--pull=always` or `--pull=missing`, or adds another pull option (including another `--pull=never`)
+- **THEN** startup rejects it with a diagnostic and no run-resource side effects
+
+#### Scenario: Invalid launch shape
+- **WHEN** launch argv uses a wrapper, alternate executable, Docker global options, short/bare flags, separate option values, an additional detach option, a missing options delimiter or an unrelated image before `{image_id}`
+- **THEN** startup fails with a validation diagnostic before serving requests or creating run output, snapshots, containers or configured-command processes
+
+#### Scenario: Invalid launch placeholder
+- **WHEN** launch argv omits `{image_id}`, repeats or embeds it, places it anywhere except the image operand, or contains an unknown placeholder, including any `{snapshot_path}` occurrence even alongside `{image_id}`
+- **THEN** startup rejects configuration before creating run resources
+
+#### Scenario: Launch arguments
+- **WHEN** a validated template is expanded for a request
+- **THEN** configured `image_id` is substituted literally and the launch argv does not receive the host snapshot path
+
+### Requirement: Staged snapshot container copy
+After launch and container identity/running-state inspection, the dispatcher SHALL copy the complete exported staged snapshot contents into `container_snapshot_directory` of that exact container before exec. Transfer SHALL preserve exact bytes, executable modes and actual internal symlinks without dereferencing them. It SHALL NOT transfer the workdir, `.git` or unstaged/untracked/ignored inputs. It SHALL NOT add an enclosing run-ID directory.
+
+#### Scenario: Staged bytes copied
+- **WHEN** a staged file differs from later workdir edits
+- **THEN** the container receives its staged bytes at the configured snapshot destination, with the host snapshot and development state unchanged
+
+#### Scenario: Snapshot copy path characters
+- **WHEN** absolute host source or container destination paths contain spaces, colons or newlines
+- **THEN** startup/per-request validation accepts those characters and literal copy argv preserves each path as one argument
+
+#### Scenario: Invalid copy source or destination
+- **WHEN** a path contains NUL, is non-absolute, or the host source's canonical identity cannot be resolved/validated under snapshot ownership
+- **THEN** validation fails with the specific cause; later filesystem/Docker errors retain their actual diagnostics
+
+### Requirement: Fresh copy destination and transfer failure
+The dispatcher SHALL run literal `docker exec -u root <id> mkdir -- <destination>`, then, only on success, `docker cp <host-snapshot>/. <id>:<destination>/`. Existing destination, missing parent or failed/partial copy SHALL prevent command execution and retain the ID for cleanup without retry. Preparation/copy argv, status and diagnostics SHALL form infrastructure-summary records in `result.json`.
+
+#### Scenario: Missing parent or preexisting destination
+- **WHEN** the destination's parent is missing or the destination already exists
+- **THEN** `mkdir` fails, snapshot copying and the configured command do not start, and dispatch reports failure with applicable container cleanup
+
+#### Scenario: Partial snapshot transfer
+- **WHEN** copying fails after creating some container files
+- **THEN** the configured command does not run, transfer failure is reported separately, and the attributable container remains subject to cleanup
+
+### Requirement: Container copy prerequisites
+The image SHALL provide `mkdir` supporting `--`. The operator SHALL provide an existing destination parent with directory-only, symlink-free ancestors and keep that path stable during preparation/copy. Footman SHALL create only the final directory using `mkdir` without `-p`. Operator documentation and the annotated TOML SHALL state these prerequisites; in-container path stability is an operator responsibility.
+
+#### Scenario: Prepared destination parent
+- **WHEN** `container_snapshot_directory` is `/workspace/source`
+- **THEN** the image or operator-controlled startup supplies `/workspace` before copying, `/workspace/source` is initially absent, and Footman creates `source` before copying the snapshot contents
+
+### Requirement: Copied source permissions
+Operator documentation and the annotated TOML SHALL explain root-owned destination creation and ordinary `docker cp` container-root ownership. The operator SHALL arrange traversal/read/execute access and command-required write permissions for a non-root configured user. Footman SHALL preserve the configured identity and report access failures through the applicable operation status.
+
+#### Scenario: Non-root configured execution
+- **WHEN** the operator configures a non-root user
+- **THEN** instructions explain the required permissions for the copied tree and any operator-supplied permission step, without assuming root ownership alone prohibits execution or automatically provisioning ownership
 
 ### Requirement: Container launch output contract
 Startup SHALL exit zero and return only one full Docker container ID on stdout, optionally followed by one newline; diagnostics SHALL go to stderr. The ID SHALL identify the new dedicated container. Nonzero exit, malformed output or a container not running SHALL prevent configured-command execution. Startup output and status SHALL be retained separately.
 
 #### Scenario: Valid launch
-- **WHEN** startup exits zero with one valid container ID and inspection confirms the expected running container and mount
+- **WHEN** startup exits zero with one valid container ID and inspection confirms the exact returned container ID and its running state
 - **THEN** subsequent execution uses exactly that ID
 
 #### Scenario: Invalid launch result
 - **WHEN** startup exits nonzero or stdout contains no ID, extra text or multiple IDs
 - **THEN** the configured command does not run and startup diagnostics/status are retained as dispatch failure
 
+### Requirement: Container inspection and image attribution
+Before copying or exec, inspection SHALL confirm the exact returned container ID and its running state. Configured `image_id` and the full observed `Image` ID (`sha256:` plus 64 hexadecimal characters) from container inspection SHALL be recorded separately for attribution. Unavailable or unusable observed identity SHALL be recorded as unknown with a diagnostic. Image selection SHALL rely on literal `{image_id}` launch substitution.
+
+#### Scenario: Observed image attribution
+- **WHEN** inspection confirms the exact running container
+- **THEN** the result records configured `image_id`, including an abbreviated value, and the full observed `Image` ID separately, using unknown with a diagnostic for unavailable or unusable observed identity
+
+#### Scenario: Invalid container inspection
+- **WHEN** inspection fails, identifies a different container ID or reports a non-running container
+- **THEN** copying and configured-command execution do not start, dispatch fails, and the recorded launch container ID remains available for applicable cleanup without retry or automatic configuration update
+
+### Requirement: Launch inspection protocol
+The dispatcher SHALL run one literal `docker container inspect --format {{.Id}}|{{.State.Status}}|{{.Image}} <id>` for launch validation, with the format as one argv element, closed stdin and the remaining request deadline. It SHALL record argv/status, bounded stdout/stderr excerpts and parse diagnostics in the `result.json` infrastructure summary. Container validation and image attribution SHALL share that result.
+
+#### Scenario: Inspection record parsing
+- **WHEN** inspect exits zero with one record and at most one trailing LF
+- **THEN** its first two pipe-delimited fields must be a full 64-hex ID equal to the returned launch ID (hex case insignificant) and status exactly `running`; the optional remainder is full `sha256:<64 hex>` image metadata or unknown with a diagnostic if absent/empty/malformed
+
+#### Scenario: Invalid mandatory inspection data
+- **WHEN** inspect exits nonzero, returns multiple records, omits/unparseably encodes ID or status, identifies a different container or reports a non-running state
+- **THEN** dispatch fails before mkdir/copy/command execution and retains diagnostics and the recorded launch ID for applicable cleanup
+
 ### Requirement: Configured container execution
-The dispatcher SHALL execute configured command argv in the newly launched container as the configured user from the in-container cwd `{container_snapshot_directory}/{working_directory}`, normalized and confined below the configured mount destination. The dispatcher SHALL NOT substitute the host snapshot path into exec argv. It SHALL use literal argv, closed stdin and no TTY. It SHALL NOT infer test organization, add filters or provision project-specific identities.
+The dispatcher SHALL execute configured command argv in the newly launched container as the configured user from the in-container cwd `{container_snapshot_directory}/{working_directory}`, normalized and confined below the configured snapshot destination. The dispatcher SHALL NOT substitute the host snapshot path into exec argv. It SHALL use literal argv, closed stdin and no TTY. It SHALL NOT infer test organization, add filters or provision project-specific identities.
 
 #### Scenario: Configured execution
-- **WHEN** launch validation succeeds
-- **THEN** execution uses the returned container ID, configured user, mounted snapshot and exact command argv
+- **WHEN** launch validation and snapshot copying succeed
+- **THEN** execution uses the returned container ID, configured user, copied staged snapshot and exact command argv
 
 #### Scenario: Container working directory
-- **WHEN** the mount destination is `/workspace` and the configured relative working directory is `subdir`
+- **WHEN** the snapshot destination is `/workspace` and the configured relative working directory is `subdir`
 - **THEN** execution uses `/workspace/subdir`, not the host snapshot path; `.` uses `/workspace`
 
 #### Scenario: Missing execution prerequisite
@@ -174,14 +288,47 @@ The MCP tool SHALL accept an optional nonempty phase string matching `[A-Za-z0-9
 - **THEN** the request fails before output reservation or execution
 
 ### Requirement: Complete separate output
-Each run directory SHALL contain complete separate command streams in `stdout.txt` and `stderr.txt`, a structured `result.json`, and separate startup streams in `startup-stdout.txt` and `startup-stderr.txt`. Storage failure SHALL prevent successful reporting. Retained command output SHALL NOT be filtered or silently truncated.
+Each run directory SHALL contain complete separate command streams in `stdout.txt` and `stderr.txt`, a structured `result.json`, and separate startup streams in `startup-stdout.txt` and `startup-stderr.txt`. Storage failure SHALL prevent successful reporting. Retained command output SHALL NOT be filtered or silently truncated. Command streams SHALL come from configured `docker exec`. Infrastructure summary and bounded diagnostic excerpts SHALL reside in `result.json`.
 
 #### Scenario: Large output or storage failure
 - **WHEN** the command writes large amounts to both streams or storage fails
 - **THEN** the dispatcher drains both streams without pipe deadlock and reports any incomplete retention as unsuccessful
 
+### Requirement: Infrastructure diagnostic summary
+`result.json` SHALL record inspect, mkdir, cp and cleanup operations in order: argv, timestamps, status/lifecycle failure and parse diagnostics. Stream summaries SHALL select the first 4096 source bytes and publish raw Base64 excerpts with observed/retained byte counts, truncation disclosure and terminal completeness. Adapters SHALL drain within operation budgets. Unavailable observations SHALL remain explicit.
+
+#### Scenario: Infrastructure output exceeds summary limit
+- **WHEN** an infrastructure helper emits more than 4096 bytes on a stream
+- **THEN** the summary discloses truncation and byte counts, preserves its bounded excerpt and completion state, and retains the five-file output contract with full command/startup streams
+
+#### Scenario: Interrupted infrastructure observation
+- **WHEN** a helper's stream or status is unavailable or incomplete
+- **THEN** its record identifies the lifecycle failure/completeness and observed bytes without inventing a full-output count or successful exit status
+
+### Requirement: Infrastructure excerpt streaming
+Each infrastructure child SHALL use `capture_limit=0` and one domain-owned `stream()` sink, counting raw callback bytes and selecting at most the first 4096 per stream while continuing to drain/discard. Terminal completeness SHALL derive from `on_stream_end`/`StreamOutcome` (EOF, READ_FAILED, ABORTED), independently of child exit. Collector failures SHALL be explicit. Buffered capture or generic raw tails SHALL NOT supply excerpts.
+
+#### Scenario: Leading excerpt and continued drain
+- **WHEN** a helper emits more than 4096 bytes with distinguishable leading/trailing content
+- **THEN** its selected source prefix is the leading 4096 bytes, observed count covers every delivered byte, source truncation is true, and EOF is reported only when observed
+
+#### Scenario: Aborted diagnostic drain
+- **WHEN** stream collection aborts or fails after partial delivery
+- **THEN** the sink reports only observed raw bytes and READ_FAILED/ABORTED, distinguishing source truncation from incomplete collection without inventing a total or replaying a process tail
+
+### Requirement: Raw diagnostic retention
+Infrastructure excerpts SHALL preserve selected raw bytes directly in Base64, including URLs, credential-like text, invalid text bytes and boundary fragments. Diagnostics SHALL use no content redaction or sanitization. Operator documentation SHALL identify all five result files as potentially sensitive and require restrictive access and operator-managed retention. The manifest SHALL NOT separately enumerate or serialize the inherited environment.
+
+#### Scenario: Byte-preserving diagnostic prefix
+- **WHEN** helper output contains a URL, token assignment or invalid text bytes, including across chunks or the 4096-byte cutoff
+- **THEN** decoding the excerpt recovers exactly the selected raw prefix, retained byte count describes that prefix and observed count/truncation remain independent of chunk boundaries
+
+#### Scenario: Sensitive retained evidence
+- **WHEN** process output or generated diagnostics contain credentials or environment-derived secrets
+- **THEN** documentation explains that those values can appear in retained files, Base64 offers no secrecy, and the operator controls evidence access and retention
+
 ### Requirement: Attributable command outcomes
-Results SHALL record run ID, UTC timestamp, optional phase, expanded output directory, snapshot tree, configuration identity, exact command, cwd, user, container/image identity, timestamps, exit status/signal, output paths and cleanup state. Command success SHALL be based on exit status, not test-count or domain-output interpretation. Incomplete, timed-out or unresolved runs SHALL NOT report success.
+Results SHALL record run ID, UTC timestamp, optional phase, expanded output directory, snapshot tree, configuration identity, exact command, cwd, user, container/image identity, timestamps, exit status/signal, output paths, cleanup state and infrastructure diagnostic summary. Command success SHALL be based on exit status, not test-count or domain-output interpretation. Incomplete, timed-out or unresolved runs SHALL NOT report success.
 
 #### Scenario: Command exits zero without tests
 - **WHEN** the configured command exits zero without executing tests
@@ -192,7 +339,7 @@ Results SHALL record run ID, UTC timestamp, optional phase, expanded output dire
 - **THEN** the result preserves that status and MCP returns an unsuccessful tool result
 
 ### Requirement: Bounded run lifecycle
-The dispatcher SHALL enforce `timeout_seconds` for startup/execution and `cleanup_grace_seconds` for container cleanup and confirmation. It SHALL remove its dedicated container by recorded ID on completion or failure. Local Docker-client exit SHALL NOT imply container termination. Snapshot deletion SHALL wait for confirmed container cleanup. Unresolved resources SHALL be reported for operator reconciliation; unrelated containers SHALL remain untouched.
+The dispatcher SHALL enforce `timeout_seconds` for startup/inspection/copy/execution and `cleanup_grace_seconds` for container cleanup and confirmation. It SHALL remove its dedicated container by recorded ID on completion or failure. Local Docker-client exit SHALL NOT imply container termination. Snapshot deletion SHALL wait for confirmed container cleanup. Unresolved resources SHALL be reported for operator reconciliation; unrelated containers SHALL remain untouched.
 
 #### Scenario: Timeout with survivors
 - **WHEN** the deadline expires and container removal cannot be confirmed
@@ -209,6 +356,17 @@ The dispatcher SHALL enforce `timeout_seconds` for startup/execution and `cleanu
 #### Scenario: Client disconnect
 - **WHEN** an MCP client disconnects after execution starts
 - **THEN** the run remains supervised to a retained outcome without automatic retry
+
+### Requirement: Recorded container removal protocol
+Cleanup SHALL use literal `docker rm -f <id>` then `docker container ls --all --no-trunc --filter id=<id> --format {{.ID}}`, with closed stdin and the shared cleanup allowance. Successful complete listing with empty stdout SHALL confirm absence. The recorded ID in the listing SHALL mean retained container. Other output, nonzero status or lifecycle failure SHALL leave removal unconfirmed. Removal failures SHALL remain observable independently of confirmation.
+
+#### Scenario: Confirmation fails
+- **WHEN** listing fails, times out, has incomplete collection or produces malformed/unexpected output
+- **THEN** cleanup reports unconfirmed resources and retains the host snapshot, regardless of local client exit or an inspect error
+
+#### Scenario: Container confirmed absent
+- **WHEN** listing exits zero with complete successful collection and exactly empty stdout
+- **THEN** cleanup records confirmed absence and may proceed with owned snapshot cleanup, retaining any earlier removal failure in the run summary
 
 ### Requirement: Single-owner resource integration
 Every descriptor, directory capability, fd-owning stream and managed child SHALL have one release authority throughout its lifecycle. Independent releases SHALL each be attempted once. Operation failures SHALL remain authoritative over ordinary close failures; sole close failures SHALL remain observable. Interruption SHALL retain authority. Repeated or concurrent cleanup SHALL NOT repeat release or restart cleanup work.
@@ -230,7 +388,7 @@ Every descriptor, directory capability, fd-owning stream and managed child SHALL
 - **THEN** interruption remains authoritative, applicable independent cleanup is attempted, and any incomplete ownership remains supervised and reported
 
 ### Requirement: Independent cleanup and persistence observations
-The dispatcher SHALL distinguish local child exit, external container removal, helper-resource settlement and output persistence. Startup/execution operations SHALL share the request execution deadline. Cleanup stages, helper execution and local cleanup SHALL fit one cleanup allowance with a local-cleanup reserve. Observing incomplete cleanup SHALL NOT renew that allowance or initiate replacement cleanup.
+The dispatcher SHALL distinguish local child exit, external container removal, helper-resource settlement and output persistence. Startup/inspection/copy/execution operations SHALL share the request execution deadline. Cleanup stages, helper execution and local cleanup SHALL fit one cleanup allowance with a local-cleanup reserve. Observing incomplete cleanup SHALL NOT renew that allowance or initiate replacement cleanup.
 
 #### Scenario: Output callback fails with zero command status
 - **WHEN** a stream writer fails but the process coordinator treats the callback exception as diagnostic-only and the command exits zero

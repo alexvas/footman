@@ -42,7 +42,15 @@ def config(tmp_path):
         {
             "version": 1,
             "repository": "repository",
-            "container_start_argv": ["docker", "run", "{snapshot_path}"],
+            "container_start_argv": [
+                "docker",
+                "run",
+                "--detach=true",
+                "--pull=never",
+                "--",
+                "{image_id}",
+            ],
+            "image_id": "d9e853e87e55",
             "command_argv": ["tool", "literal {phase}"],
             "working_directory": ".",
             "container_snapshot_directory": "/workspace",

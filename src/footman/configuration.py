@@ -28,6 +28,7 @@ _REQUIRED = frozenset(
         "version",
         "repository",
         "container_start_argv",
+        "image_id",
         "command_argv",
         "working_directory",
         "snapshot_directory",
@@ -54,6 +55,7 @@ class Configuration:
     version: int
     repository: Path
     container_start_argv: tuple[str, ...]
+    image_id: str
     command_argv: tuple[str, ...]
     user: str
     working_directory: str
@@ -88,6 +90,7 @@ class Configuration:
             "version": self.version,
             "repository": str(self.repository),
             "container_start_argv": self.container_start_argv,
+            "image_id": self.image_id,
             "command_argv": self.command_argv,
             "user": self.user,
             "working_directory": self.working_directory,
@@ -116,7 +119,7 @@ def _argv(value: object, field: str) -> tuple[str, ...]:
         raise ConfigurationError(
             f"configuration {field} must be a nonempty string array"
         )
-    if any(not isinstance(arg, str) or "\x00" in arg for arg in value):
+    if any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in value):
         raise ConfigurationError(f"configuration {field} must contain NUL-free strings")
     _string(value[0], field)
     return tuple(value)
@@ -155,6 +158,41 @@ def _host_path(value: object, field: str, base: Path) -> Path:
 
 def _overlap(first: Path, second: Path) -> bool:
     return first.is_relative_to(second) or second.is_relative_to(first)
+
+
+def validate_launch_template(launch: tuple[str, ...]) -> None:
+    """Structural Docker grammar, not a Docker option/existence validator."""
+    field = "container_start_argv"
+    for arg in launch:
+        _placeholders(arg, field, frozenset({"image_id"}))
+    if launch[:4] != ("docker", "run", "--detach=true", "--pull=never"):
+        raise ConfigurationError(
+            f"configuration {field} requires docker run --detach=true --pull=never"
+        )
+    try:
+        delimiter = launch.index("--", 4)
+    except ValueError as error:
+        raise ConfigurationError(
+            f"configuration {field} requires -- before {{image_id}}"
+        ) from error
+    for option in launch[4:delimiter]:
+        name, separator, _ = option.partition("=")
+        if (
+            not separator
+            or not name.startswith("--")
+            or len(name) == 2
+            or name in ("--detach", "--pull")
+        ):
+            raise ConfigurationError(
+                f"configuration {field} requires --name=value options without additional detach/pull"
+            )
+    if (
+        launch[delimiter + 1 : delimiter + 2] != ("{image_id}",)
+        or sum(arg.count("{image_id}") for arg in launch) != 1
+    ):
+        raise ConfigurationError(
+            f"configuration {field} requires one standalone {{image_id}} at the image operand"
+        )
 
 
 def validate_configuration(data: Mapping[str, object], path: Path) -> Configuration:
@@ -219,15 +257,11 @@ def validate_configuration(data: Mapping[str, object], path: Path) -> Configurat
                 f"configuration {field} ancestor must be a directory"
             )
     launch = _argv(data["container_start_argv"], "container_start_argv")
-    launch_names = frozenset().union(
-        *(
-            _placeholders(arg, "container_start_argv", frozenset({"snapshot_path"}))
-            for arg in launch
-        )
-    )
-    if "snapshot_path" not in launch_names:
+    validate_launch_template(launch)
+    image_id = _string(data["image_id"], "image_id")
+    if re.fullmatch(r"(?:sha256:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{12,64})", image_id) is None:
         raise ConfigurationError(
-            "configuration container_start_argv requires {snapshot_path}"
+            "configuration image_id must be a full sha256 ID or 12–64 hexadecimal characters"
         )
     command = _argv(data["command_argv"], "command_argv")
     working = _string(data["working_directory"], "working_directory")
@@ -248,6 +282,7 @@ def validate_configuration(data: Mapping[str, object], path: Path) -> Configurat
         version=1,
         repository=repository,
         container_start_argv=launch,
+        image_id=image_id,
         command_argv=command,
         user=_string(data.get("user", "root"), "user"),
         working_directory=working,

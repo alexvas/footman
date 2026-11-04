@@ -107,6 +107,17 @@ def test_invalid_config_never_launches(api, kw):
     factory.assert_not_called()
 
 
+def test_factory_receives_devnull_stdin(api):
+    child = Child()
+    child.returncode = 0
+    factory = mock.Mock(return_value=child)
+    with api.OwnedProcess.launch(["child"], factory=factory) as owner:
+        result = owner.capture()
+    assert result.returncode == 0
+    assert result.lifecycle.complete
+    assert factory.call_args.kwargs["stdin"] == subprocess.DEVNULL
+
+
 @pytest.mark.parametrize(
     "seam", ["_prepare_stream", "_new_event", "_new_lock", "_make_continuation"]
 )

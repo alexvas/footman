@@ -187,6 +187,7 @@ class SnapshotReservation:
         self._tree: CapturedTree | None = None
         self._captured = False
         self._exported = False
+        self._export_complete = False
         self._closed = False
         self._lock = threading.RLock()
         self._deadline = time.monotonic() + timeout_seconds
@@ -517,6 +518,22 @@ class SnapshotReservation:
                         raise SnapshotError("symlink target traverses a non-directory")
                     resolved.append(part)
 
+    def copy_source(self) -> Path:
+        """Borrow the validated canonical source only after complete export."""
+        with self._lock:
+            if not self.path.is_absolute():
+                raise SnapshotError("copy source must be an absolute path")
+            if "\x00" in str(self.path):
+                raise SnapshotError("copy source contains NUL")
+            self._leaf()
+            if not self._export_complete:
+                raise SnapshotError(
+                    "copy requires a successfully completed staged export"
+                )
+            if self.path.resolve(strict=True) != self.path:
+                raise SnapshotError("copy source canonical identity changed")
+            return self.path
+
     def export(self, tree: CapturedTree) -> None:
         with self._lock:
             root = self._leaf()
@@ -569,6 +586,7 @@ class SnapshotReservation:
                     )
             except DescriptorError as error:
                 raise SnapshotError("unsafe snapshot export directory") from error
+            self._export_complete = True
 
 
 def reserve_snapshot(

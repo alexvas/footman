@@ -11,20 +11,42 @@ output_dir = "results/{phase}/{utc_datetime}"
 
 # Prepare the image yourself. It must supply the command, a long-running main
 # process and readiness; Footman does not build images or infer readiness.
-# The Docker daemon must see the host snapshot path for this bind mount.
+# Obtain the local image ID with docker image ls (e.g. d9e853e87e55), or:
+# docker image inspect --format '{{.Id}}' footman-sandbox:latest
+# Replace this illustrative full ID with your image ID; update/restart after rebuild.
+# Accepted: sha256: plus exactly 64 hex characters, or 12–64 unprefixed hex.
+image_id = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+# Exact prefix, optional --name=value options, then -- and sole {image_id}.
+# --name= has an empty value but is a nonempty argv element. No extra pull/detach.
+# Docker resolves the literal operand locally with --pull=never; no pull fallback.
+# Local hexadecimal-name tags can select another image; avoid conflicting names.
+# Observed image identity is diagnostic-only, not an equality gate.
 container_start_argv = [
-  "docker", "run", "--detach",
-  "--mount", "type=bind,src={snapshot_path},dst=/workspace",
-  "prepared-build-image", "sleep", "infinity",
+  "docker", "run", "--detach=true", "--pull=never", "--privileged=true", "--",
+  "{image_id}", "sleep", "infinity",
 ]
-container_snapshot_directory = "/workspace"
-# Relative, normalized inside the container mount, not a host working path.
+# /workspace/source requires an existing /workspace, with source absent.
+# The image or operator-controlled startup prepares the parent and readiness.
+# Image must provide mkdir supporting --. Footman runs mkdir without -p, then
+# docker cp snapshot/. ID:/workspace/source/ via the Docker connection.
+# Ancestors must be directory-only and symlink-free, paths stable during transfer.
+# Root mkdir and ordinary docker cp create root-owned destination/copy entries.
+# A non-root user needs traversal/read/execute and command-specific write access.
+# Operator/image/explicit wrapper supplies permissions; no inferred chown/chmod.
+# Root ownership alone does not imply all non-root commands fail.
+container_snapshot_directory = "/workspace/source"
+# Relative, normalized inside the copied snapshot, not a host working path.
 working_directory = "."
 # Optional: defaults to root. Privileged staged code is NOT a security sandbox.
 user = "root"
+# Every element of both argv arrays must be nonempty and NUL-free at startup.
 # Literal argv; no shell parsing, rewriting, implicit flags or phase selection.
 # Alternatives: ["./gradlew", "test"] or ["npm", "test"].
 command_argv = ["cargo", "test", "--locked"]
 # Finite numbers, 0 < timeout <= 86400; 0 < cleanup grace <= 300 (seconds).
 timeout_seconds = 3600
 cleanup_grace_seconds = 10
+# All five result files are sensitive: command/startup output, raw infrastructure
+# excerpts and generated messages may contain credentials/environment secrets.
+# There is no content redaction; Base64 offers no secrecy. Restrict access and
+# manage retention yourself; plan disk space for complete command/startup logs.

@@ -187,6 +187,39 @@ The normal suite also covers missing/shared-parent creation, concurrent-parent
 reopening, walk-time symlink replacement, removed/moved capabilities, once-only
 release on those failures, and exported/created-directory modes.
 
+## Phase 5 launcher suite
+
+Use the Phase 1 prerequisites; Docker is not required. Run this command for
+launcher RED and subsequent regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_launcher.py tests/test_launcher_execution.py tests/test_launcher_faults.py tests/test_launcher_boundaries.py -n 2 --dist loadfile --tb=short -q
+```
+
+The suite covers required image-ID formats and immutable startup validation,
+constrained never-pull launch templates, exact-ID/running-state inspection,
+root mkdir without -p followed by literal contents-copy argv, and configured
+exec user/cwd/argv/status/separate streams. The sequenced executable stub records
+per-request argv, status and fixture IDs, rejects unexpected order and never
+accesses Docker. Ownership faults cover each local helper, explicit collector
+failure, partial/pending stream observations and once-only collection.
+
+`dev_snapshot_copy_identity` checks real exported host staged bytes, executable
+mode and actual symlink as the requested copy source; it does not establish
+in-container preservation or absence of stale merging. `dev_image_id_forms`
+scripts Docker resolution errors and local hexadecimal-name collisions; literal
+operands and --pull=never are adapter observations, not Docker resolution proofs.
+`dev_exec_image_and_wrapper_argv` and the process half of
+`dev_exec_status_and_streams` check both executable configurations without running
+consumer code on the host. Phase 7 adds persistence, Phase 8 MCP responses,
+and Phase 10 actual Docker copy/execution behavior. Phase 6 adds recorded-ID
+domain cleanup; settled local stub children do not prove container removal.
+
+For validation also run every earlier documented phase suite, the unscoped
+full green gate, build/help and exact-wheel installation checks. Infrastructure
+summaries preserve raw sensitive prefixes; see [configuration.md](configuration.md)
+for copy prerequisites, non-root permissions and all five files' access/retention.
+
 ## Descriptor, stream and process helpers
 
 `tests/test_filesystem_*.py` and `tests/test_process_*.py` cover the helpers

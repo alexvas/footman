@@ -101,5 +101,7 @@ do not claim hermeticity or that later workdir edits were tested.
 
 The [Phase 4 suite](testing.md#phase-4-staged-snapshot-suite) uses real disposable
 Git repositories and filesystem resources without Docker. Its
-`test_dev_snapshot_mount_identity` proves staged-byte identity only; actual bind
-visibility and Docker execution remain separate acceptance obligations.
+`test_dev_snapshot_mount_identity` is the historical export-only node name and
+proves staged-byte identity, not a mount. Phase 5's `dev_snapshot_copy_identity`
+checks this host export as the literal Docker copy source. Actual in-container
+copy visibility, bytes/modes/symlinks and execution remain Phase 10 obligations.

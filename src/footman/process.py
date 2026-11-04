@@ -574,7 +574,11 @@ class OwnedProcess:
                             )
             prepared = True
             self._proc = factory(
-                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **options
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **options,
             )
         except BaseException as exc:
             self._idle_stop = True

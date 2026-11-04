@@ -2,7 +2,10 @@
 
 `footman.process.OwnedProcess` launches one direct child, owns one
 `footman.filesystem.streams.OwnedStream` per captured pipe, and coordinates
-readers, deadlines and bounded cleanup. Consumers import explicit modules;
+readers, deadlines and bounded cleanup. Every child receives
+`stdin=subprocess.DEVNULL`, never inherited service/protocol stdin. Popen manages
+its internal DEVNULL handle synchronously; no stdin stream/descriptor is exposed
+to the caller. `popen_kwargs` cannot override stdin. Consumers import explicit modules;
 filesystem ownership never imports process or domain policy.
 
 The examples below illustrate the supported API; they are not automatically
@@ -316,7 +319,7 @@ live subprocess or its captured streams must still use `OwnedProcess.launch`.
 
 ### Other exclusions
 
-No process-tree/group management, stdin, PTY, arbitrary external reader ownership,
+No process-tree/group management, interactive stdin API, PTY, arbitrary external reader ownership,
 existing-process adoption or Docker/npm/redaction/staging/publication authority
 is introduced. Never subclass to replace shutdown, retry ambiguous close,
 reconstruct owners or assign independent stage budgets.

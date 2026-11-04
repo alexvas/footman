@@ -161,6 +161,32 @@ finish before any snapshot or launch callback. See
 For validation also run the Phase
 1 and Phase 2 commands, the unscoped green gate, build/help and exact-wheel smoke.
 
+## Phase 4 staged snapshot suite
+
+Use the Phase 1 prerequisites and disposable real Git repositories; no Docker
+access is required. Run this exact command for RED and snapshot regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_snapshot.py -n 2 --dist loadfile --tb=short -q
+```
+
+The suite covers exclusive snapshot ownership, private-index capture and raw,
+mode-aware staged export. The staged-byte `dev_snapshot_mount_identity` case
+makes no Docker mount claim. See [snapshot identity and limitations](snapshots.md).
+Validation also runs all earlier phase commands,
+the unscoped green gate, build/help and exact-wheel installation checks.
+Setting `FOOTMAN_SNAPSHOT_CONTROL=workdir-bytes` before the same suite command
+is an isolated negative control: the partial-staging assertion must fail when
+its expected bytes deliberately describe the workdir instead of the index.
+It does not modify production code or the developer repository.
+`FOOTMAN_SNAPSHOT_CONTROL=stale-capability-path` before the same command is a
+second isolated negative control: the new move probes report stale expected
+paths for their tracked capability fds, so assertions requiring early identity
+rejection must fail. Production files and release authority are unchanged.
+The normal suite also covers missing/shared-parent creation, concurrent-parent
+reopening, walk-time symlink replacement, removed/moved capabilities, once-only
+release on those failures, and exported/created-directory modes.
+
 ## Descriptor, stream and process helpers
 
 `tests/test_filesystem_*.py` and `tests/test_process_*.py` cover the helpers

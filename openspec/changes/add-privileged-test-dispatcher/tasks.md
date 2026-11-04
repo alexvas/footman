@@ -149,21 +149,21 @@ The explicit edges are: `1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 1
 **Deliverables:** exclusive run-ID snapshot reservation, private-index capture, mode-aware raw export, snapshot limitations documentation, snapshot suite and evidence.
 
 ### RED
-- [ ] 4.1 Write snapshot-reservation tests for matrix S's path/ownership cases. Completion: absent reservation fails confinement and exclusive-creation assertions, including a forced same-ID concurrent collision proving one owner and no loser-induced modification/deletion.
-- [ ] 4.2 Write capture tests for matrix S's index/worktree/concurrency cases. Completion: absent private capture fails assertions on captured identity and development-state preservation.
-- [ ] 4.3 Write export tests for matrix S's bytes/modes/path/filter cases, including the staged-bytes half of `dev_snapshot_mount_identity` (exact staged export despite later workdir edits). Completion: absent raw export fails exact-byte, actual symlink-type/target and prohibited-hook/filter invocation assertions for the entry modes defined by matrix S.
+- [x] 4.1 Write snapshot-reservation tests for matrix S's path/ownership cases. Completion: absent reservation fails confinement and exclusive-creation assertions, including a forced same-ID concurrent collision proving one owner and no loser-induced modification/deletion.
+- [x] 4.2 Write capture tests for matrix S's index/worktree/concurrency cases. Completion: absent private capture fails assertions on captured identity and development-state preservation.
+- [x] 4.3 Write export tests for matrix S's bytes/modes/path/filter cases, including the staged-bytes half of `dev_snapshot_mount_identity` (exact staged export despite later workdir edits). Completion: absent raw export fails exact-byte, actual symlink-type/target and prohibited-hook/filter invocation assertions for the entry modes defined by matrix S.
 
 ### GREEN
-- [ ] 4.4 Implement exclusive run-ID snapshot reservation. Completion: reservation tests pass for canonical-root confinement, existing-path/symlink rejection and same-ID collision without regeneration, renaming or touching the winner's path.
-- [ ] 4.5 Implement private-index tree capture with sanitized Git redirection after successful snapshot reservation, using shared file owners and OwnedProcess for managed Git children. Completion: capture tests pass for ordinary/linked worktrees, unresolved entries, split-index policy, concurrent replacement and matrix A operation/cleanup faults.
-- [ ] 4.6 Implement raw tree/blob export using directory capabilities, sole file owners and process streaming without following exported symlinks. Deliver the passing staged-bytes half of `dev_snapshot_mount_identity` and retain its executed node IDs in 4.9 evidence; no Docker mount claim. Completion: export tests pass for mode-specific creation, exact bytes/targets and explicit rejection of gitlinks, unsupported modes, unsafe paths/chains; matrix A covers sink errors, partial export and independent resource release.
-- [ ] 4.7 Document snapshot identity and limitations. Completion: documentation states exclusive run-ID path ownership/collision failure, mode-specific export, staged-only inputs, no `.git`, no ignored artifacts, split-index policy and no commit/ref/index/workdir mutation.
+- [x] 4.4 Implement exclusive run-ID snapshot reservation. Completion: reservation tests pass for canonical-root confinement, existing-path/symlink rejection and same-ID collision without regeneration, renaming or touching the winner's path.
+- [x] 4.5 Implement private-index tree capture with sanitized Git redirection after successful snapshot reservation, using shared file owners and OwnedProcess for managed Git children. Completion: capture tests pass for ordinary/linked worktrees, unresolved entries, split-index policy, concurrent replacement and matrix A operation/cleanup faults.
+- [x] 4.6 Implement raw tree/blob export using directory capabilities, sole file owners and process streaming without following exported symlinks. Deliver the passing staged-bytes half of `dev_snapshot_mount_identity` and retain its executed node IDs in 4.9 evidence; no Docker mount claim. Completion: export tests pass for mode-specific creation, exact bytes/targets and explicit rejection of gitlinks, unsupported modes, unsafe paths/chains; matrix A covers sink errors, partial export and independent resource release.
+- [x] 4.7 Document snapshot identity and limitations. Completion: documentation states exclusive run-ID path ownership/collision failure, mode-specific export, staged-only inputs, no `.git`, no ignored artifacts, split-index policy and no commit/ref/index/workdir mutation.
 
 ### INTROSPECT
-- [ ] 4.8 Audit Git and export side effects. Completion: the review confirms `write-tree` targets only the private index, no consumer code runs on the host, snapshot writes cannot traverse an exported symlink and failed reservations grant no cleanup ownership.
+- [x] 4.8 Audit Git and export side effects. Completion: the review confirms `write-tree` targets only the private index, no consumer code runs on the host, snapshot writes cannot traverse an exported symlink and failed reservations grant no cleanup ownership.
 
 ### VALIDATE
-- [ ] 4.9 Validate snapshot delivery. Completion: documented snapshot and all earlier suites pass with collision ownership, before/after development-state assertions and captured tree identity in a self-contained, currently applicable verification summary.
+- [x] 4.9 Validate snapshot delivery. Completion: documented snapshot and all earlier suites pass with collision ownership, before/after development-state assertions and captured tree identity in a self-contained, currently applicable verification summary.
 
 ## 5. Phase 5 — Dedicated container launch and exact execution
 

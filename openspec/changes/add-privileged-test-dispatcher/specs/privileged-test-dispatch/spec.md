@@ -33,6 +33,17 @@ The dispatcher SHALL validate versioned configuration once at startup, immutable
 - **WHEN** the server restarts after the TOML file changes
 - **THEN** it loads and validates the new file once, uses it if valid, and refuses startup if invalid
 
+### Requirement: Nonempty configured argv elements
+`command_argv` and `container_start_argv` SHALL each be a nonempty array of nonempty NUL-free strings. This SHALL apply to every element, not only the executable.
+
+#### Scenario: Empty or NUL-containing argv element
+- **WHEN** any element of `command_argv` or `container_start_argv` is an empty string or contains NUL
+- **THEN** startup rejects configuration with a diagnostic before serving requests or creating run output, snapshots, containers or configured-command side effects
+
+#### Scenario: Empty option value in a nonempty argument
+- **WHEN** an otherwise valid launch template includes an equals-form option such as `--name=`
+- **THEN** the empty option value does not violate the nonempty-argument requirement because the whole argv element is nonempty
+
 ### Requirement: Launch image configuration
 `image_id` SHALL be a required string matching either `sha256:[0-9A-Fa-f]{64}` or `[0-9A-Fa-f]{12,64}` in its entirety. It SHALL contribute to the effective configuration identity. Format validation SHALL NOT imply image existence or trigger image build/pull.
 

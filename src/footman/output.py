@@ -103,7 +103,9 @@ class OutputReservation:
         self._directories: list[DirectoryDescriptor] = []
         self._lock = threading.RLock()
         self._closed = False
+        self._files_closed = False
         self.cleanup_failure: BaseException | None = None
+        self.file_failure: BaseException | None = None
 
     @property
     def paths(self) -> MappingProxyType[str, Path]:
@@ -114,6 +116,29 @@ class OutputReservation:
         """Borrowed descriptors only; ownership never leaves this reservation."""
         return MappingProxyType(self._views)
 
+    def close_files(self) -> None:
+        """Settle all retained file owners before final manifest publication.
+
+        Directory capabilities remain alive for atomic same-directory replace.
+        The publication adapter borrows them; it acquires no second file owner.
+        """
+        with self._lock:
+            if self._files_closed:
+                return
+            self._files_closed = True
+            self._borrow_state.released = True
+            failures = CleanupFailures(None)
+            for owner in reversed(tuple(self._files.values())):
+                failures.run(owner.close, ordinary=(OSError,))
+            try:
+                selected = failures.complete()
+                if selected is not None:
+                    raise selected
+            except BaseException as error:
+                self.file_failure = error
+                self.cleanup_failure = error
+                raise
+
     def close(self, primary: BaseException | None = None) -> None:
         # Serialize the complete release, not merely the claim. A concurrent
         # observer cannot return while a sibling is still releasing handles.
@@ -123,8 +148,7 @@ class OutputReservation:
             self._closed = True
             self._borrow_state.released = True
             failures = CleanupFailures(primary)
-            for owner in reversed(tuple(self._files.values())):
-                failures.run(owner.close, ordinary=(OSError,))
+            failures.run(self.close_files, ordinary=(OSError,))
             for directory in reversed(self._directories):
                 failures.run(directory.close, ordinary=(OSError,))
             try:

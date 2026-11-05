@@ -235,6 +235,27 @@ and no-follow cleanup. See [incomplete-run reconciliation](reconciliation.md). I
 removal or copy proofs. Validation also runs every earlier phase suite, the
 unscoped green gate, build/help and exact-wheel installation checks.
 
+## Phase 7 result delivery suite
+
+Use the Phase 1 prerequisites; Docker is not required. Run this exact command
+for result RED and subsequent regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_results.py -n 2 --dist loadfile --tb=short -q
+```
+
+This suite covers complete separate stream persistence, atomic manifests,
+raw infrastructure summaries and deterministic outcome conflicts. See
+[result fields, precedence and evidence limitations](results.md). Validation
+also runs every earlier phase suite, the unscoped green gate, build/help and
+exact-wheel installation checks. Stub results do not establish Docker semantics.
+Publication regressions cover initial/checkpoint/final failure escalation,
+post-rename directory-sync uncertainty, cleanup precedence and no corrective
+publication. `FOOTMAN_RESULTS_CONTROL=publication-order` before the same result
+suite command is an isolated negative control: it deliberately expects directory
+sync before replacement and must fail the ordering assertion without changing
+production code or the developer index.
+
 ## Descriptor, stream and process helpers
 
 `tests/test_filesystem_*.py` and `tests/test_process_*.py` cover the helpers

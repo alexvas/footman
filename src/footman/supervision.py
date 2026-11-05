@@ -292,14 +292,23 @@ class RunSupervisor:
         self._started = False
         self.execution.command_cleanup_action = self.cleanup
 
-    def execute(self, startup: ChunkSink, command: ChunkSink) -> None:
+    def execute(
+        self,
+        startup: ChunkSink,
+        command: ChunkSink,
+        *,
+        startup_end: Callable[[ProcessStream, StreamOutcome], None] | None = None,
+        command_end: Callable[[ProcessStream, StreamOutcome], None] | None = None,
+    ) -> None:
         with self._lock:
             if self._started:
                 raise RuntimeError("run supervision already attempted")
             self._started = True
         primary: BaseException | None = None
         try:
-            self.execution.execute(startup, command)
+            self.execution.execute(
+                startup, command, startup_end=startup_end, command_end=command_end
+            )
         except BaseException as error:
             primary = error
         failures = CleanupFailures(primary)

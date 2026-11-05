@@ -163,6 +163,9 @@ class ContainerExecution:
         self.startup_result: ProcessResult | None = None
         self.startup_operation = InfrastructureOperation("startup")
         self.command_result: ProcessResult | None = None
+        self.command_operation = InfrastructureOperation("command")
+        self.observer: Callable[[], None] | None = None
+        self.deadline_expired = False
         self.startup_argv: tuple[str, ...] = ()
         self.command_argv: tuple[str, ...] = ()
         self.infrastructure_operations = [
@@ -185,6 +188,7 @@ class ContainerExecution:
     def _remaining(self) -> float:
         remaining = self._deadline - time.monotonic()
         if remaining <= 0:
+            self.deadline_expired = True
             raise ContainerError("container execution deadline exhausted")
         return remaining
 
@@ -196,6 +200,7 @@ class ContainerExecution:
         parser: _Record | None = None,
         operation: InfrastructureOperation | None = None,
         configured_command: bool = False,
+        on_stream_end: Callable[[ProcessStream, StreamOutcome], None] | None = None,
     ) -> ProcessResult:
         collector = operation.collector if operation else InfrastructureCollector()
         sink_failure: Exception | None = None
@@ -220,6 +225,16 @@ class ContainerExecution:
                     sink(stream, data)
             except Exception as error:
                 sink_failure = error
+
+        def end(stream: ProcessStream, outcome: StreamOutcome) -> None:
+            nonlocal sink_failure
+            collector.end(stream, outcome)
+            try:
+                if on_stream_end is not None:
+                    on_stream_end(stream, outcome)
+            except Exception as error:
+                if sink_failure is None:
+                    sink_failure = error
 
         try:
             remaining = self._remaining()
@@ -251,7 +266,7 @@ class ContainerExecution:
                 capture_limit=0,
             ) as owner:
                 self.processes.append(owner)
-                result = owner.stream(chunk, on_stream_end=collector.end)
+                result = owner.stream(chunk, on_stream_end=end)
                 if configured_command:
                     # An observation, not a success claim: retain before owner
                     # exit or any sink/collector/lifecycle failure can raise.
@@ -332,7 +347,14 @@ class ContainerExecution:
             operation.failure = error
             raise
 
-    def execute(self, startup: ChunkSink, command: ChunkSink) -> None:
+    def execute(
+        self,
+        startup: ChunkSink,
+        command: ChunkSink,
+        *,
+        startup_end: Callable[[ProcessStream, StreamOutcome], None] | None = None,
+        command_end: Callable[[ProcessStream, StreamOutcome], None] | None = None,
+    ) -> None:
         with self._claim:
             if self._started:
                 raise RuntimeError("container execution already attempted")
@@ -349,13 +371,18 @@ class ContainerExecution:
                 sink=startup,
                 parser=parser,
                 operation=self.startup_operation,
+                on_stream_end=startup_end,
             )
             if self.startup_result.returncode != 0:
                 raise ContainerError("container startup failed")
             self.container_id = parser.container_id()
             identity = self.container_id
+            if self.observer is not None:
+                self.observer()
             inspect, mkdir, copy = self.infrastructure_operations
             self._inspect(inspect, identity)
+            if self.observer is not None:
+                self.observer()
             destination = self.config.container_snapshot_directory
             # Revalidate the host capability at the transfer boundary too.
             if self.snapshot.copy_source() != source:
@@ -394,6 +421,8 @@ class ContainerExecution:
                     op.failure = error
                     op.diagnostics.append(str(error))
                     raise error
+                if self.observer is not None:
+                    self.observer()
             self.command_argv = (
                 "docker",
                 "exec",
@@ -404,7 +433,13 @@ class ContainerExecution:
                 identity,
                 *self.config.command_argv,
             )
-            self._run(self.command_argv, sink=command, configured_command=True)
+            self._run(
+                self.command_argv,
+                sink=command,
+                configured_command=True,
+                operation=self.command_operation,
+                on_stream_end=command_end,
+            )
         except BaseException as error:
             # A valid zero-status, fully observed ID remains attributable even
             # if persistence or sole pipe release failed. Never infer an ID

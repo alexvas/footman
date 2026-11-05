@@ -272,6 +272,39 @@ After each dispatched run, the MCP tool result SHALL report the outcome, the con
 - **WHEN** dispatch fails before the configured command starts
 - **THEN** the MCP tool result identifies the dispatch outcome and has a null `return_code`
 
+### Requirement: Manifest publication confirmation and failure escalation
+Publication SHALL write and fsync one exclusive same-directory temporary file, release its sole descriptor owner, atomically replace this request's `result.json`, then fsync the borrowed output directory capability. Only successful completion SHALL confirm finalization and committed in-memory state. Failure SHALL NOT trigger retry, rollback or corrective rewriting; visible bytes SHALL NOT alone certify publication durability or invocation success.
+
+#### Scenario: Durable final publication
+- **WHEN** final publication succeeds
+- **THEN** temporary-file fsync and descriptor release precede replacement, directory fsync follows replacement, and only then are finalization and committed in-memory state confirmed
+
+#### Scenario: Directory sync fails after visible replacement
+- **WHEN** a manifest containing `outcome: succeeded` has replaced `result.json` but the subsequent directory fsync fails
+- **THEN** its visible bytes are left unchanged, no publication retry or corrective write occurs, finalization remains unconfirmed, and the application error reaches MCP as `isError: true` with `output_failed` unless a higher-priority outcome applies, the publication diagnostic, observed command status and available paths; the visible success outcome is not proof of durable publication or successful invocation
+
+### Requirement: Publication application errors
+Initial-write, checkpoint and final-publication failures SHALL escalate as explicit application errors after independent applicable cleanup, not merely ordinary unsuccessful internal run returns. Active operation and interruption precedence SHALL be preserved, with publication failure separately observable. Ordinary error translation SHALL NOT swallow process-control interruptions.
+
+#### Scenario: Earlier publication failure
+- **WHEN** initial writing, checkpoint publication or final publication fails before replacement
+- **THEN** the application records and propagates publication failure after independent applicable cleanup, MCP reports `isError: true` with available observations and paths, and no retry or fabricated confirmation occurs
+
+#### Scenario: Publication failure and cleanup failure
+- **WHEN** publication fails and an independent release also fails
+- **THEN** both remain observable, operation/interruption precedence is preserved, every independent release is attempted once, and repeated cleanup does not repeat publication or descriptor release
+
+#### Scenario: Publication interrupted
+- **WHEN** publication is interrupted by a process-control exception
+- **THEN** interruption remains authoritative through independent cleanup, finalization is not confirmed, ordinary error translation does not swallow the interruption, and no corrective publication occurs
+
+### Requirement: MCP publication error boundary
+The MCP boundary SHALL translate ordinary publication application errors into structured tool results with `isError: true`, an unsuccessful aggregate outcome, publication diagnostics, nullable observed command status and absolute paths for created evidence. One such invocation error SHALL NOT alone terminate the server or restart the failed run.
+
+#### Scenario: Server remains usable after publication error
+- **WHEN** a real MCP client receives a publication application error for one invocation and submits a subsequent valid independent request to the same server
+- **THEN** the first tool result has `isError: true`, the server remains available, and the later request can complete successfully without restarting or duplicating the failed run
+
 ### Requirement: Output directory template
 `output_dir` SHALL support only optional `{utc_datetime}` and `{phase}` placeholders. Expansion SHALL use one filesystem-safe UTC timestamp with fractional seconds per request, without recursive substitution. Unknown placeholders SHALL fail. The expanded directory SHALL be outside repository/snapshot storage and created exclusively before execution; existing destinations SHALL NOT be reused.
 

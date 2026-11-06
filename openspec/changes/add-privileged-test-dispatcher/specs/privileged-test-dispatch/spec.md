@@ -261,6 +261,433 @@ The dispatcher SHALL run as a stdio MCP server invoked as `footman --config <con
 - **WHEN** an operator starts the dispatcher with a valid configuration path
 - **THEN** it serves `run_privileged_command` over stdio using that fixed configuration
 
+### Requirement: Owned child stdin foundation
+`OwnedProcess` SHALL provide explicit opt-in child stdin with coordinator-mediated binary writes and EOF, bounded buffering and deadline/cancellation-aware progress. The coordinator SHALL retain sole lifecycle authority over the pipe. This generic process foundation SHALL NOT depend on MCP or contain SDK/transport policy. The stdin foundation SHALL have independent tests, lifecycle documentation and ownership verification without requiring MCP.
+
+#### Scenario: Opt-in writable child stdin
+- **WHEN** a caller launches a child with writable stdin explicitly enabled
+- **THEN** the parent write endpoint has exactly one prepared foundation owner (OwnedStream for Popen.stdin, or OwnedDescriptor for a manually acquired raw fd with only closefd=False wrappers), coordinator-mediated binary writes are bounded and deadline/cancellation-aware, explicit EOF is supported, and stdout/stderr retain their existing single collection and ownership
+
+#### Scenario: Dedicated opt-in stdin API
+- **WHEN** a caller requests writable stdin
+- **THEN** it uses the dedicated launch stdin_mode keyword with "pipe", defaulting to "closed" otherwise; write_stdin accepts bytes and a finite positive timeout_seconds, close_stdin coordinates EOF, and no raw stream/fd or popen_kwargs stdin override is permitted
+
+#### Scenario: Write completion and partial progress
+- **WHEN** write_stdin succeeds
+- **THEN** it returns len(data), counting bytes successfully written to the OS pipe, not child consumption; short OS writes are completed internally against one deadline and success never returns a partial count
+- **WHEN** an attempted write times out, encounters EPIPE or otherwise fails ordinarily
+- **THEN** StdinWriteError exposes accepted_bytes for the exact OS-written prefix, the original cause and timed_out; the channel rejects further writes without automatic payload/suffix replay, even if no bytes were accepted
+- **WHEN** a process-control interruption occurs during writing
+- **THEN** its original identity/authority is preserved without wrapping or mutation, its exact OS-accepted progress is available through the calling thread's OwnedProcess.stdin_write_observation(), and the channel rejects further writes
+
+#### Scenario: Public interruption progress observation
+- **WHEN** the caller reads OwnedProcess.stdin_write_observation()
+- **THEN** it receives None before any attempted write on that owner/thread, otherwise the immutable StdinWriteObservation for that calling thread's last finished attempted write, with requested_bytes: int, accepted_bytes: int, outcome: completed/failed/interrupted, error: BaseException or None and timed_out: bool; values are not cumulative or a global last-call slot
+- **WHEN** a write returns or raises, including KeyboardInterrupt after partial progress
+- **THEN** the observation is recorded first, retains exact progress and original failure/interruption identity, successful writes have full acceptance/error=None/timed_out=False, invalid argument/state rejections leave the prior record unchanged, and concurrent callers, repeated reads and EOF/cleanup cannot mutate handed-out snapshots or replace another thread's record; final-cleanup store retirement follows the separate lifetime contract
+
+#### Scenario: Observation thread identity and retention
+- **WHEN** observations are keyed, published, read or cleaned up
+- **THEN** weak actual Thread-object identity is used instead of numeric thread ids; terminated-thread records are pruned even when Thread objects remain externally referenced, and at most one record per live contributing thread is retained rather than an ever-seen-thread history
+- **WHEN** a new thread has the same numeric ident as a terminated writer
+- **THEN** it first observes None, whereas reuse of the same live worker legitimately observes its own previous call; deterministic identity-reuse controls and real thread-lifetime tests verify the distinction
+
+#### Scenario: Observation lifecycle reads and retirement
+- **WHEN** stdin_write_observation is read in closed mode
+- **THEN** it returns None without StdinStateError
+- **WHEN** reap or shutdown initiation is observed, or cleanup is pending/read through cleanup_status
+- **THEN** the calling thread's last record or None remains readable without new resources or observation retirement
+- **WHEN** explicit shutdown or wait_cleanup completes final cleanup after write/EOF calls quiesce and publish
+- **THEN** the owner-side store is cleared and permanently retired, further reads return None without resurrection, and previously returned immutable snapshots and independent lifecycle failures remain valid
+
+#### Scenario: Progress accounting is not a duplicate ledger
+- **WHEN** the public lifecycle contract describes StdinWriteObservation
+- **THEN** docs/process-lifecycle.md explicitly permits it in the immutability/exclusions paragraph for OS-acceptance accounting, not as a second lifecycle ledger, callback store or exception-attached snapshot
+- **WHEN** one ordinary write failure is exposed through its wrapper, progress record and lifecycle ledger
+- **THEN** wrapper.cause is observation.error is matching_ledger_failure.error, retaining the same original exception without copying/mutation and keeping independent cleanup failures separate
+
+#### Scenario: Public stdin exception contract
+- **WHEN** stdin APIs expose ordinary write errors
+- **THEN** StdinWriteError directly subclasses Exception and declares read-only accepted_bytes: int, cause: Exception and timed_out: bool without modifying the cause; cause is distinct from __cause__ and wrapper raises explicitly chain from it
+- **WHEN** public exports and failure classification are checked
+- **THEN** StdinWriteObservation, StdinWriteError, StdinStateError (RuntimeError) and StdinCloseTimeout (TimeoutError) are exported through footman.process.__all__ alongside all existing names; expected stdin failures are explicitly ORDINARY, unexpected failures retain their classification and process-control exceptions remain unwrapped interruptions
+
+#### Scenario: Direct bounded writes
+- **WHEN** callers concurrently write stdin
+- **THEN** the coordinator serializes direct nonblocking writes on caller threads, includes gate/readiness waiting in each timeout, holds no general lifecycle lock across waiting/I/O, adds no writer worker or pending-payload queue, and limits each OS write to a 65536-byte view without copying a backlog
+
+#### Scenario: Write and EOF call states
+- **WHEN** either operation is called in default closed mode, or write is called after EOF request, channel failure, shutdown initiation or observed reap
+- **THEN** StdinStateError rejects the call without resource acquisition, lazy pipe creation or DEVNULL writing; empty writes are subject to the same state check and return 0 only while writable
+- **WHEN** close_stdin is called with a finite positive timeout_seconds
+- **THEN** it marks EOF requested, prevents new writes and waits only within that bound for active write serialization and the sole close; successful completion returns None without claiming child consumption/exit, and repeated successful close returns None without another release
+- **WHEN** close waiting times out or an actual close fails
+- **THEN** StdinCloseTimeout or the retained close failure is observable, pending EOF keeps the same owner/continuation without closing beneath active work, and repeat close only observes pending/success/failure without renewed allowance or repeated close; shutdown/reap permits only observation of the existing EOF/release state
+
+#### Scenario: Validation boundaries
+- **WHEN** launch receives an unsupported or non-string stdin_mode, including a boolean
+- **THEN** it rejects it before acquisition, factory invocation or worker creation without leaving resources behind
+- **WHEN** write_stdin or close_stdin receives a nonnumeric, boolean, nonfinite or nonpositive timeout_seconds
+- **THEN** TypeError rejects invalid types including bool and ValueError rejects nonfinite/nonpositive numeric values before writing or acquiring additional resources without altering the existing process or its owners/state; non-bytes write data also raises TypeError
+
+#### Scenario: Endpoint handoff and observable EOF
+- **WHEN** stdin is acquired and handed to the child
+- **THEN** each caller-acquired endpoint has exactly one owner and partial setup releases every independent resource once; manual pipe creation, if used, accounts for both raw descriptors and releases the parent read endpoint after handoff or launch failure
+- **WHEN** close_stdin completes and a generic child reads until EOF
+- **THEN** the child observes EOF within the tested bound without a parent-owned duplicate write endpoint keeping the pipe open
+
+#### Scenario: Output-only stream identity and stdin failures
+- **WHEN** writable stdin is enabled
+- **THEN** ProcessStream remains exactly STDOUT/STDERR, stream_outcomes and chunk/end callbacks remain output-only and stdout/stderr retain one collection
+- **WHEN** stdin setup, write/EOF coordination or owner close fails
+- **THEN** FailureInfo retains the original exception and kind with stream=None and respectively SETUP, COORDINATION or RELEASE phase; release diagnostics identify owner stdin without changing the public FailureInfo shape
+- **WHEN** stdin close alone fails or follows an active operation/interruption
+- **THEN** cleanup_status/wait_cleanup retain the close failure even after settlement, preserve active failure/interruption precedence and stable repeated observations, and do not rely on the output-callback-only reporter for delivery
+
+#### Scenario: Missing or aliased stdin
+- **WHEN** pipe mode receives missing/None stdin, stdin identical to stdout/stderr, or partial child-end handoff failure
+- **THEN** setup fails closed without silent closed-stdin fallback, every acquired resource has one release authority, independent cleanup proceeds and aliases are not released twice
+- **WHEN** raw pipe descriptors are manually adopted
+- **THEN** same-fd double adoption is rejected while distinct descriptors for opposite pipe ends remain valid
+
+#### Scenario: Explicit EOF before shutdown
+- **WHEN** a caller needs graceful child exit driven by stdin EOF
+- **THEN** it explicitly calls close_stdin before shutdown, delivering EOF while the child may still run without waiting for reap; shutdown retains its StopPolicy behavior rather than implicitly providing a graceful stdin protocol, and subsequent cleanup does not repeat release
+
+#### Scenario: Closed stdin regression
+- **WHEN** Git/Docker helpers or a default `OwnedProcess.launch` are started
+- **THEN** stdin remains closed rather than inheriting an interactive stream or acquiring a writable pipe implicitly
+
+#### Scenario: Backpressure or peer closes stdin
+- **WHEN** the child stops reading or closes its input during a write
+- **THEN** writes do not block shutdown indefinitely, partial writes/broken pipes remain observable, and applicable independent cleanup preserves operation/interruption authority without duplicate release or renewed cleanup budgets
+
+#### Scenario: Concurrent EOF and cleanup
+- **WHEN** writes, explicit EOF, cancellation or repeated/concurrent cleanup overlap
+- **THEN** the coordinator serializes the handoff, does not close beneath active pipe work, attempts each independent release exactly once, reports sole-close failures, and retains the same owner/continuation for incomplete cleanup
+
+### Requirement: Owned test-client stdio transport
+Executable protocol verification SHALL use the real SDK `ClientSession` over a project-owned stdio transport backed by `OwnedProcess.launch` and validated stdin. The coordinator SHALL retain sole child/pipe lifecycle authority; SDK `stdio_client`, independent child control and in-memory-only substitutes SHALL NOT be used.
+
+#### Scenario: Test-only client transport boundary
+
+The following diagram illustrates the test-client stdio transport and its ownership/protocol boundaries. This is test infrastructure using the real Python MCP SDK, not a production client component required to use Footman; production clients use their own transports. It adds no public client interface:
+
+```mermaid
+flowchart TB
+    subgraph Client["Python MCP test-client process"]
+        SDK["Python MCP SDK: ClientSession<br/>MCP protocol, requests and responses"]
+        Queues["AnyIO message streams<br/>SessionMessage objects, not file descriptors"]
+        Adapter["Project-owned stdio adapter<br/>JSON ↔ bytes, framing, backpressure"]
+        Owner["OwnedProcess<br/>sole owner of child process and pipes"]
+
+        SDK <-->|"SDK messages"| Queues
+        Queues <--> Adapter
+        Adapter -->|"managed write / EOF / stream"| Owner
+    end
+
+    subgraph Server["Footman child Python process"]
+        MCP["Stdio MCP server<br/>run_privileged_command"]
+    end
+
+    Owner <-->|"stdin / stdout: JSON-RPC UTF-8 + LF"| MCP
+    MCP -->|"stderr: diagnostics only"| Owner
+```
+
+- **WHEN** the test client connects to the executable
+- **THEN** the components follow the diagram's ownership boundaries without making the test-client transport a production prerequisite
+
+#### Scenario: Isolated host test support
+- **WHEN** host acceptance copies test support into its external workspace
+- **THEN** it includes tests/mcp_transport.py and its declared transitive support closure alongside tests/__init__.py and tests/green_skip_policy.py, attributes all copied files through source/support identity checks, and uses the installed wheel's OwnedProcess without checkout imports or an alternate subprocess owner
+
+#### Scenario: Test transport consumes the pinned stdin contract
+- **WHEN** the test transport sends frames and requests EOF
+- **THEN** it launches stdin_mode="pipe", calls write_stdin(frame_bytes, timeout_seconds=remaining) and requires the full frame-length result, retains StdinWriteError.accepted_bytes/cause/timed_out without replay, and calls close_stdin(timeout_seconds=remaining), distinguishing confirmed EOF from pending/failure without redefining the foundation API
+
+#### Scenario: Test transport interruption observation
+- **WHEN** the write bridge receives a process-control interruption
+- **THEN** it reads stdin_write_observation() on the write's own calling thread and hands that immutable record to the async side before another write on that worker/owner or final-cleanup retirement, preserving exception identity and exact accepted-byte attribution without exception mutation or a cross-thread last-call lookup
+
+#### Scenario: Attributed server process
+- **WHEN** development or isolated-wheel tests launch the server
+- **THEN** they use the explicit absolute interpreter and tests/mcp_server_child.py bootstrap argv defined in the design, dispatching the public module in development or the exact installed venv console script for wheel/host verification in the same child, never a PATH-resolved ambient footman or another subprocess
+- **WHEN** the bootstrap validates service provenance before serving requests
+- **THEN** canonical Footman-package source paths and file digests, including required footman/startup/process/__main__ entries, match the intended checked checkout or installed wheel, installed-script identity is checked where applicable, explicit child environments exclude inherited import redirection, and missing/mismatched provenance fails without production API additions or stdout metadata; checking only parent imports is insufficient
+
+#### Scenario: Canonical lifecycle argv variants
+- **WHEN** ordinary direct development, isolated exact-wheel or real-host acceptance dispatching legs launch the service
+- **THEN** the canonical argv omits --lifecycle; the wheel form is `[venv_python, "-P", copied_tests_mcp_server_child, "--expected-origin", expected_manifest, "--entrypoint", absolute_venv_footman_script, "--", "--config", absolute_config]`
+- **WHEN** nested relocated acceptance launches the service
+- **THEN** it requires the wheel form with exactly `--lifecycle <absolute_lifecycle_input>` inserted immediately before --; omission, duplication, wrong placement, use in ordinary direct dispatching legs or forwarding to production fails exact-argv controls; Phase-9 bootstrap lifecycle contract tests explicitly require the lifecycle-enabled wheel variant, including non-dispatching validation/publication-fault launches using Phase-9-owned disposable wheel/install fixtures without future Phase-10 dependencies
+- **WHEN** the production entrypoint receives --lifecycle or another unknown option
+- **THEN** it rejects the option without dispatch or a public lifecycle capability; --lifecycle is the bootstrap's only lifecycle-specific option, not a production startup flag
+
+#### Scenario: Phase-9-owned isolated-wheel contracts
+- **WHEN** Phase 9 records RED and delivers its bootstrap/protocol contracts
+- **THEN** tests/mcp_wheel_support.py::build_and_install_contract_wheel owns a bare uv build from a recorded matching-input disposable repository root, successful output-path/independent SHA-256/input-stability binding, fresh external venv/noneditable exact-wheel install, archive-derived context="wheel" expectations and declared support copying, independently of future Phase-10 code
+- **WHEN** the registered Phase-9 suite runs
+- **THEN** real initialization/tool discovery is required in both development and isolated-wheel contexts, alongside both canonical wheel argv variants, lifecycle-validation/journal faults, installer-generated launcher semantics and all build/archive/install/copy lifecycle fault branches; missing prerequisites fail nonzero without skip/xfail
+- **WHEN** Phase 9 validates and later build paths are introduced
+- **THEN** its summary cites executed build/binding/install/archive/launcher/lifecycle and both-context protocol nodes; inert tests/wheel_attribution_cases.py supplies common attribution cases to Phase-9, Phase-10 and Phase-11 tests, preserving independent implementations and the same bare-build/output ownership contract without claiming the Phase-9 fixture establishes relocated-helper portability
+
+#### Scenario: Deterministic independent attribution cases
+- **WHEN** shared attribution cases exercise the three independent build paths
+- **THEN** inert case records prepare matching-input disposable repositories, pre-existing/artifact identities and explicit PATH-selected scripted uv status/stdout/stderr/artifact/input-mutation behavior, asserting exactly bare uv build and recording command/cwd/PATH/resolved-stub identity/status/full output or preflight not-attempted
+- **WHEN** a public surface is driven
+- **THEN** tests call Phase-9 build_and_install_contract_wheel(attribution_only=True), Phase-10 build_and_bind_wheel, or invoke the Phase-11 scripts/build-acceptance-wheel shell wrapper as an OwnedProcess subprocess with recorded bootstrap PYTHONPATH replacement, without production imports from tests/ or calls to private helper internals
+- **WHEN** the Phase-9 attribution-only branch succeeds or fails
+- **THEN** it shares the default real flow's attribution steps but returns or fails before any venv/dependency/install acquisition; all scripted artifacts/manifests remain attribution-only, never install inputs or substitutes for each leg's real-uv-built independently SHA-256-bound wheel
+- **WHEN** case observations are compared
+- **THEN** the driver normalizes accepted/rejected attribution, attempt/status/argv/cwd, selected path/digest, input identities and rejection category with public exception/exit/manifest observations, preserving complete outputs, underlying statuses and cleanup failures without requiring identical implementation classes
+- **WHEN** Phase-10 cases are introduced
+- **THEN** 10.2 authors/records their RED or explicit expected-path/digest/status negative controls before 10.4 closes them, without breaking production behavior, and 10.5 cites those nodes as first-owned Phase-10 coverage
+
+#### Scenario: Attribution-case per-leg input profiles
+- **WHEN** a shared scripted attribution case is prepared
+- **THEN** its inert record declares case_id, shared build/status/artifact/mutation expectations and explicit per-leg inventories; Phase-9/10 input trees contain exactly src/, pyproject.toml and README.md with dist state separately recorded, assert identity-only roots/.git are absent and emit no production manifest, without narrowing real build/install fixtures
+- **WHEN** the Phase-11 profile is prepared
+- **THEN** it includes common build bytes plus the complete src/, tests/, host_tests/, scripts/, pyproject.toml and uv.lock identity scope and required wrapper dependencies, a case-owned host_tests marker and a recorded resolvable synthetic Git HEAD assembled without staging; README.md is outside that six-root source identity scope but required in the separate build_input_identity, and relocation preserves revision and both content identities independently of absolute paths
+- **WHEN** drivers record and compare observations
+- **THEN** each validates its inventory and records scoped pre/post identity plus synthetic/candidate revision distinctions, comparing shared case_id/common bytes/outcomes and within-scope stable/changed relations rather than demanding equal digests across different profiles
+- **WHEN** required inputs, revision or wrapper dependencies are missing, extra or invalid
+- **THEN** verification reports a fixture/setup error rather than expected attribution rejection, and no driver silently supplies undeclared files to make a case pass
+
+#### Scenario: Wrapper-selected build and identity root
+- **WHEN** scripts/build-acceptance-wheel or scripts/run-host-acceptance is invoked
+- **THEN** its attributed repository root is its own physically resolved wrapper scripts/ parent, identical to the bootstrap PYTHONPATH root and independently derived/validated from the Python implementation location before managed acquisition; disagreement fails without caller-cwd or ambient-checkout fallback
+- **WHEN** the build helper executes or attributes output
+- **THEN** exactly bare uv build runs with cwd at that root, which also selects dist collision/output checks, Git revision and scoped pre/post identity; caller cwd is allowed to differ and is recorded but never selects inputs, and no public root option exists
+- **WHEN** the host runner compares source identity
+- **THEN** it independently derives revision/identity/source support from its own wrapper root, not its external installation/test workspace, and compares against the build manifest
+- **WHEN** scripted or disposable relocated cases invoke `<prepared_tree>/scripts/build-acceptance-wheel`
+- **THEN** wrapper location alone selects that prepared root, root/PYTHONPATH/build-cwd agreement and relocated identity are tested for both wrapper forms, and recorded candidate-checkout dist inventory/identity remains unchanged; ordinary operator builds may instead produce recorded dist artifacts in their selected wrapper root under collision guards
+
+#### Scenario: Predictable build destinations and safe repeat builds
+- **WHEN** any of the three independent build paths prepares bare uv build
+- **THEN** it validates design §7's static footman/canonical N.N.N version/pinned hatchling/default pure-Python build profile and derives both exact sdist/wheel destinations before invoking uv (currently dist/footman-0.1.0.tar.gz and dist/footman-0.1.0-py3-none-any.whl), without prior-output selection, metadata subprocesses or dist scanning; unsupported or output-changing profiles/settings fail closed
+- **WHEN** either predicted destination already has any entry, including a directory or dangling symlink, or dist ancestry is unsafe
+- **THEN** uv is not invoked, no prior artifact is deleted/replaced, and diagnostics identify the resolved build root and exact conflicts and explicitly state no build/deletion/replacement occurred; prior invocation outputs are unowned by the current invocation regardless of matching digest
+- **WHEN** tests/wheel_attribution_cases.py's same-root double-invocation case exercises each public surface
+- **THEN** the first call succeeds and records both artifact paths/bytes/digests, the second refuses before uv with the required diagnostics, only one tool invocation occurs and both prior artifacts/unrelated entries remain unchanged; Phase-9 calls remain attribution-only and Phase-11 also verifies this pair using real uv in a disposable complete-profile root
+- **WHEN** an operator must rerun a host build
+- **THEN** instructions require either removal of only explicitly named conflicting paths outside the helper after retaining evidence or invocation of another clean matching-input/revision root's wrapper, never broad helper/host-test cleanup, stale artifact reuse or changing caller cwd to choose the root
+- **WHEN** final build/rerun evidence is published
+- **THEN** it records resolved root, pre-existing dist inventory, validated predicted destinations, produced sdist/wheel paths and independent digests or conflicts/not-attempted status, plus the operator remedy if needed; the wheel manifest still binds only the exact successfully attributed wheel
+
+#### Scenario: README-bound build-input identity
+- **WHEN** any independent build path records its build observation or the production helper emits a controlled build manifest
+- **THEN** it requires a separate build_input_identity object with exactly schema_version=1 (integer, not bool), roots=["src/", "pyproject.toml", "README.md"] in that order and sha256 as 64 lowercase hexadecimal characters, using the deterministic relative-path/kind/executable-bit/bytes/link-target identity algorithm with no link traversal and recording its full scoped inventory; the six-root source identity remains unchanged
+- **WHEN** build inputs are validated and uv completes
+- **THEN** README.md is a required regular non-symlink file referenced by the supported static readme profile, both pre/post build-input identities must match before successful binding/manifest publication, and missing/unsafe input or README-only changes fail closed with retained artifact/status/cleanup evidence
+- **WHEN** the host runner consumes a build manifest
+- **THEN** it rejects missing/malformed build_input_identity, independently derives and compares both identities from its own resolved wrapper root before installation/acceptance, and rechecks both after support copying and at completion; matching Git revision or six-root identity cannot substitute for README-inclusive identity
+- **WHEN** regression and final validation execute
+- **THEN** shared cases exercise README-only build mutation across all three public surfaces, Phase-11 Docker-free tests additionally reject README-only changes after build and during runner execution while six-root identity remains unchanged, and relocated/cross-environment evidence compares and records both identities separately from wheel digest
+
+#### Scenario: Lifecycle primitive verification precedes integration
+- **WHEN** Phase 9 audits and validates its bootstrap lifecycle delivery
+- **THEN** its registered suite executes and its VALIDATE summary cites concrete node IDs/results for both argv variants, input validation before acquisition versus inside the acquired child, journal sole-owner acquisition/write/readback/close/interruption/repeat/independent cleanup, token/PID/incarnation/deadline publication before dispatch, EOF versus lifetime orderly exit with original budgets/no competing reader, and production lifecycle/unknown-option rejection
+- **WHEN** lifecycle validation or journal publication fails
+- **THEN** rejection before journal acquisition leaves no journal, while publication/close/interruption faults may leave partial records; bootstrap setup failure preserves actual exit/failure/resource observations without attestation or service dispatch
+- **WHEN** Phase 10 publishes its acceptance coverage map
+- **THEN** it cites Phase-9 VALIDATE nodes for bootstrap primitives and separately records its own first-owned relocated orchestration/helper-loss/build integration nodes, never claiming those integration tests were already executed in Phase 9
+
+#### Scenario: Lifecycle schema validation
+- **WHEN** a lifecycle input is prepared
+- **THEN** it is UTF-8 JSON with exactly schema_version=1 (integer, not bool), absolute nonempty scratch_root/journal_path strings, a fresh 32-lowercase-hex instance_token, and finite positive non-boolean service_deadline_monotonic/settlement_allowance_seconds numbers bound to the original launch and outer envelope
+- **WHEN** that input is validated
+- **THEN** duplicate keys, missing/unknown fields, invalid types/encoding, nonfinite/expired/extended budgets, mismatched token/root, scratch escapes, symlinks and existing-file aliases fail; the fresh journal destination is capability-contained and distinct from lifecycle/request inputs, expected-origin, evidence and config paths
+- **WHEN** helper validation fails
+- **THEN** no service child is acquired; the bootstrap independently validates before journal acquisition, attestation or dispatch, and failure there is reported as an already acquired child with no dispatch
+- **WHEN** lifecycle input/journal acquisition, read, close, interruption, publication, repeat observation or independent cleanup fails
+- **THEN** sole owners preserve operation/interruption precedence, attempt independent releases exactly once and never fabricate dispatch, lifecycle settlement or verified evidence
+
+#### Scenario: Expected-origin manifest authority
+- **WHEN** a fixture or acceptance runner generates expected-origin inputs
+- **THEN** it writes schema_version=1 JSON with context, wheel_sha256 (null only for checkout development), required unique module name/source_path/expected_path/sha256 entries covering all Footman-package Python source modules, including footman, footman.startup, footman.process and footman.__main__ and nullable entrypoint script_path/target/observed_script_sha256, using checked checkout src/footman bytes for development or the digest-verified bound wheel archive for installed-wheel checks
+- **WHEN** installed-wheel module expectations are derived
+- **THEN** module digests come directly from validated archive members and paths map to the intended fresh-venv install scheme, never self-matching site-packages/installed RECORD; generated script semantics derive from wheel entry_points while observed script digest is separate installer-output attribution
+- **WHEN** stale/copied installation, malformed expectations or wheel/build-binding mismatch is injected
+- **THEN** executable negative controls fail independently even if the installation is self-consistent, without accepting child self-report as its own expected authority
+- **WHEN** generated expectations are retained or cleaned
+- **THEN** recorded external scratch/evidence paths remain outside identity roots, use sole owners and recorded-resource reconciliation, and are identified as generated provenance inputs
+
+#### Scenario: Child-side full package verification
+- **WHEN** the bootstrap verifies package provenance
+- **THEN** the resolved package spec/root matches the independently expected installation root, every regular *.py beneath it including filesystem/ is enumerated and hashed without submodule import, and paths/module mappings/digests match manifest entries one-to-one before service dispatch
+- **WHEN** a source is missing, extra or stale, the expected root is wrong, or a root/directory/Python source entry is a symlink or unsupported special node
+- **THEN** verification fails closed without following links; controls include container.py and supervision.py mutations preserving former pinned modules, and missing/extra sources
+- **WHEN** provenance is retained
+- **THEN** the complete verified source set is recorded externally with bounded stderr count/content-digest attribution, distinguishing source verification from unverified bytecode and third-party dependencies
+
+#### Scenario: Parent-owned complete provenance evidence
+- **WHEN** the child attests its verified package set
+- **THEN** its single stderr collection supplies one complete schema-1 source_count/set_sha256 attestation using the design's canonical sorted relative-path/lowercase-source-digest array serialization, not a partial or silently truncated set
+- **WHEN** the service's immediate parent (direct fixture/runner or relocated-client helper) retains the set
+- **THEN** it chooses a recorded absolute external scratch/evidence path, matches the independently expected set/count/digest against that child's attestation after clean-EOF/no-duplicate final confirmation, exclusively writes complete schema-1 set/evidence through sole owners and reads back/recomputes the persisted values before claiming successful retention
+- **WHEN** attestation is missing/duplicate/malformed/truncated/mismatched or evidence is missing/truncated/unwritable/inconsistent
+- **THEN** verification fails closed with recorded failure and independent once-only cleanup, never presenting unconfirmed expectations or partial evidence as a child-verified full set
+- **WHEN** the child exits before complete attestation
+- **THEN** only unconfirmed expectations/failure diagnostics may be retained
+- **WHEN** it exits after complete matching attestation and clean stderr EOF with no parser failure/duplicate
+- **THEN** verified provenance can be retained while process/protocol status is evaluated separately; provenance alone never establishes successful service delivery
+
+#### Scenario: Borrowed-stderr attestation emission
+- **WHEN** the test bootstrap has verified the full package
+- **THEN** it builds the bounded canonical record and performs one full-record write with byte-count check followed by flush on borrowed inherited stderr before dispatching service/SDK logging tasks, without a new owner or inherited-handle close
+- **WHEN** emission short-writes, write/flush fails or is interrupted
+- **THEN** bootstrap delivery fails without retry/re-emission or service dispatch, preserving interruption authority and leaving partial output to fail closed under parent parsing
+
+#### Scenario: Durable test namespace and diagnostic collision guard
+- **WHEN** generated diagnostics, logging, multiline exceptions or startup/configuration/helper-failure reports are emitted
+- **THEN** no physical stderr line begins FOOTMAN_PROVENANCE_ except the legitimate test-bootstrap record; original retained raw helper/command/startup bytes remain unchanged and are not blindly forwarded into that namespace
+- **WHEN** the rule is documented and audited
+- **THEN** docs/testing.md's Test-bootstrap stderr provenance section records the reservation/emission/diagnostic boundary as test infrastructure, linked from the lifecycle inherited-stdio category with link/anchor checks, and real-server stderr tests prove collision prevention
+
+#### Scenario: Ordinary fixture versus synthetic parser controls
+- **WHEN** tests/mcp_protocol_child.py runs ordinary fixture modes
+- **THEN** it emits no reserved-prefix record and produces no verified provenance set/evidence claim
+- **WHEN** parser faults require reserved or malformed records
+- **THEN** explicitly synthetic byte/stream controls in transport tests supply them without impersonating a service attestation or authorizing verified evidence
+
+#### Scenario: Attestation framing and bounded parsing
+- **WHEN** full package verification succeeds
+- **THEN** the bootstrap emits one line with ASCII FOOTMAN_PROVENANCE_V1 followed by one space, canonical schema_version/source_count/set_sha256 JSON and exactly LF, at most 512 source bytes including prefix/LF, without CR/BOM/embedded literal newline/trailing bytes; failed verification emits no attestation and its nonzero exit/diagnostic/absence are observed separately
+- **WHEN** stderr is collected
+- **THEN** an incremental full-stream parser reserves line-start FOOTMAN_PROVENANCE_ records, handles arbitrary chunk boundaries with at most 512 candidate bytes plus fixed state, drains/discards arbitrarily long ordinary diagnostics and never parses excerpts/capture tails instead
+- **WHEN** a second reserved line, unsupported version, bad canonical JSON/fields/encoding, overflow or unterminated candidate appears
+- **THEN** parser failure remains explicit; EOF distinguishes absence from an unterminated candidate, while READ_FAILED/ABORTED/pending means incomplete verification even if a valid line was already seen
+
+#### Scenario: Provisional startup and final confirmation
+- **WHEN** one complete matching attestation line arrives while the service runs
+- **THEN** provisional acceptance permits MCP initialization without waiting for EOF, while stderr continues to drain and detect later duplicates
+- **WHEN** final provenance is confirmed and parent evidence written
+- **THEN** exactly one matching record, no parser failure and terminal stderr EOF are required; incomplete collection or pending terminal state cannot certify absence of later duplicates
+
+#### Scenario: Registered owned-stdin suite
+- **WHEN** owned stdin tests are introduced
+- **THEN** tests/test_process_stdin.py and the existing lifecycle, orthogonal-results and single-collection modules are registered before RED with the exact four-module parallel command defined by the design, checked against documented-command rules and included in unscoped collection
+- **WHEN** stdin delivery is audited and validated
+- **THEN** the registered command and concrete executed new/regression node IDs substantiate completion without weakening existing pins
+
+#### Scenario: Registered transport and server test suites
+- **WHEN** test-client transport/server coverage is introduced
+- **THEN** tests/test_mcp_transport.py and tests/test_mcp_server.py are registered before RED with the exact parallel suite command defined by the design, checked against repository documented-command rules and included in unscoped collection
+- **WHEN** delivery is audited and validated
+- **THEN** the registered commands and concrete executed node IDs substantiate transport, bootstrap/provenance and actual server coverage rather than unnamed protocol-suite claims
+
+#### Scenario: Dispatched entry source verification
+- **WHEN** the bootstrap verifies the module entry point
+- **THEN** it resolves and hashes footman.__main__ without importing/executing its top level before verification; stale/mismatched __main__.py fails before serving requests, and the manifest accepts all required Footman-package modules without claiming SDK/dependency/stdlib byte verification
+
+#### Scenario: Independent relocated-wheel portability
+- **WHEN** portability is verified outside the checkout
+- **THEN** the fixture attributes the exact wheel path/SHA-256 to its successful documented build, installs it non-editably into a fresh external venv with pinned dependencies, copies only declared support, instantiates relocated config paths and launches the design's explicit wheel-context python/-P/bootstrap/installed-script argv with neutral cwd and cleaned environment
+- **WHEN** expected origins and results are recorded for this leg
+- **THEN** context=wheel expectations derive from that build-bound archive including __main__/Footman package, same-child and generated-launcher checks pass independently of checkout integration or future host-runner tooling, stale/unbound wheel and checkout-path leakage controls fail, and recorded resources are reconciled without claiming real-Docker acceptance
+
+#### Scenario: Relocated client and stub import authority
+- **WHEN** relocated wheel acceptance executes SDK traffic
+- **THEN** checkout pytest only orchestrates a fresh-venv tests/mcp_relocated_client.py process, whose copied transport imports the installed wheel's process foundation and launches the verified service; client/helper/service origins are recorded separately from the development orchestrator
+- **WHEN** copied test support is imported
+- **THEN** only client/stub loaders may insert the explicitly validated recorded copy root containing the declared tests package without footman/stdlib shadows, with tests/support and wheel Footman origin checks; service bootstrap never inserts that root and PYTHONPATH remains omitted
+- **WHEN** the relocated Docker CLI stub runs
+- **THEN** a recorded docker wrapper delegates literally to fresh-venv Python -P and copied tests/relocated_docker_child.py, tests/docker_cli_stub.py and tests/dispatcher_harness.py, not the checkout-injecting wrapper; copied support/interpreter/foundation origins and negative checkout/shadow controls are verified separately from service provenance and real host Docker proof
+
+#### Scenario: Nested relocated evidence and result channels
+- **WHEN** the orchestrator launches the fresh-venv client helper
+- **THEN** its schema-1 request manifest supplies explicit recorded expected-origin input, helper evidence/scratch/support/config/installed-script/docker-wrapper/neutral-cwd and separate service lifecycle input/journal paths, calls and bounds, while the service receives neither evidence path nor request manifest
+- **WHEN** service provenance is parsed and retained
+- **THEN** the helper alone invokes stream() once on the service OwnedProcess, collecting both STDOUT and STDERR with separate data and terminal outcomes, and owns its reserved attestation parser and exclusive evidence write/release/readback after final confirmation; the orchestrator invokes stream() once on the helper OwnedProcess, separately accounts for STDOUT/STDERR outcomes and consumes bounded ordinary JSON results, records evidence status/path and reconciles resources after helper settlement
+- **WHEN** helper results or diagnostics are emitted
+- **THEN** stdout has at most one 65536-byte JSON result record carrying parsed fields/statuses/path attribution, stderr is diagnostic-only, no physical reserved-prefix line is forwarded, and neither channel is parsed as service attestation; malformed/missing/partial/oversized results and helper/writer failures are explicit unsuccessful observations
+- **WHEN** the helper launches the service
+- **THEN** its explicitly constructed environment includes the recorded Docker-wrapper directory on PATH, omits import-redirection variables and uses the pinned -P argv/neutral cwd without leaking the helper's support-path insertion
+
+#### Scenario: Helper loss and service reconciliation
+- **WHEN** relocated service launch is attempted
+- **THEN** the helper records intent and the test bootstrap publishes a separate lifecycle journal before dispatch containing instance token, PID/process-incarnation identity, start status and original deadlines; malformed/partial/missing publication cannot authorize dispatch or prove no child was acquired
+- **WHEN** the annotated relocated configuration is instantiated
+- **THEN** action timeout/grace are bounded to 10/2 seconds, separately from a test-bootstrap absolute service lifetime of 60 seconds from the launch attempt with a pre-reserved 5-second settlement allowance, all within the outer envelope and never renewed
+- **WHEN** the helper is interrupted while alive
+- **THEN** its sole OwnedProcess owner attempts settlement with the same continuation/budget and retains the primary failure and incomplete cleanup
+- **WHEN** the helper dies or is forcibly stopped
+- **THEN** loss of its sole stdin writer drives service EOF, accepted work settles under existing bounds and the independent bootstrap lifetime also requests orderly exit without a competing reader or abandonment of still-budgeted work
+- **WHEN** the orchestrator reconciles that loss
+- **THEN** it must establish service-incarnation absence through a tested read-only observer and reconcile stub descendants/resources separately, without independently signalling/reaping/adopting the service; unknown identity, surviving work, ambiguous observation or unsettled resources remains unsuccessful/incomplete, preserves diagnostic scratch and blocks acceptance
+- **WHEN** lifecycle tests force loss before/after launch and journal/provenance publication or during idle/accepted work
+- **THEN** passing cases establish actual bounded exit and reconciliation, unavailable reap/exit status is not fabricated, and injected non-exit/observer failures cannot pass
+
+#### Scenario: Invalid relocated request before launch
+- **WHEN** a request has missing/unknown fields, paths outside recorded fixture domains or invalid path/budget values
+- **THEN** it fails before the service launch factory is called and no service child is acquired
+
+#### Scenario: Client attribution timing
+- **WHEN** helper Footman imports are attributed against wheel-derived expectations
+- **THEN** the evidence names already-imported-module origin/digest checks and copied-support/shadow controls as post-import attribution, not pre-import verification, separately from the service bootstrap's pre-dispatch package checks, which also do not assert no previous Python imports executed
+
+#### Scenario: Reusable exact build attribution
+- **WHEN** the portability fixture builds and binds a wheel
+- **THEN** tests/acceptance_build_support.py::build_and_bind_wheel provides the independently callable argv/cwd/status/path/digest/input-identity observation, executes bare uv build from a matching-input disposable repository root without --out-dir and reconciles only its recorded produced artifacts
+- **WHEN** the host helper and test routine are compared
+- **THEN** both use that bare repository-root command and shared attribution cases, preserve unowned pre-existing outputs through collision guards and never select/delete unrelated stale dist entries; production code does not import tests support
+- **WHEN** no development-state mutation is asserted
+- **THEN** dispatcher behavior against disposable Git inputs is distinguished from independently attributed fixture/build outputs, not used to conceal fixture mutation of unowned checkout files
+
+#### Scenario: Registered pytest-integrated portability flow
+- **WHEN** integrated acceptance and portability tests are introduced
+- **THEN** their exact parallel tests/test_dispatch_acceptance.py command and prerequisites/fixture flow are registered in docs/testing.md before RED, checked against assert_documented_suite and included in unscoped development collection without exclusions
+- **WHEN** the portability module runs with loadfile distribution
+- **THEN** its module fixture performs one successful attributed build and one external venv/scratch setup per invocation on the file's single worker, helpers/resources are bounded and reconciled, missing tools or required index/network access fails nonzero without skips, and the installed venv does not recursively run this acceptance module
+- **WHEN** the later host build helper is delivered
+- **THEN** the independent development fixture remains covered and shared attribution test cases verify both paths' documented build/status/output binding and rejection of ambiguous/missing/stale output and changed inputs, without production imports of tests or replacing host helper execution with the fixture
+
+#### Scenario: Bootstrap script-directory isolation
+- **WHEN** a server bootstrap or development protocol fixture starts
+- **THEN** explicit interpreter argv includes -P before the absolute script, cwd is neutral and the explicit environment excludes inherited import redirection without restoring script-directory sys.path insertion
+- **WHEN** sentinels shadow footman/stdlib beside the bootstrap or in cwd, or inherited PATH/PYTHONPATH is poisoned
+- **THEN** the intended child origins remain verified without executing sentinels, falling back to ambient installations or treating -P as a replacement for environment cleaning
+
+#### Scenario: Development-only protocol peer
+- **WHEN** transport contracts are tested before server delivery
+- **THEN** tests/mcp_protocol_child.py provides controlled protocol/error/cancellation scenarios and is launched only by OwnedProcess with explicit interpreter/script argv and the pinned stdin API, without replacing actual server discovery/response/disconnect tests
+- **WHEN** isolated host support is copied
+- **THEN** tests/mcp_server_child.py and its dependencies are included with the transport, the development-only protocol peer is excluded and not transitively required, and all remain covered by their applicable tests/ source identity and static inventory contracts
+
+#### Scenario: SDK and adapter responsibility boundary
+- **WHEN** the test client integrates with the service
+- **THEN** the SDK supplies client-session protocol semantics and the adapter supplies transport integration, not a replacement full MCP client or new public client application
+
+#### Scenario: Real client communicates over child stdio
+- **WHEN** the SDK ClientSession initializes, discovers tools and calls the service over stdio
+- **THEN** the adapter exchanges serialized messages through the executable's actual stdio using the managed stdin API and one stdout/stderr collection, with bounded framing/queues and diagnostic-only stderr, without handing process descriptors or release authority to the SDK
+
+#### Scenario: Real client disconnects after acceptance
+- **WHEN** a real SDK client disconnects after the service accepts a run over stdio
+- **THEN** transport teardown does not abandon or retry the accepted run, the server supervises it to a retained outcome, and exactly one container launch is attributable to that accepted request
+
+#### Scenario: Disconnect does not prematurely signal accepted work
+- **WHEN** the test client disconnects during an accepted run that exceeds the foundation's default grace but fits the configured execution/cleanup bounds
+- **THEN** the transport explicitly delivers EOF before foundation shutdown, continues the single output collection and waits for retained run outcomes and normal server exit without early StopPolicy signals within a pre-established transport envelope
+- **WHEN** that envelope expires
+- **THEN** failure/unresolved state is explicit without renewed budgets or treating EOF alone as proof of successful work or settled cleanup
+
+### Requirement: Server inherited-stream ownership
+The server SHALL borrow runtime-owned inherited stdin/stdout/stderr without independently releasing or re-adopting them. SDK server stdio transport SHALL be used only with explicit borrowed stdin/stdout facades, not its default fd-owning wrappers. Stdout SHALL contain only MCP protocol messages; diagnostics SHALL use stderr or retained files.
+
+#### Scenario: Durable inherited-stream contract
+- **WHEN** server inherited-stream borrowing is documented and audited
+- **THEN** docs/process-lifecycle.md records runtime ownership, borrowed sys.stdin/stdout/stderr and buffers, no OwnedStream/OwnedDescriptor re-adoption or wrapper release authority, permitted SDK facades and scoped adapter cleanup
+
+#### Scenario: SDK server transport setup and cleanup
+- **WHEN** the server configures the SDK stdio_server transport
+- **THEN** both async UTF-8 text facades are explicitly supplied over borrowed binary buffers without acquiring fd-owning wrappers; setup failure, interruption and repeated cleanup do not close inherited handles, duplicate release authority or rely on garbage collection, and adapter-created tasks/memory streams receive scoped cleanup
+
+#### Scenario: Protocol and diagnostic separation
+- **WHEN** the service initializes, handles requests or reports failures
+- **THEN** stdout contains only UTF-8 newline-delimited JSON-RPC messages without banners/debug prints, logging and ordinary diagnostics go to stderr or retained files, and framing does not depend on the process locale
+
 ### Requirement: MCP result summary
 After each dispatched run, the MCP tool result SHALL report the outcome, the configured command's `return_code` when it was started, and absolute paths to each created `stdout.txt`, `stderr.txt`, `startup-stdout.txt`, `startup-stderr.txt` and `result.json`. `return_code` SHALL be null when no command exit code is available. The result SHALL preserve outcome separately so dispatch, timeout, cleanup and output failures remain distinguishable.
 

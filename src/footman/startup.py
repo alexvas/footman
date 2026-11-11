@@ -25,6 +25,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def serve(application: ConfiguredApplication) -> int:
-    """Protocol adapter is delivered in Phase 8; never dispatch from the CLI."""
+    """Protocol adapter is pending; never dispatch directly from the CLI."""
     print("MCP server is not implemented yet; no command was executed", file=sys.stderr)
     return 1

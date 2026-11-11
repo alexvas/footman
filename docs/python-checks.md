@@ -126,28 +126,33 @@ build metadata change.
 
 ### Parallel test running
 
-The mandated suite command distributes **whole files** across workers:
+The mandated suite command uses **work stealing** across eight workers:
 
 ```sh
-.venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests -n 8 --dist worksteal --tb=short -q
 ```
 
 Document the exact mandated full-suite command above once in each testing
 guide or README. Additional phase-suite commands may select narrower test
 paths for RED/regression recording, but do not replace G. Every fenced pytest
 suite example must use `-n <N>` (an integer from 1 through 1024) and
-`--dist loadfile`, without disabling xdist or overriding the worker count with
+`--dist worksteal`, without disabling xdist or overriding the worker count with
 another option. Bare serial suite commands and fence-label bypasses are not
 accepted; intentionally serial policy probes belong in test code, not as
 verification-suite examples.
 
-`--dist loadfile` keeps every test of one module on one worker, so module-level
-fixtures, module-scoped clocks and import-time state are never shared across
-processes. Workers are separate interpreters: `tests/conftest.py` and
-`tests/green_skip_policy.py` still run in each worker, and the controller
-observes every report, so a skip, xfail or xpass produced in a worker blocks the
-session exactly as in a serial run. `tests/test_green_skip_policy.py` proves
-this by running each probe under both the serial and the parallel invocation.
+`--dist worksteal` redistributes pending tests from busier workers instead of
+pinning whole files to one worker. Tests in a module may run in different
+interpreters, and module/session fixtures can initialize in multiple workers.
+Do not rely on file-wide execution order, mutable module state shared between
+tests, or globally unique session fixtures. Module-scoped clocks are local to
+one worker; tests must establish their own timing assumptions and isolate
+mutable resources. `tests/conftest.py` and `tests/green_skip_policy.py` run in
+each worker, and the controller observes every report, so a skip, xfail or xpass
+produced in a worker blocks the session exactly as in a serial run.
+`tests/test_green_skip_policy.py` proves this under both serial and worksteal
+invocations. See the [historical adoption record](testing-worksteal.md) for the
+1000-run stability experiment and the deferred I/O investigation.
 
 `pytest-xdist` is a required development tool, not an optional accelerator: if
 it is missing, a parallel invocation fails at argument parsing instead of
@@ -162,6 +167,14 @@ check runs:
 GREEN_CHECKS_WORKERS=4 scripts/check-green
 ```
 
+When validation also requires specialised phase suites, use the
+[working schedule in the testing guide](testing.md#working-schedule-gate-plus-specialised-suites):
+on machines with at least 32 available logical CPUs (respecting affinity and CPU
+quotas), the gate's eight workers run alongside a separate eight-worker budget
+for the exact registered specialised commands. Below that capacity, or when it
+cannot be established, run gate then specialised commands sequentially. Neither
+mode narrows this gate or replaces any required command, status or cleanup check.
+
 ### Environmental prerequisites instead of skips
 
 Some contracts are only meaningful for an unprivileged user (the unreadable
@@ -170,13 +183,13 @@ Some contracts are only meaningful for an unprivileged user (the unreadable
 virtual environment. Those are recorded as prerequisites: the test fails with
 an actionable message instead of skipping, because this repository has no
 approved skip exceptions. The complete `tests/` development gate is Docker-free:
-phases 1–9 use real disposable Git repositories and a controlled Docker CLI stub,
+phases 1–10 use real disposable Git repositories and a controlled Docker CLI stub,
 not Docker access or npm. Real MCP clients are required when their suites arrive.
-Phase 10 adds separately discovered `host_tests/` and mandatory real-Docker host
+Phase 11 adds separately discovered `host_tests/` and mandatory real-Docker host
 acceptance against an exact installed wheel and an operator-prepared image;
 development success cannot replace that gate. Missing host prerequisites fail
 host acceptance rather than skipping. This boundary is currently documentation
-only: retain the three source roots and `src/`-only ty scope until phase 10
+only: retain the three source roots and `src/`-only ty scope until phase 11
 creates the host package and updates the inventories together.
 
 ### Capturing complete gate output

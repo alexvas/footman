@@ -12,10 +12,10 @@ import pytest
 
 from footman.container import InfrastructureOperation
 from footman.process import ProcessStream, StreamOutcome
+from tests.dispatch_support import removal
 from tests.dispatcher_harness import GitFixture, read_bytes
+from tests.launcher_case_support import ID, IMAGE, source, steps
 from tests.launcher_support import DockerSequence
-from tests.test_dispatch_lifecycle import removal
-from tests.test_launcher_execution import ID, IMAGE, source, steps
 from tests.test_output_reservation import FILES, config
 
 __all__ = ["config", "source"]

@@ -13,7 +13,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-PARALLEL_ARGS = ("-p", "xdist", "-n", "2", "--dist", "loadfile")
+PARALLEL_ARGS = ("-p", "xdist", "-n", "2", "--dist", "worksteal")
 
 
 @pytest.mark.parametrize(

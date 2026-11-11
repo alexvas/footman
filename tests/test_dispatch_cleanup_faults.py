@@ -18,9 +18,9 @@ from footman.process import (
     StopContext,
     StreamOutcome,
 )
+from tests.dispatch_support import api, removal
 from tests.dispatcher_harness import read_bytes, write_bytes
-from tests.test_dispatch_lifecycle import api, removal
-from tests.test_launcher_execution import ID, source
+from tests.launcher_case_support import ID, source
 
 __all__ = ["source"]
 
@@ -242,7 +242,7 @@ def test_supervisor_cleanup_observation_retains_local_failures(source):
         error, FailureKind.ORDINARY, FailurePhase.RELEASE, ProcessStream.STDOUT
     )
     from footman.process import ActionResult
-    from tests.test_launcher_execution import config
+    from tests.launcher_case_support import config
 
     run = module.RunSupervisor(config(), source)
     run.execution = SimpleNamespace(cleanup_status=(LifecycleResult(True, (info,)),))

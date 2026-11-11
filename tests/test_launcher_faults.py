@@ -13,7 +13,7 @@ from footman.process import (
     ProcessStream,
     StreamOutcome,
 )
-from tests.test_launcher_execution import ID, IMAGE, api, config
+from tests.launcher_case_support import ID, IMAGE, api, config
 
 
 class PreparedOwner:

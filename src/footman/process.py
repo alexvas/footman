@@ -7,6 +7,7 @@ release outcomes are published. No domain policy or external-reader adoption.
 
 from __future__ import annotations
 
+import io
 import logging
 import math
 import os
@@ -15,9 +16,10 @@ import select
 import subprocess
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Callable, Protocol, Self
+from typing import Any, Callable, Literal, Protocol, Self
 
 from footman.filesystem.cleanup import CleanupFailures
 from footman.filesystem.streams import OwnedStream, _bind_prepared, _prepare_stream
@@ -37,6 +39,59 @@ def _make_continuation(action: Callable[[], None]) -> threading.Thread:
 
 def _policy_pause(seconds: float) -> None:
     time.sleep(seconds)
+
+
+def _stdin_thread() -> threading.Thread:
+    return threading.current_thread()
+
+
+def _stdin_timeout(seconds: float) -> float:
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
+        raise TypeError("timeout_seconds must be numeric, not boolean")
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("timeout_seconds must be finite and positive")
+    return float(seconds)
+
+
+class StdinStateError(RuntimeError):
+    """The managed stdin channel is not writable in this lifecycle state."""
+
+
+class StdinCloseTimeout(TimeoutError):
+    """EOF remains requested under the original deadline and sole owner."""
+
+
+class StdinWriteError(Exception):
+    """An ordinary write attempt failed after an exact OS-accepted prefix."""
+
+    def __init__(
+        self, *, accepted_bytes: int, cause: Exception, timed_out: bool
+    ) -> None:
+        super().__init__("managed stdin write failed")
+        self._accepted_bytes = accepted_bytes
+        self._cause = cause
+        self._timed_out = timed_out
+
+    @property
+    def accepted_bytes(self) -> int:
+        return self._accepted_bytes
+
+    @property
+    def cause(self) -> Exception:
+        return self._cause
+
+    @property
+    def timed_out(self) -> bool:
+        return self._timed_out
+
+
+@dataclass(frozen=True)
+class StdinWriteObservation:
+    requested_bytes: int
+    accepted_bytes: int
+    outcome: Literal["completed", "failed", "interrupted"]
+    error: BaseException | None
+    timed_out: bool
 
 
 class ProcessStream(Enum):
@@ -434,6 +489,21 @@ class OwnedProcess:
     _continuation: threading.Thread
     _idle_stop: bool
     _duplicate_pipe: bool
+    _stdin_mode: str
+    _stdin_setup_complete: bool
+    _stdin_gate: Any
+    _stdin_calls: int
+    _stdin_preserve_errors: set[int]
+    _stdin_owner: OwnedStream | None
+    _stdin_candidate: Any
+    _retained_outputs: list[bool]
+    _stdin_fd: int | None
+    _stdin_eof_deadline: float | None
+    _stdin_close_error: BaseException | None
+    _stdin_close_timeout: StdinCloseTimeout | None
+    _stdin_observations: weakref.WeakKeyDictionary[
+        threading.Thread, StdinWriteObservation
+    ]
 
     def __init__(self) -> None:
         raise TypeError("use OwnedProcess.launch to acquire a child")
@@ -446,6 +516,7 @@ class OwnedProcess:
         grace_seconds: float = 1.0,
         deadline_seconds: float | None = None,
         capture_limit: int = 65536,
+        stdin_mode: str = "closed",
         factory: Callable[..., Any] = subprocess.Popen,
         popen_kwargs: dict[str, Any] | None = None,
         on_launched: Callable[[], None] | None = None,
@@ -482,6 +553,10 @@ class OwnedProcess:
             raise TypeError("factory and callback must be callable")
         if reporter is not None and not callable(reporter):
             raise TypeError("reporter must be callable")
+        if not isinstance(stdin_mode, str):
+            raise TypeError("stdin_mode must be a string")
+        if stdin_mode not in ("closed", "pipe"):
+            raise ValueError("stdin_mode must be closed or pipe")
         options = dict(popen_kwargs or {})
         if any(
             k in options
@@ -504,6 +579,28 @@ class OwnedProcess:
             _prepare_stream(label="stdout"),
             _prepare_stream(label="stderr"),
         ]
+        self._stdin_mode = stdin_mode
+        self._stdin_setup_complete = False
+        self._stdin_owner = (
+            _prepare_stream(label="stdin") if stdin_mode == "pipe" else None
+        )
+        self._stdin_candidate = None
+        self._retained_outputs = [False, False]
+        self._stdin_fd = None
+        self._stdin_gate = _new_lock()
+        self._stdin_calls = 0
+        # Identity-only metadata suppresses legacy exception-attached cleanup
+        # markers for stdin failures; the ledger alone retains the errors.
+        self._stdin_preserve_errors = set()
+        self._stdin_failed = False
+        self._stdin_eof_requested = False
+        self._stdin_eof_deadline = None
+        self._stdin_close_error = None
+        self._stdin_close_timeout = None
+        # An empty prepared slot has nothing to release; this is not EOF.
+        self._stdin_release_done = True
+        self._stdin_retired = False
+        self._stdin_observations = weakref.WeakKeyDictionary()
         self._cancel = _new_event()
         self._stop = _new_event()
         self._request = _new_event()
@@ -575,7 +672,7 @@ class OwnedProcess:
             prepared = True
             self._proc = factory(
                 argv,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if stdin_mode == "pipe" else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 **options,
@@ -615,6 +712,24 @@ class OwnedProcess:
             if pipe is not None:
                 _bind_prepared(self._owners[index], pipe)
                 self._acquired[index] = True
+        if stdin_mode == "pipe":
+            pipe = getattr(self._proc, "stdin", None)
+            try:
+                if pipe is None:
+                    raise OSError("missing stdin stream")
+                if any(
+                    self._acquired[i] and pipe is self._owners[i].stream
+                    for i in range(2)
+                ):
+                    raise TypeError("stdin and captured streams must be independent")
+                fd = self._check_stdin_descriptor(pipe)
+                assert self._stdin_owner is not None
+                _bind_prepared(self._stdin_owner, pipe)
+                self._stdin_candidate = None
+                self._stdin_release_done = False
+                self._configure_stdin(fd)
+            except BaseException as exc:
+                self._ledger.record(exc, phase=FailurePhase.SETUP)
         for index in range(2):
             try:
                 self._transfer(index)
@@ -639,6 +754,8 @@ class OwnedProcess:
                 launch_callback = True
                 on_launched()
             self._setup_done.set()
+            with self._lock:
+                self._stdin_setup_complete = stdin_mode == "pipe"
         except BaseException as exc:
             self._setup_done.set()
             with self._lock:
@@ -651,6 +768,287 @@ class OwnedProcess:
             result = self._shutdown(reason="setup", deliver=False)
             self._raise_interruption(result)
         return self
+
+    @staticmethod
+    def _pipe_descriptor(stream: Any) -> int | None:
+        method = getattr(stream, "fileno", None)
+        if not callable(method):
+            return None
+        try:
+            fd = method()
+        except io.UnsupportedOperation:
+            return None
+        if not isinstance(fd, int) or isinstance(fd, bool) or fd < 0:
+            raise TypeError("pipe fileno must return a nonnegative integer")
+        return fd
+
+    def _check_stdin_descriptor(self, pipe: Any) -> int | None:
+        # An incompatible factory can return different fd-owning wrappers for
+        # the same integer descriptor. Do not adopt a second release authority.
+        # Hold the candidate through the prepared continuation before probing;
+        # if identity cannot be proved, keep every possibly conflicting owner.
+        self._stdin_candidate = pipe
+        self._retained_outputs = list(self._acquired)
+        peers: list[int | None] = [None, None]
+        failures = CleanupFailures(None)
+
+        def probe_output(index: int) -> None:
+            peers[index] = self._pipe_descriptor(self._owners[index].stream)
+            if peers[index] is None:
+                self._retained_outputs[index] = False
+
+        for index in range(2):
+            if self._acquired[index]:
+                failures.run(
+                    lambda index=index: probe_output(index), ordinary=(OSError,)
+                )
+        fd: int | None = None
+
+        def probe_stdin() -> None:
+            nonlocal fd
+            fd = self._pipe_descriptor(pipe)
+
+        failures.run(probe_stdin, ordinary=(OSError,))
+        errors = _entries(failures)
+        if errors:
+            for error in errors:
+                self._ledger.record(error, phase=FailurePhase.SETUP)
+            raise errors[0]
+        conflicts = [i for i in range(2) if fd is not None and peers[i] == fd]
+        if conflicts:
+            self._retained_outputs = [i in conflicts for i in range(2)]
+            names = "/".join(tuple(ProcessStream)[i].name.lower() for i in conflicts)
+            raise TypeError(
+                f"stdin aliases {names} fd {fd} through distinct streams; "
+                "conflicting wrappers retained, cleanup incomplete"
+            )
+        self._retained_outputs = [False, False]
+        return fd
+
+    def _configure_stdin(self, fd: int | None) -> None:
+        assert self._stdin_owner is not None
+        stream = self._stdin_owner.stream
+        if not callable(getattr(stream, "close", None)):
+            raise TypeError("stdin stream must expose close")
+        if fd is None:
+            raise TypeError("stdin must provide an OS descriptor")
+        os.set_blocking(fd, False)
+        self._stdin_fd = fd  # borrowed number; OwnedStream alone releases it
+
+    def _prune_stdin_locked(self) -> None:
+        for thread in list(self._stdin_observations):
+            if not thread.is_alive():
+                del self._stdin_observations[thread]
+
+    def stdin_write_observation(self) -> StdinWriteObservation | None:
+        with self._lock:
+            self._prune_stdin_locked()
+            if self._stdin_retired or self._stdin_mode == "closed":
+                return None
+            return self._stdin_observations.get(_stdin_thread())
+
+    def _retire_stdin_observations(self, result: LifecycleResult) -> None:
+        with self._lock:
+            self._prune_stdin_locked()
+            if result.complete and not self._stdin_calls:
+                self._stdin_retired = True
+                self._stdin_observations.clear()
+
+    def _stdin_writable_locked(self) -> None:
+        if (
+            self._stdin_mode != "pipe"
+            or self._stdin_fd is None
+            or self._stdin_eof_requested
+            or self._stdin_failed
+            or self._requested
+            or self._reaped
+            or self.returncode is not None
+            or self._stdin_release_done
+        ):
+            raise StdinStateError("managed stdin is not writable")
+
+    def _stdin_acquire(self, end: float, *, writing: bool) -> None:
+        while True:
+            if writing and self._stop.is_set():
+                raise StdinStateError("stdin write cancelled by shutdown")
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("stdin serialization deadline expired")
+            if self._stdin_gate.acquire(timeout=min(0.02, remaining)):
+                return
+
+    def write_stdin(self, data: bytes, *, timeout_seconds: float) -> int:
+        timeout = _stdin_timeout(timeout_seconds)
+        if not isinstance(data, bytes):
+            raise TypeError("stdin data must be bytes")
+        end = time.monotonic() + timeout
+        with self._lock:
+            self._stdin_writable_locked()
+            self._stdin_calls += 1
+        accepted = 0
+        acquired = False
+        attempted = True
+        error: BaseException | None = None
+        try:
+            self._stdin_acquire(end, writing=True)
+            acquired = True
+            with self._lock:
+                # EOF or channel failure can have occurred while this caller
+                # waited. State rejection must preserve its previous record.
+                if self._stdin_eof_requested or self._stdin_failed:
+                    attempted = False
+                    raise StdinStateError("stdin EOF requested or channel failed")
+            if self._stop.is_set() or self._reaped:
+                raise StdinStateError("stdin write cancelled by shutdown")
+            if end - time.monotonic() <= 0:
+                raise TimeoutError("stdin write deadline expired")
+            view = memoryview(data)
+            while accepted < len(view):
+                if self._stop.is_set() or self._reaped:
+                    raise StdinStateError("stdin write cancelled by shutdown")
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("stdin write deadline expired")
+                assert self._stdin_fd is not None
+                try:
+                    count = os.write(self._stdin_fd, view[accepted : accepted + 65536])
+                except BlockingIOError:
+                    select.select([], [self._stdin_fd], [], min(0.02, remaining))
+                    continue
+                if count <= 0 or count > min(65536, len(view) - accepted):
+                    raise OSError("stdin write made invalid progress")
+                accepted += count
+            return accepted
+        except BaseException as exc:
+            error = exc
+            if not attempted or not isinstance(exc, Exception):
+                raise
+            raise StdinWriteError(
+                accepted_bytes=accepted,
+                cause=exc,
+                timed_out=isinstance(exc, TimeoutError),
+            ) from exc
+        finally:
+            with self._lock:
+                self._prune_stdin_locked()
+                if attempted:
+                    if error is not None:
+                        self._stdin_failed = True
+                        self._stdin_preserve_errors.add(id(error))
+                        self._ledger.record(
+                            error,
+                            ordinary=(OSError, StdinStateError),
+                            phase=FailurePhase.COORDINATION,
+                        )
+                        self._status = _outcome(self._ledger, self._status.complete)
+                    if not self._stdin_retired:
+                        self._stdin_observations[_stdin_thread()] = (
+                            StdinWriteObservation(
+                                len(data),
+                                accepted,
+                                "completed"
+                                if error is None
+                                else "failed"
+                                if isinstance(error, Exception)
+                                else "interrupted",
+                                error,
+                                isinstance(error, TimeoutError),
+                            )
+                        )
+                self._stdin_calls -= 1
+            if acquired:
+                self._stdin_gate.release()
+
+    def _close_stdin_owned(self) -> None:
+        # The serialization gate is held through publication, not just the
+        # owner's irreversible release claim. No release beneath live writes.
+        if self._stdin_release_done:
+            return
+        assert self._stdin_owner is not None
+        try:
+            self._stdin_owner.close()
+        except BaseException as exc:
+            with self._lock:
+                self._stdin_close_error = exc
+                self._stdin_preserve_errors.add(id(exc))
+                self._ledger.record(exc, phase=FailurePhase.RELEASE)
+                self._status = _outcome(self._ledger, self._status.complete)
+        finally:
+            with self._lock:
+                self._stdin_release_done = True
+
+    def _stdin_pending_locked(self) -> StdinCloseTimeout:
+        if self._stdin_close_timeout is None:
+            self._stdin_close_timeout = StdinCloseTimeout(
+                "stdin EOF remains pending under its original deadline"
+            )
+            self._stdin_preserve_errors.add(id(self._stdin_close_timeout))
+            self._ledger.record(
+                self._stdin_close_timeout, phase=FailurePhase.COORDINATION
+            )
+            self._status = _outcome(self._ledger, self._status.complete)
+        return self._stdin_close_timeout
+
+    def _observe_stdin_close_locked(self) -> None:
+        if self._stdin_close_error is not None:
+            raise self._stdin_close_error
+        if not self._stdin_release_done:
+            raise self._stdin_pending_locked()
+
+    def close_stdin(self, *, timeout_seconds: float) -> None:
+        timeout = _stdin_timeout(timeout_seconds)
+        with self._lock:
+            if self._stdin_mode != "pipe":
+                raise StdinStateError("stdin is closed by launch policy")
+            if self._stdin_candidate is not None:
+                raise StdinStateError(
+                    "stdin descriptor ownership is unresolved and retained"
+                )
+            if not self._stdin_setup_complete:
+                raise StdinStateError("stdin pipe setup did not complete")
+            if self._stdin_eof_requested or self._stdin_release_done:
+                self._observe_stdin_close_locked()
+                return
+            if self._requested or self._reaped or self.returncode is not None:
+                raise StdinStateError("stdin release is managed by cleanup")
+            self._stdin_eof_requested = True
+            self._stdin_eof_deadline = time.monotonic() + timeout
+            end = self._stdin_eof_deadline
+            self._stdin_calls += 1
+        acquired = False
+        try:
+            try:
+                self._stdin_acquire(end, writing=False)
+                acquired = True
+            except TimeoutError as cause:
+                with self._lock:
+                    error = self._stdin_pending_locked()
+                raise error from cause
+            except BaseException as exc:
+                with self._lock:
+                    self._stdin_preserve_errors.add(id(exc))
+                    self._ledger.record(exc, phase=FailurePhase.COORDINATION)
+                    self._status = _outcome(self._ledger, self._status.complete)
+                raise
+            self._close_stdin_owned()
+            with self._lock:
+                self._observe_stdin_close_locked()
+        finally:
+            with self._lock:
+                self._stdin_calls -= 1
+                self._prune_stdin_locked()
+            if acquired:
+                self._stdin_gate.release()
+
+    def _release_stdin(self) -> None:
+        with self._lock:
+            self._prune_stdin_locked()
+        if self._stdin_release_done or not self._stdin_gate.acquire(blocking=False):
+            return
+        try:
+            self._close_stdin_owned()
+        finally:
+            self._stdin_gate.release()
 
     def _transfer(self, index: int) -> None:
         if index == 1 and self._duplicate_pipe:
@@ -830,7 +1228,11 @@ class OwnedProcess:
     def _release_safe(self) -> None:
         for index in range(2):
             owner = self._owners[index]
-            if self._acquired[index] and not owner.released:
+            if (
+                self._acquired[index]
+                and not owner.released
+                and not self._retained_outputs[index]
+            ):
 
                 def release(index: int = index, owner: OwnedStream = owner) -> None:
                     # Descriptor-less compatibility streams may need release
@@ -848,6 +1250,8 @@ class OwnedProcess:
                     phase=FailurePhase.RELEASE,
                     stream=tuple(ProcessStream)[index],
                 )
+
+        self._release_stdin()
 
     def _wait_child(self, timeout: float) -> None:
         self._known_returncode = self._proc.wait(timeout=timeout)
@@ -1070,6 +1474,9 @@ class OwnedProcess:
     def _complete(self) -> bool:
         return (
             self._reaped
+            and self._stdin_candidate is None
+            and self._stdin_release_done
+            and not self._stdin_calls
             and all(self._safe(i) for i in range(2))
             and all(not self._acquired[i] or self._owners[i].released for i in range(2))
             and all(
@@ -1095,6 +1502,8 @@ class OwnedProcess:
     def _continue_cleanup(self) -> None:
         self._ready.set()
         while not self._request.wait(0.01):
+            if self._stdin_eof_requested:
+                self._release_stdin()
             if (
                 self._supervising
                 and self._deadline is not None
@@ -1154,6 +1563,26 @@ class OwnedProcess:
         # Prepared continuation retains exactly these owners/readers until the
         # barriers hold. No GC release, registry, re-adoption or close retry.
         while not self._finished.is_set():
+            if (
+                self._stdin_candidate is not None
+                and self._reaped
+                and all(self._safe(i) for i in range(2))
+                and all(
+                    self._retained_outputs[i]
+                    or not self._acquired[i]
+                    or self._owners[i].released
+                    for i in range(2)
+                )
+                and all(
+                    not self._action_prepared[i]
+                    or (result.done and result.cleanup_complete)
+                    for i, result in enumerate(self._action_results)
+                )
+            ):
+                # No supported operation can disarm arbitrary alias wrappers.
+                # Retain their references/sole descriptor authority without
+                # polling, retrying close or relying on wrapper finalization.
+                self._action(lambda: self._finished.wait(), ordinary=())
             for index in range(2):
                 if not self._safe(index):
                     self._stopped[index].wait(0.01)
@@ -1183,6 +1612,7 @@ class OwnedProcess:
     @property
     def cleanup_status(self) -> LifecycleResult:
         with self._lock:
+            self._prune_stdin_locked()
             return self._status
 
     @property
@@ -1191,7 +1621,9 @@ class OwnedProcess:
         return self._known_returncode if code is None else code
 
     def shutdown(self, *, primary: BaseException | None = None) -> LifecycleResult:
-        return self._shutdown(primary=primary, reason="cancel")
+        result = self._shutdown(primary=primary, reason="cancel")
+        self._retire_stdin_observations(result)
+        return result
 
     def _shutdown(
         self, *, primary: BaseException | None = None, reason: str, deliver: bool = True
@@ -1285,13 +1717,17 @@ class OwnedProcess:
             and threading.current_thread() is not self._continuation
         ):
             self._continuation.join(max(0, end - time.monotonic()))
-        return self.cleanup_status
+        result = self.cleanup_status
+        self._retire_stdin_observations(result)
+        return result
 
     def _raise_interruption(self, result: LifecycleResult) -> None:
         if result.failures and result.failures[0].kind is FailureKind.INTERRUPTION:
             error = result.failures[0].error
             with self._lock:
                 self._delivered = True
+            if id(error) in self._stdin_preserve_errors:
+                raise error
             try:
                 setattr(error, "cleanup", self)  # noqa: B010 - dynamic cleanup attachment; ty rejects direct BaseException attribute assignment
             except BaseException as observation_error:
@@ -1320,7 +1756,7 @@ class OwnedProcess:
                 self._delivered = True
             if not isinstance(error, Exception):
                 self._raise_interruption(self.cleanup_status)
-            if not result.complete:
+            if not result.complete and id(error) not in self._stdin_preserve_errors:
                 setattr(error, "cleanup", self)  # noqa: B010 - dynamic cleanup attachment; ty rejects direct BaseException attribute assignment
             raise error
 
@@ -1537,6 +1973,10 @@ class OwnedProcess:
 
 
 __all__ = [
+    "StdinWriteObservation",
+    "StdinWriteError",
+    "StdinStateError",
+    "StdinCloseTimeout",
     "OwnedProcess",
     "ProcessResult",
     "ProcessStream",

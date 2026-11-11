@@ -111,6 +111,16 @@ setup, collection and cleanup. Consumers must not adopt the pipes again.
 - Missing streams and descriptor-less injected test streams follow the same
   owner lifecycle; a descriptor-less double is not evidence that production
   fd reuse is safe.
+- An incompatible factory can already supply conflicting fd-owning wrappers.
+  In pipe mode, distinct stdin/output wrappers returning the same integer fd
+  are rejected before stdin receives a second release authority. The canonical
+  output owner and extra wrapper are retained, not independently closed or
+  finalized. Unprovable descriptor identity is likewise retained fail-closed;
+  proven-independent siblings still release. This deliberately leaves cleanup
+  incomplete, with the same prepared continuation and no generic disarm/retry
+  API. See [managed child stdin](process-lifecycle.md#managed-child-stdin) for
+  the retention boundary. Distinct fd numbers are not aliases merely because
+  they identify the same underlying file/pipe.
 - Select a configured `StopPolicy` at launch; do not subclass the owner to
   replace shutdown. Stage execution and configured child waiting share one
   total shutdown budget with a reserved local-cleanup allowance. No stage,

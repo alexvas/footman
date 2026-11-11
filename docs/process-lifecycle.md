@@ -2,10 +2,12 @@
 
 `footman.process.OwnedProcess` launches one direct child, owns one
 `footman.filesystem.streams.OwnedStream` per captured pipe, and coordinates
-readers, deadlines and bounded cleanup. Every child receives
-`stdin=subprocess.DEVNULL`, never inherited service/protocol stdin. Popen manages
-its internal DEVNULL handle synchronously; no stdin stream/descriptor is exposed
-to the caller. `popen_kwargs` cannot override stdin. Consumers import explicit modules;
+readers, deadlines and bounded cleanup. By default `stdin_mode="closed"` gives
+the child `stdin=subprocess.DEVNULL`, never inherited service/protocol stdin.
+Popen manages its internal DEVNULL handle synchronously. Explicit
+`stdin_mode="pipe"` enables managed binary writes and EOF under one prepared
+`OwnedStream`; no raw stdin stream/descriptor is exposed to the caller.
+`popen_kwargs` cannot override stdin in either mode. Consumers import explicit modules;
 filesystem ownership never imports process or domain policy.
 
 The examples below illustrate the supported API; they are not automatically
@@ -44,6 +46,178 @@ acquisition. Do not adopt an already-running Popen, reconstruct owners, close
 borrowed pipes or adopt a pipe's fileno. Supported factories provide both
 captured streams; missing streams are controlled setup failures, not empty
 success.
+
+## Managed child stdin
+
+Opt in only for protocols needing child input. Git/Docker helpers retain closed
+stdin. `launch(..., stdin_mode="closed")` accepts exactly `"closed"` and `"pipe"`;
+unsupported strings and non-strings (including bool) fail before any acquisition,
+factory call or worker creation. In pipe mode, the prepared internal
+`OwnedStream(label="stdin")` binds `Popen.stdin` immediately. Popen encapsulates
+its internal child-end handoff/release; Footman does not acquire a manual pipe or
+keep another parent write endpoint. Missing stdin or aliasing either captured
+output is a SETUP/None failure, never a silent closed-mode fallback. Independent
+siblings still release once on partial setup failure.
+
+Before binding stdin, pipe mode also compares available integer `fileno()`
+values, not just stream-object identity. Different wrappers returning the same
+fd already represent an incompatible factory ownership contract. Stdin is not
+assigned a second `OwnedStream` authority: the canonical output owner and the
+extra wrapper are retained by the prepared continuation, and neither conflicting
+wrapper is closed or left for garbage collection. Setup fails before readers or
+the launch callback start. Proven-independent siblings still release once, with
+ordinary close failures and interruptions retained separately.
+
+This is intentionally **incomplete cleanup**, not repaired ownership. Generic
+fd-owning wrappers have no universal safe disarm operation; closing one and
+letting the other's finalizer run could close a reused fd. `cleanup_status` and
+`wait_cleanup` therefore keep `complete=False`, the same owners/continuation and
+original budget. Repeat calls cannot retry close, disarm the group or obtain a
+new allowance. Once independent work settles, the continuation parks while
+retaining the group. There is no force-release/recovery API: fix the factory and
+account for the retained group until the owning process exits; do not report
+successful cleanup or rely on Python finalizers.
+
+Unprovable descriptor identity (a failing probe or invalid descriptor metadata)
+also fails closed and retains potentially conflicting fd-bearing resources.
+Independent probes are attempted even after a probe failure/interruption;
+explicitly descriptorless streams (no fileno method or UnsupportedOperation)
+remain independently releasable. Descriptorless stdin is invalid for writing,
+but can be released normally once its lack of a descriptor is established.
+The comparison is **integer fd equality**, not inode/open-file-description
+identity: distinct descriptors from `os.dup()` or opposite pipe ends remain
+valid. Factories must provide truthful, stable descriptor metadata; this is not
+a malicious-factory or concurrent descriptor-mutation sandbox.
+
+```python
+import sys
+
+from footman.process import OwnedProcess
+
+with OwnedProcess.launch(
+    [sys.executable, "-c", "import sys; print(len(sys.stdin.buffer.read()))"],
+    stdin_mode="pipe",
+    deadline_seconds=5,
+) as owner:
+    assert owner.stdin_write_observation() is None
+    assert owner.write_stdin(b"hello", timeout_seconds=1) == 5
+    progress = owner.stdin_write_observation()
+    owner.close_stdin(timeout_seconds=1)
+    result = owner.capture()
+    assert result.returncode == 0 and result.stdout == b"5\n"
+    assert owner.shutdown().complete
+    assert owner.stdin_write_observation() is None
+    assert progress.accepted_bytes == 5
+```
+
+`write_stdin(data: bytes, *, timeout_seconds: float) -> int` returns `len(data)`
+only after every byte has been accepted by the OS pipe, not consumed or processed
+by the child. Short writes are completed internally under the same deadline.
+Empty bytes return 0 only while writable. There is no writer worker, write queue
+or coordinator-owned queued payload: writes run directly on the calling thread,
+serialized by a gate, with nonblocking OS writes of at most 65536-byte views of
+the caller's payload. Gate and readiness waits consume the one call timeout and
+observe coordinator shutdown cancellation. The general lifecycle lock is not
+held across gate/readiness waits or OS I/O.
+
+Both write and EOF require a finite positive numeric timeout. Nonnumeric and
+boolean values raise TypeError; nonfinite, zero and negative values raise
+ValueError. Non-bytes data raises TypeError. Validation precedes writing or
+additional acquisition and leaves the existing child, owners and prior write
+observation unchanged. No invalid call creates a pipe lazily or writes DEVNULL.
+
+On ordinary timeout, EPIPE, shutdown cancellation or other write failure,
+`StdinWriteError(Exception)` has read-only `accepted_bytes: int`, `cause:
+Exception` and `timed_out: bool`. The accepted count is the exact OS-written
+prefix; success never returns a partial count. The declared `cause` differs from
+Python's `__cause__`; raising explicitly chains `raise wrapper from cause`, so
+both then identify the original exception. Construction alone does not set
+`__cause__`. Process-control interruptions are re-raised as the identical object,
+without wrapping or adding progress/cleanup attributes. Read their progress on
+the calling thread through the accessor below. Any attempted write failure or
+interruption fails the channel permanently: no payload or suffix retry, even
+when zero bytes were accepted. Argument/state rejections are not channel failures.
+
+`close_stdin(*, timeout_seconds: float) -> None` explicitly requests EOF before
+shutdown, prevents new writes and waits within its original deadline for the
+active writer and sole release. It does not wait for child consumption or reap.
+The active writer may finish or encounter its own timeout/cancellation; EOF never
+closes beneath it. Successful repeated close returns None without another close.
+A sole-close failure is retained and raised by identity on repeat close, without
+retry. `StdinCloseTimeout(TimeoutError)` means EOF is pending, not delivered.
+Repeated pending close observes the same retained outcome and original deadline,
+not a fresh waiting allowance. The prepared continuation settles the same owner
+once active work quiesces, even after the EOF waiting deadline; there is no new
+cleanup budget. Concurrent observers cannot confuse a release claim with a
+completed close. Ordinary close failure and actual interruption remain distinct
+from successful resource settlement.
+
+`StdinStateError(RuntimeError)` rejects either operation in closed mode and
+writes (including empty writes) after EOF request, failed channel, shutdown
+initiation or observed reap. `close_stdin` also rejects unbound/failed setup,
+including missing/None or identity-aliased stdin, factory/configuration/handoff
+failure, a failed launch callback or failed setup publication. An empty prepared ownership slot or
+completed cleanup of a failed launch is not successful EOF delivery. Only a
+successfully set up stdin pipe can observe/repeat a completed release; later
+write failure does not prohibit requesting EOF, and normal shutdown release
+still preserves successful-close or retained close-error observations. After shutdown/reap, close only observes already
+requested/released EOF state; it cannot initiate a new close or allowance.
+Foundation shutdown retains its launch-selected StopPolicy signal/reap semantics;
+it is **not** an implicit graceful EOF protocol. For an EOF-driven child, call
+close_stdin while it may still run, then collect/wait for its normal exit before
+shutdown. Sending EOF alone proves neither protocol success nor settled cleanup.
+
+### Write acceptance observations
+
+All four new public exports are `StdinWriteObservation`, `StdinWriteError`,
+`StdinStateError` and `StdinCloseTimeout`; existing exports are preserved.
+`stdin_write_observation() -> StdinWriteObservation | None` returns the calling
+thread's last finished attempted write, not a cumulative or global last call.
+The frozen record has exactly `requested_bytes: int`, `accepted_bytes: int`,
+`outcome: Literal["completed", "failed", "interrupted"]`, `error: BaseException |
+None` and `timed_out: bool`. Success has full acceptance, error=None and
+timed_out=False. Failures/interruption retain the original error by identity.
+Progress is published before return/raise, including zero-byte gate-wait failure.
+Initial and closed-mode reads return None without a state error. Argument/state
+rejection leaves the previous record unchanged; repeated reads return the same
+snapshot until another attempted call finishes or the store is retired. EOF,
+other callers and cleanup cannot mutate a handed-out record.
+
+Records use weak actual Thread-object keys, never numeric get_ident/native IDs.
+Synchronized publication, reads and cleanup prune terminated contributors even
+when external code retains their Thread objects. There is at most one record per
+live contributor, not cumulative thread history. A new Thread sees None despite
+a recycled numeric ident; reuse of the same still-live worker legitimately sees
+its own previous record. Async bridges must capture the new snapshot on the
+writing thread before another call or final cleanup, then hand it across.
+
+Reap, shutdown initiation, pending cleanup and read-only cleanup_status do not
+retire observations: the caller still reads its last record or None without
+raising for lifecycle state. A completed explicit shutdown() or wait_cleanup()
+retires and clears the whole store only after active write/EOF calls quiesce and
+publish. Further reads return None, and invalid later calls cannot resurrect it;
+previously returned snapshots and lifecycle failures remain usable. Pruning and
+retirement are bookkeeping, not resource release or a renewed budget. Record
+immutability is shallow; exception internals are not frozen.
+
+### Stdin failures and the output boundary
+
+ProcessStream remains exactly STDOUT/STDERR. Stdin adds no third reader,
+stream_outcomes entry or chunk/end callback. Stdin failures use the unchanged
+FailureInfo shape with stream=None: SETUP for acquisition/handoff,
+COORDINATION for writes/EOF, RELEASE for sole-owner close. Release ownership has
+the stable label `stdin`. Expected timeout/EPIPE/cancellation/write failures are
+explicitly ORDINARY; unexpected defects retain UNEXPECTED and actual
+process-control exceptions retain INTERRUPTION. The reporter remains strictly
+output-callback-only; stdin errors cannot disappear as diagnostic callbacks.
+
+Write/EOF operations and cleanup_status/wait_cleanup retain the original stdin
+failures, including sole-close failure after settlement. Active operation and
+interruption precedence, independent sibling cleanup and at-most-once release
+remain unchanged. Incomplete cleanup retains the same owner/continuation, not a
+new pipe, close retry, output collection or budget. See the independent
+[stdin contracts](../tests/test_process_stdin.py) and the exact registered
+[owned stdin suite](testing.md#phase-8-owned-stdin-suite).
 
 ## Stream output
 
@@ -178,7 +352,13 @@ exception's Python type.
 Immutability applies to record fields, bytes and tuples, not the internals of
 shared exception objects. There are no generic CleanupResult aliases, redundant
 error/failure_info fields, ProcessResult.cleanup, callback-error stores or
-exception-attached output snapshots.
+exception-attached output snapshots. `StdinWriteObservation` is explicitly
+permitted only for per-call OS-acceptance accounting, not as a second lifecycle
+ledger or callback-error store. For a write failure,
+`wrapper.cause is observation.error is matching_ledger_failure.error`: the same
+underlying exception is retained without copying or mutation; independent cleanup
+failures remain separate ledger entries. Read-only wrapper fields and shallow
+record immutability do not freeze exception internals.
 
 ## Handle interruption
 
@@ -319,7 +499,9 @@ live subprocess or its captured streams must still use `OwnedProcess.launch`.
 
 ### Other exclusions
 
-No process-tree/group management, interactive stdin API, PTY, arbitrary external reader ownership,
+No process-tree/group management, raw/interactive stdin exposure, PTY or arbitrary
+external reader ownership is introduced. Managed opt-in binary stdin/EOF is the
+only input API, with closed stdin by default and no popen_kwargs override. No
 existing-process adoption or Docker/npm/redaction/staging/publication authority
 is introduced. Never subclass to replace shutdown, retry ambiguous close,
 reconstruct owners or assign independent stage budgets.

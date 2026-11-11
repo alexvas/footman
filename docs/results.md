@@ -97,7 +97,7 @@ Cleanup does not require rewriting retained evidence. Ordinary release failures
 cannot replace an active operation failure or interruption; independent releases
 are attempted once and repeat cleanup cannot restart publication.
 
-The Phase 8 MCP adapter must translate ordinary publication application errors
+The future MCP adapter must translate ordinary publication application errors
 to a structured unsuccessful tool result with `isError: true`, the publication
 diagnostic, observed nullable command code and paths for created files. For
 example, command code 0 plus directory-sync failure yields `output_failed`

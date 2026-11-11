@@ -40,7 +40,7 @@ EXPECTED_COMMANDS = (
         "-n",
         "8",
         "--dist",
-        "loadfile",
+        "worksteal",
         "--tb=short",
         "-q",
     ),
@@ -116,7 +116,7 @@ def assert_documented_suite(text):
             assert len(workers) == 1, "use exactly one parallel worker setting"
             assert workers[0].isascii() and workers[0].isdecimal()
             assert 1 <= int(workers[0]) <= 1024
-            assert distributions == ["loadfile"], "use exactly one loadfile setting"
+            assert distributions == ["worksteal"], "use exactly one worksteal setting"
             assert not any("no:xdist" in arg for arg in args)
 
 
@@ -152,7 +152,8 @@ def test_documented_worker_override_matches_gate_contract():
     "replacement",
     (
         ".venv/bin/python -m pytest tests -q",
-        ".venv/bin/python -m pytest tests -n 4 --dist loadfile --tb=short -q",
+        ".venv/bin/python -m pytest tests -n 4 --dist worksteal --tb=short -q",
+        ".venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q",
     ),
 )
 def test_documentation_command_drift_is_detected(replacement):
@@ -171,7 +172,7 @@ def test_documentation_command_drift_is_detected(replacement):
 )
 @pytest.mark.parametrize(
     "options",
-    ("-n 8 --dist loadfile", "-n8 --dist=loadfile", "-n=8 --dist=loadfile"),
+    ("-n 8 --dist worksteal", "-n8 --dist=worksteal", "-n=8 --dist=worksteal"),
 )
 def test_parallel_phase_suite_is_allowed(launcher, options):
     command = " ".join(EXPECTED_COMMANDS[-1])
@@ -199,16 +200,17 @@ def test_pure_pytest_tool_probe_is_allowed(probe):
     (
         "-q",
         "--version -q",
-        "-n 8 --dist loadfile -n0",
-        "-n 8 --dist loadfile -n=0",
-        "-n8 --dist=loadfile -n=8",
-        "-n 8 --dist loadfile --dist=each",
-        "-n8 --dist=loadfile --dist loadfile",
-        "-n0 --dist=loadfile",
-        "-n=1025 --dist=loadfile",
+        "-n 8 --dist worksteal -n0",
+        "-n 8 --dist worksteal -n=0",
+        "-n8 --dist=worksteal -n=8",
+        "-n 8 --dist worksteal --dist=each",
+        "-n8 --dist=worksteal --dist worksteal",
+        "-n0 --dist=worksteal",
+        "-n=1025 --dist=worksteal",
         "-n8 --dist=each",
-        "-n8 --dist=loadfile --numprocesses=0",
-        "-n8 --dist=loadfile -pno:xdist",
+        "-n8 --dist=loadfile",
+        "-n8 --dist=worksteal --numprocesses=0",
+        "-n8 --dist=worksteal -pno:xdist",
     ),
 )
 def test_direct_and_attached_option_bypasses_are_rejected(launcher, options):
@@ -222,10 +224,11 @@ def test_direct_and_attached_option_bypasses_are_rejected(launcher, options):
     "phase",
     (
         ".venv/bin/python -m pytest tests/test_scaffold.py -q",
-        ".venv/bin/python -m pytest tests/test_scaffold.py -n 0 --dist loadfile",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 0 --dist worksteal",
         ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist each",
-        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist loadfile -p no:xdist",
-        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist loadfile --numprocesses=0",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist loadfile",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist worksteal -p no:xdist",
+        ".venv/bin/python -m pytest tests/test_scaffold.py -n 8 --dist worksteal --numprocesses=0",
     ),
 )
 def test_invalid_phase_suite_is_rejected_even_with_old_escape_hatch(phase):

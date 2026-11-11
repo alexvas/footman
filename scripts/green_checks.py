@@ -29,7 +29,7 @@ COMMANDS = (
         "-n",
         "8",
         "--dist",
-        "loadfile",
+        "worksteal",
         "--tb=short",
         "-q",
     ),

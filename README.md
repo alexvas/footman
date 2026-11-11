@@ -20,15 +20,17 @@ Requires Python 3.14+ and `uv`. Run identity uses the standard-library
 ```sh
 uv sync --extra dev --locked
 uv run --locked footman --help
-.venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests -n 8 --dist worksteal --tb=short -q
 scripts/check-green
 ```
 
-The pytest command is the mandated full-suite run: `pytest-xdist` distributes
-whole files across eight workers. `scripts/check-green` is the permanent gate: it
-adds the Ruff lint/format, syntax-compilation and `ty` checks over one Python
-source inventory and returns the first failing status; see
-[docs/python-checks.md](docs/python-checks.md).
+The pytest command is the mandated full-suite run: `pytest-xdist` uses work
+stealing across eight workers; tests in one file need not share a worker or
+fixture instance. `scripts/check-green` is the permanent gate: it adds the Ruff
+lint/format, syntax-compilation and `ty` checks over one Python source inventory
+and returns the first failing status; see [docs/python-checks.md](docs/python-checks.md).
+The [worksteal adoption record](docs/testing-worksteal.md) documents the historical
+1000 consecutive full-suite runs and the pending I/O investigation.
 
 The server entry point is:
 

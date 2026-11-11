@@ -638,8 +638,10 @@ flowchart TB
 #### Scenario: Registered pytest-integrated portability flow
 - **WHEN** integrated acceptance and portability tests are introduced
 - **THEN** their exact parallel tests/test_dispatch_acceptance.py command and prerequisites/fixture flow are registered in docs/testing.md before RED, checked against assert_documented_suite and included in unscoped development collection without exclusions
-- **WHEN** the portability module runs with loadfile distribution
-- **THEN** its module fixture performs one successful attributed build and one external venv/scratch setup per invocation on the file's single worker, helpers/resources are bounded and reconciled, missing tools or required index/network access fails nonzero without skips, and the installed venv does not recursively run this acceptance module
+- **WHEN** the portability module runs with worksteal distribution
+- **THEN** its module fixture performs one successful attributed build and one external venv/scratch setup per participating worker in each invocation, each worker owns distinct matching-input build roots/artifacts/venv/scratch/evidence paths and reuses only its own successful artifact for its cases and disposable negative-control copies, helpers/resources are bounded and reconciled per worker, missing tools or required index/network access fails nonzero without skips, and the installed venv does not recursively run this acceptance module
+- **WHEN** portability cases are distributed across multiple workers
+- **THEN** regression tests verify once-per-participating-worker setup/reuse, distinct owned paths and independent cleanup with recorded per-worker setup/resource counts, without assuming file-wide affinity, one global module/session fixture or shared mutable state/owners/continuations; workers executing no portability cases require no setup
 - **WHEN** the later host build helper is delivered
 - **THEN** the independent development fixture remains covered and shared attribution test cases verify both paths' documented build/status/output binding and rejection of ambiguous/missing/stale output and changed inputs, without production imports of tests or replacing host helper execution with the fixture
 

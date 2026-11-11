@@ -11,9 +11,9 @@ from unittest.mock import Mock
 import pytest
 
 from footman.process import LifecycleResult, ProcessResult, ProcessStream, StreamOutcome
+from tests.launcher_case_support import ID, IMAGE, api, config, source, steps
 from tests.launcher_support import DockerSequence
 from tests.stdin_support import PAYLOAD, live_stdin
-from tests.test_launcher_execution import ID, IMAGE, api, config, source, steps
 from tests.test_launcher_faults import PreparedOwner
 
 __all__ = ["source"]
@@ -28,7 +28,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from footman.container import ContainerExecution
 from tests.launcher_support import DockerSequence
-from tests.test_launcher_execution import config, steps
+from tests.launcher_case_support import config, steps
 source = SimpleNamespace(path=Path('/snapshot'), copy_source=lambda: Path('/snapshot'))
 with TemporaryDirectory() as directory:
     sequence = DockerSequence(Path(directory), steps(source))
@@ -244,7 +244,7 @@ def test_invalid_copy_source_reports_specific_cause(source, path, diagnostic):
 
 def test_copy_source_requires_complete_live_export(tmp_path):
     from footman.snapshot import SnapshotError, reserve_snapshot
-    from tests.test_launcher_execution import RUN_ID
+    from tests.launcher_case_support import RUN_ID
 
     with reserve_snapshot(tmp_path / "storage", RUN_ID) as snapshot:
         with pytest.raises(SnapshotError, match="completed"):

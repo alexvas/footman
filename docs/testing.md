@@ -32,6 +32,76 @@ verification. Never skip/xfail tests, disable the plugin, filter required tests
 or suppress warnings to obtain G. A green helper suite does not imply dispatcher
 phase completion.
 
+## Working schedule: gate plus specialised suites
+
+When validation requires both G and the delivered phase suites and the machine
+has **at least 32 available logical CPUs**, the working schedule is **budgeted
+parallel execution**, not gate followed by every suite. Count CPUs available to
+the process, respecting affinity and container CPU quotas; a host-wide CPU count
+alone is insufficient. Use this schedule only if both the available logical CPU
+count and any effective CPU quota provide at least 32 CPUs. If capacity is below
+32 or cannot be established, run the gate and then the required specialised
+commands sequentially by default. Keep the registered per-command worker counts
+in either mode. Run from the repository root against one unchanged candidate:
+
+- Start the unscoped gate with its own eight-worker allocation. Set
+  `GREEN_CHECKS_WORKERS=8` explicitly if the inherited environment might override
+  the default; do not add scope or fix arguments to `scripts/check-green`.
+- Independently schedule the required specialised commands below with a **shared
+  budget of eight workers**. Use each command exactly as registered, including
+  its worker count and `--dist worksteal`; do not combine or deduplicate commands.
+- Scan the following queue in order. Start a command when its entire worker
+  allocation fits the remaining specialised budget; a later, smaller command
+  may start while an earlier command waits for capacity. Return its allocation
+  only after the command and its owned cleanup have settled.
+
+| Queue priority | Registered suite | Workers |
+| --- | --- | ---: |
+| 1 | Phase 7 results | 1 |
+| 2 | Phase 4 snapshot | 1 |
+| 3 | Phase 5 launcher, including split scenario modules | 6 |
+| 4 | Phase 6 lifecycle, including split scenario modules | 4 |
+| 5 | Phase 8 owned stdin (all four registered modules) | 2 |
+| 6 | Phase 1 foundation | 3 |
+| 7 | Phase 3 output reservation | 1 |
+| 8 | Phase 2 configuration | 2 |
+| 9 | Standalone scaffold regression registered under Phase 2 | 1 |
+
+For validation of the currently delivered phases 1–8, run all nine specialised
+commands. Thus results, snapshot and launcher can initially run alongside the
+gate: specialised allocation 1 + 1 + 6, plus the gate's separate 8. The limit
+of 16 is a count of top-level xdist workers, **not** a limit on all OS processes:
+pytest controllers, check tools and test-owned child processes are additional.
+For narrower phase work, schedule only suites required by that phase; this does
+not waive any earlier-suite or full-gate requirement. Add future delivered suites
+to this scheduling policy when their commands are registered.
+
+Keep independent complete stdout/stderr logs, command/start/end observations
+and actual exit statuses for every invocation. Attempt every independent check,
+retain the first observed failing status as well as all individual statuses,
+and wait for every launched command and owned cleanup before declaring the
+combined run complete. An unsettled cleanup is a failure, not free capacity for
+a replacement invocation. Do not stop the other checks on a test failure, hide
+warnings or skips, or treat one successful branch as success of the other.
+Build/help/applicable exact-wheel installation checks remain separately required;
+this schedule does not replace them or the historical RED recording rules.
+Use the existing process/filesystem ownership contracts in any orchestration
+helper. The queue is a scheduling policy, not a new committed runner; do not
+depend on a machine-local ephemeral benchmark script to run project checks.
+
+The policy was selected from three rotated measurements per mode on a Linux
+development machine with 32 available logical CPUs: median combined wall time
+was 111.67 s for gate then sequential suites, 85.27 s for gate plus a sequential
+suite branch, and 28.44 s for this budgeted schedule. All commands passed. These
+are historical **loadfile** performance observations, predating worksteal
+adoption, not current verification or a guarantee for worksteal/different I/O
+loads. The admission budgets are retained; future timings must name the scheduler
+actually used. The automatic working-policy choice is limited to the
+32-or-more-available-CPU condition above; lower or unknown capacity uses the
+sequential fallback, not an unmeasured concurrent default. Do not silently change
+registered commands or drop required checks. Concurrent invocations deliberately
+repeat coverage and must keep their fixture-owned mutable state isolated.
+
 ## Current scaffold
 
 Prerequisites: Python 3.14+ and `uv`; package-index access for the first install.
@@ -39,18 +109,24 @@ Run from the repository root:
 
 ```sh
 uv sync --extra dev --locked
-.venv/bin/python -m pytest tests -n 8 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests -n 8 --dist worksteal --tb=short -q
 uv build
 uv run --locked footman --help
 uv run --locked python -m footman --help
 scripts/check-green
 ```
 
-The pytest command is the mandated full-suite run: `pytest-xdist` distributes
-whole files (`--dist loadfile`) across eight workers, so module-level fixtures
-and import-time state never cross processes. Use this command, not a serial or
-narrowed variant, for G; `docs/python-checks.md` records the parallelism rules
-and the gate entry points. If a task explicitly requires a serial `unittest
+The pytest command is the mandated full-suite run: `pytest-xdist` uses
+`--dist worksteal` across eight workers and redistributes pending tests from
+busier workers. Tests from one file may execute in different processes;
+module/session fixtures may therefore initialize once in each participating
+worker. Do not rely on file-wide worker affinity, mutable module globals shared
+between tests, or a session fixture being globally unique. Keep mutable resources
+fixture-owned and isolated per worker/request, and synchronize only through
+explicitly owned interfaces. Use this command, not a serial or narrowed variant,
+for G; `docs/python-checks.md` records the parallelism rules and gate entry points.
+The [worksteal adoption record](testing-worksteal.md) preserves the historical
+1000-run validation, CPU observations and deferred I/O investigation. If a task explicitly requires a serial `unittest
 discover` run, run that as well: pytest does not replace an explicitly required
 verification.
 
@@ -70,8 +146,8 @@ need not fail.
 
 Run all scaffold coverage, including that permanent replacement, in later
 regression runs. Do not skip/xfail/filter a temporary assertion or mark the whole
-scaffold suite superseded by phase 8. The phase 8 protocol suite adds coverage
-for valid MCP startup; it does not supersede missing-file startup refusal.
+scaffold suite superseded by protocol delivery. The future MCP protocol suite
+adds valid startup coverage; it does not supersede missing-file startup refusal.
 
 When package contents or build metadata change, G also requires a non-editable
 installation smoke check. Build a wheel and install that exact wheel into a fresh
@@ -88,7 +164,7 @@ with `uv sync --extra dev --locked` completed. No Docker access is needed.
 Register and run this suite for RED and every later foundation regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_foundation.py tests/test_foundation_ownership.py tests/test_scaffold.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_foundation.py tests/test_foundation_ownership.py tests/test_scaffold.py -n 3 --dist worksteal --tb=short -q
 ```
 
 The installation test builds one exact wheel and installs it into a fresh venv
@@ -108,7 +184,7 @@ smoke=$(mktemp -d /tmp/footman-foundation.XXXXXX)
 uv venv --python python3.14 "$smoke/venv"
 uv pip install --python "$smoke/venv/bin/python" "$repo/dist/footman-0.1.0-py3-none-any.whl" 'pytest==8.4.2' 'pytest-xdist==3.8.0'
 cd "$smoke"
-env -u PYTHONPATH "$smoke/venv/bin/python" -m pytest "$repo/tests/test_foundation.py" "$repo/tests/test_foundation_ownership.py" "$repo/tests/test_scaffold.py" -n 2 --dist loadfile --tb=short -q
+env -u PYTHONPATH "$smoke/venv/bin/python" -m pytest "$repo/tests/test_foundation.py" "$repo/tests/test_foundation_ownership.py" "$repo/tests/test_scaffold.py" -n 3 --dist worksteal --tb=short -q
 ```
 
 Record the exact wheel path/digest, environment path, each command status and
@@ -124,14 +200,14 @@ Prerequisites are the same as the Phase 1 suite; Docker is not required.
 Run this command for configuration RED and subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_configuration.py tests/test_scaffold.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_configuration.py tests/test_scaffold.py -n 2 --dist worksteal --tb=short -q
 ```
 
 The missing-file startup replacement alone can be recorded before the remaining
 configuration tests are authored:
 
 ```sh
-.venv/bin/python -m pytest tests/test_scaffold.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_scaffold.py -n 1 --dist worksteal --tb=short -q
 ```
 
 The configuration suite covers strict fields/types, canonical overlap and
@@ -150,7 +226,7 @@ Use the Phase 1 prerequisites; no Docker access is needed. Run this exact
 command for reservation RED and subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_output_reservation.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_output_reservation.py -n 1 --dist worksteal --tb=short -q
 ```
 
 This suite covers one UUIDv7 and its Crockford/millisecond identity, single-pass
@@ -167,7 +243,7 @@ Use the Phase 1 prerequisites and disposable real Git repositories; no Docker
 access is required. Run this exact command for RED and snapshot regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_snapshot.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_snapshot.py -n 1 --dist worksteal --tb=short -q
 ```
 
 The suite covers exclusive snapshot ownership, private-index capture and raw,
@@ -193,7 +269,7 @@ Use the Phase 1 prerequisites; Docker is not required. Run this command for
 launcher RED and subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_launcher.py tests/test_launcher_execution.py tests/test_launcher_faults.py tests/test_launcher_boundaries.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_launcher.py tests/test_launcher_execution.py tests/test_launcher_validation.py tests/test_launcher_copy_streams.py tests/test_launcher_faults.py tests/test_launcher_boundaries.py -n 6 --dist worksteal --tb=short -q
 ```
 
 The suite covers required image-ID formats and immutable startup validation,
@@ -211,8 +287,9 @@ scripts Docker resolution errors and local hexadecimal-name collisions; literal
 operands and --pull=never are adapter observations, not Docker resolution proofs.
 `dev_exec_image_and_wrapper_argv` and the process half of
 `dev_exec_status_and_streams` check both executable configurations without running
-consumer code on the host. Phase 7 adds persistence, Phase 8 MCP responses,
-and Phase 10 actual Docker copy/execution behavior. Phase 6 adds recorded-ID
+consumer code on the host. Result delivery adds persistence, MCP delivery adds
+protocol responses, and real-Docker host acceptance establishes actual copy and
+execution behavior. Phase 6 adds recorded-ID
 domain cleanup; settled local stub children do not prove container removal.
 
 For validation also run every earlier documented phase suite, the unscoped
@@ -226,7 +303,7 @@ Use the Phase 1 prerequisites; Docker is not required. Run this exact command
 for supervision/cleanup RED and subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_dispatch_lifecycle.py tests/test_dispatch_cleanup_faults.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_dispatch_lifecycle.py tests/test_dispatch_confirmation.py tests/test_dispatch_deadlines.py tests/test_dispatch_cleanup_faults.py -n 4 --dist worksteal --tb=short -q
 ```
 
 The suite exercises shared deadlines, independent requests, recorded-ID removal
@@ -241,7 +318,7 @@ Use the Phase 1 prerequisites; Docker is not required. Run this exact command
 for result RED and subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_results.py -n 2 --dist loadfile --tb=short -q
+.venv/bin/python -m pytest tests/test_results.py -n 1 --dist worksteal --tb=short -q
 ```
 
 This suite covers complete separate stream persistence, atomic manifests,
@@ -255,6 +332,29 @@ publication. `FOOTMAN_RESULTS_CONTROL=publication-order` before the same result
 suite command is an isolated negative control: it deliberately expects directory
 sync before replacement and must fail the ordering assertion without changing
 production code or the developer index.
+
+## Phase 8 owned stdin suite
+
+Use the Phase 1 prerequisites; no MCP or Docker is required. Register and run
+this exact command for owned-stdin RED and subsequent regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_process_stdin.py tests/test_process_lifecycle.py tests/test_process_orthogonal_results.py tests/test_process_single_collection.py -n 2 --dist worksteal --tb=short -q
+```
+
+The stdin suite exercises the opt-in process foundation independently of MCP.
+`tests/process_stdin_alias_child.py` isolates incompatible-factory fd-alias and
+metadata-probe controls: its streams use synthetic descriptor numbers, and it
+reports deliberate retention/incomplete cleanup before OS exit contains the
+otherwise permanent continuation. These tests cover finalizer safety, sibling
+releases, interruptions and repeated observation without leaking a retained
+worker into pytest. Distinct-number/shared-file-identity controls are simulations,
+not evidence of real dup acquisition; the generic-child EOF test separately
+exercises actual Popen pipes. No real raw fd is acquired by the synthetic streams.
+The other three modules retain the default DEVNULL, rejected stdin override,
+output-only public values and once-only output collection regression pins.
+Validation also requires every earlier phase suite, the unscoped green gate,
+build/help and exact-wheel installation checks.
 
 ## Descriptor, stream and process helpers
 
@@ -318,23 +418,23 @@ Follow the change's RED → GREEN → INTROSPECT → VALIDATE phase gates. Regis
 new phase suite's exact command here before recording RED. Phase suites may
 select narrower test paths but do not replace the mandated full-suite G run.
 Every fenced pytest suite command must include `-n <N>` (an integer from 1
-through 1024) and `--dist loadfile`, with no disabled xdist or alternate worker
+through 1024) and `--dist worksteal`, with no disabled xdist or alternate worker
 count override. Document the exact mandated full-suite command once; additional
 parallel phase-suite examples are allowed. There is no fence-label bypass for
 serial commands. Intentionally serial policy probes remain in test code, not
 verification-suite examples. See `docs/python-checks.md` for the same contract.
-Development phases 1–9 run inside the Docker-free development container:
+Development phases 1–10 run inside the Docker-free development container:
 `tests/` is the complete development suite, using disposable real Git repositories,
 a real MCP client when delivered, and the controlled Docker CLI executable stub.
 No Docker socket, daemon, image or npm is required for this gate. The stub records
 literal argv and fixture-owned identities and scripts responses, bytes, delays
 and failures; it does not prove actual container behavior.
 
-Phase 10 separately introduces `host_tests/` and the mandatory real-Docker host
+Phase 11 separately introduces `host_tests/` and the mandatory real-Docker host
 acceptance gate against an exact installed wheel and an operator-prepared image.
 That suite is not part of development discovery; missing host prerequisites fail
 host acceptance, never become skips. Passing development checks does not establish
-final host acceptance. Until phase 10 creates that package, static roots remain
+final host acceptance. Until phase 11 creates that package, static roots remain
 `src/`, `tests/`, `scripts/`, and ty checks `src/` only.
 Never exercise index mutation or broad container cleanup against this repository;
 use disposable repositories and recorded fixture-owned container IDs.
@@ -345,7 +445,10 @@ RED failures as described above; retain warnings and explain missing prerequisit
 repository under `/tmp/gorshochek/ephemeral/footman.git/` (verification reports in
 its `verification/` subdirectory). This is ephemeral, machine-local storage, not
 Git history: its contents may disappear and quickly become stale. Do not commit
-these reports or rely on their continued existence for project setup.
+these current-candidate reports or rely on their continued existence for project
+setup. The explicitly retained [worksteal adoption record](testing-worksteal.md)
+is a historical summary, not a live verification certificate or a requirement to
+retain its full machine-local logs.
 
 Each evidence summary must remain self-contained: revision/local changes, exact
 commands, environment, statuses, test counts, warnings and limitations. Recheck

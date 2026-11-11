@@ -270,7 +270,13 @@ def test_raised_observer_errors_escalate_by_class_without_delivery_mutation(
     try:
         if not after_delivery:
             owner._publish = publish_escalated
-        initial = owner.shutdown()
+        # This proves ordering relative to publication, not caller timeout.
+        # A scheduler pause must not turn the before-delivery leg into a
+        # pending observation taken before publish_escalated has run.
+        with real_watchdog(
+            owner._phase_done, 5, name="observer escalation publication"
+        ):
+            initial = owner.shutdown()
         owner._publish = publish
         assert authority(initial) is (ordinary if after_delivery else interruption)
         before = tuple(secondary(authority(initial)))

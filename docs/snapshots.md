@@ -104,4 +104,5 @@ Git repositories and filesystem resources without Docker. Its
 `test_dev_snapshot_mount_identity` is the historical export-only node name and
 proves staged-byte identity, not a mount. Phase 5's `dev_snapshot_copy_identity`
 checks this host export as the literal Docker copy source. Actual in-container
-copy visibility, bytes/modes/symlinks and execution remain Phase 10 obligations.
+copy visibility, bytes/modes/symlinks and execution remain real-Docker host
+acceptance obligations.

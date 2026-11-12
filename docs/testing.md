@@ -66,9 +66,10 @@ in either mode. Run from the repository root against one unchanged candidate:
 | 7 | Phase 3 output reservation | 1 |
 | 8 | Phase 2 configuration | 2 |
 | 9 | Standalone scaffold regression registered under Phase 2 | 1 |
+| 10 | Phase 9 MCP transport and server (both registered modules) | 2 |
 
-For validation of the currently delivered phases 1–8, run all nine specialised
-commands. Thus results, snapshot and launcher can initially run alongside the
+For Phase-9 validation, run all ten specialised commands, including every
+earlier phase suite. Thus results, snapshot and launcher can initially run alongside the
 gate: specialised allocation 1 + 1 + 6, plus the gate's separate 8. The limit
 of 16 is a count of top-level xdist workers, **not** a limit on all OS processes:
 pytest controllers, check tools and test-owned child processes are additional.
@@ -102,7 +103,7 @@ sequential fallback, not an unmeasured concurrent default. Do not silently chang
 registered commands or drop required checks. Concurrent invocations deliberately
 repeat coverage and must keep their fixture-owned mutable state isolated.
 
-## Current scaffold
+## Current development prerequisites
 
 Prerequisites: Python 3.14+ and `uv`; package-index access for the first install.
 Run from the repository root:
@@ -146,8 +147,8 @@ need not fail.
 
 Run all scaffold coverage, including that permanent replacement, in later
 regression runs. Do not skip/xfail/filter a temporary assertion or mark the whole
-scaffold suite superseded by protocol delivery. The future MCP protocol suite
-adds valid startup coverage; it does not supersede missing-file startup refusal.
+scaffold suite superseded by protocol delivery. The MCP protocol suite adds
+valid startup coverage; it does not supersede missing-file startup refusal.
 
 When package contents or build metadata change, G also requires a non-editable
 installation smoke check. Build a wheel and install that exact wheel into a fresh
@@ -356,6 +357,205 @@ output-only public values and once-only output collection regression pins.
 Validation also requires every earlier phase suite, the unscoped green gate,
 build/help and exact-wheel installation checks.
 
+## Phase 9 MCP transport and server suite
+
+Use the Phase 1 prerequisites plus GNU `cp` (private installation clones) and
+the pinned MCP SDK/`anyio` from `uv sync --extra dev --locked`; no Docker access
+and no Docker daemon are
+required. Register and run this exact command for MCP transport/server RED and
+subsequent regression:
+
+```sh
+.venv/bin/python -m pytest tests/test_mcp_transport.py tests/test_mcp_server.py -n 2 --dist worksteal --tb=short -q
+```
+
+`tests/test_mcp_transport.py` holds the project-owned test-client transport, the
+development-only protocol peer, the server bootstrap/provenance bootstrap
+contracts, the reserved-line attestation parser, the parent-owned provenance
+evidence branch, the lifecycle input/journal contract, both canonical wheel argv
+variants and the Phase-9-owned `tests/mcp_wheel_support.py` build/install
+fixture driven by the inert `tests/wheel_attribution_cases.py` records.
+`tests/test_mcp_server.py` holds the real `ClientSession` coverage of the actual
+service: initialization and tool discovery in the development and isolated
+installed-wheel contexts, the structured result contract, the MCP publication
+error boundary, disconnect supervision and concurrent independent requests.
+Missing `uv`, `python3.14`, package-index access or the built wheel contract is
+an explicit nonzero prerequisite failure in these tests, never a skip, xfail or
+filtered collection.
+
+The wheel fixture performs one real bare `uv build` from a recorded
+disposable matching-input repository copy, binds the exact produced wheel path
+and its independently computed SHA-256, and installs that wheel non-editably
+into a fresh venv outside the checkout. It never builds in the candidate
+checkout and never reuses a `dist/` candidate: the candidate checkout's `dist/`
+inventory is recorded and re-checked unchanged around every scripted or
+disposable build leg. `uv` output-collision cases refuse before invoking the
+tool and delete nothing; the operator remedies are removing only the named
+conflicting paths outside the fixture or invoking a different clean
+matching-input root. `attribution_only=True` stops after build attribution,
+before any venv, dependency or install acquisition, and stub-built artifacts
+never feed an install. The reviewed static build profile rejects ambient Hatch
+settings, unreviewed `UV_*` settings and discovered uv configuration files before
+invocation; cache/index/transport/concurrency settings explicitly listed in the
+fixture are allowed. Such preflight refusal never deletes prior artifacts.
+
+The two MCP test modules lazily create one attributed real build and fresh
+noneditable service venv per participating worker, through a session fixture.
+Its immutable wheel/install/support copy is reused; tests keep independent
+configs, Git repositories, manifests, request resources and evidence. Support
+shadow/mutation controls receive a private support copy as well. No
+worker that runs only primitive tests needs an installation. Recorded setup
+paths/counts distinguish workers; cache reuse rechecks candidate build inputs.
+Destructive package/launcher controls use private copy-on-write installation
+clones (`cp --reflink=auto`, with independent-copy fallback), never hardlinks to
+the base. The clone interpreter's install scheme is checked, Footman's public
+launcher shebang is relocated, and archive-authoritative expectations are
+remapped and its separate script digest recorded. These are recorded installation
+clones, not new installs or general-purpose relocatable venvs; activation and
+unrelated dependency CLI launchers are not used. Direct fixture/attribution and
+wheel-swap boundary tests still exercise their own public build surface.
+
+One fixture-owned admission file per pytest invocation bounds real provisioning
+and native clone-copy work across workers. Waiting consumes the original setup
+deadline, without renewal. Scripted attribution-only cases bypass heavy-work
+admission. The service venv contains no pytest/xdist; installed-foundation checks
+provision their own test environment. Shared-base reuse, private manifests,
+clone mutation isolation, relocated launcher/layout and process-owner fault
+matrices are included in the registered MCP suite, alongside admission
+failure/contention/interruption/repeat/independent-cleanup cases.
+
+Hostile-locale real-child cases are separate from the inherited-locale cases.
+They set `LC_ALL=C`, `LANG=C`, `PYTHONIOENCODING=ascii`, `PYTHONUTF8=0` and
+`PYTHONCOERCECLOCALE=0` after environment cleaning, record those launch settings
+and assert the child's effective ASCII stdin/stdout encodings. A split-frame
+protocol peer echoes non-ASCII arguments; the real service initializes/discovers
+and returns a Unicode phase-validation response through its borrowed UTF-8
+facades, with no reservation and no stdout diagnostic contamination. Child
+stderr confirms the effective locale and retains the diagnostic namespace guard.
+
+The wheel context runs copied `tests/mcp_wheel_client.py` with the fresh venv's
+absolute interpreter and `-P`. That client uses the copied transport and installed
+wheel's process foundation; development pytest only orchestrates it. The client
+loads the recorded sibling `tests` package explicitly without inserting its root
+into `sys.path`. Its foundation checks are post-import attribution, separate from
+the service bootstrap's pre-dispatch checks, not a universal pre-import guarantee.
+The service still uses the canonical `python -P <bootstrap> --expected-origin
+<manifest> --entrypoint <installed-footman> -- --config <config>` argv, with
+`--lifecycle <input>` immediately before `--` only in lifecycle contract tests.
+
+The declared normal copied support closure is `tests/__init__.py`,
+`tests/green_skip_policy.py`, `tests/mcp_transport.py`,
+`tests/mcp_provenance.py`, `tests/mcp_server_child.py` and
+`tests/mcp_lifecycle.py`. The independent Phase-9 fixture additionally copies
+`tests/mcp_wheel_client.py`; neither that client nor
+`tests/mcp_wheel_support.py` is a dependency of normal real-host support.
+`tests/mcp_protocol_child.py`, the Docker stub and assertion-driver modules are
+not transitive dependencies of that closure. Each copied file's identity is
+recorded and checked against its source. Dependencies are constrained by the
+candidate's `uv.lock`; provisioning commands, statuses and complete streams are
+kept separately from the exact build observation. Scripted attribution cases use
+only the declared three-input profile, never these real provisioning inputs.
+
+The optional lifecycle input is schema version 1 with exactly `scratch_root`,
+`journal_path`, `instance_token`, `service_deadline_monotonic` and
+`settlement_allowance_seconds` in addition to `schema_version`. The helper binds
+it to the original launch/scratch budget before acquisition; the bootstrap
+independently validates before journal publication and attestation. Rejection
+before acquisition leaves no journal; a publication failure may leave partial
+records but cannot authorize dispatch. The journal records token/PID/Linux
+process start-time incarnation before service dispatch and retains terminal
+observations when available. Its sole owner attempts each independent release
+once and retains failures on repeat observation. EOF and absolute lifetime use
+the same input reader, with no competing reader or renewed action/cleanup
+budget. A journal or helper exit is not authority to signal/reap/adopt the
+service or proof of absent external resources. Later helper-loss integration
+must independently establish service-incarnation absence and reconciliation.
+
+See [Test-bootstrap stderr provenance](#test-bootstrap-stderr-provenance) for
+the reserved stderr namespace these tests use and the diagnostic collision
+guard they prove.
+
+## Test-bootstrap stderr provenance
+
+This is test infrastructure, not a production MCP feature and not a requirement
+that external MCP clients provide attestation. The production service emits no
+provenance record; only `tests/mcp_server_child.py` does.
+
+`tests/mcp_server_child.py` runs inside the sole service child. Before
+dispatching any service code it resolves the Footman package root, enumerates
+every regular `*.py` below it (including `filesystem/`) without following
+symlinks and without importing the modules, and compares the exact
+relative-path/module-name/SHA-256 set with an independently generated
+schema-version-1 expected-origin manifest. Verification failure exits nonzero
+with an ordinary stderr diagnostic and no attestation.
+
+**Reserved namespace and grammar.** A physical stderr line that begins with
+ASCII `FOOTMAN_PROVENANCE_` is reserved for that bootstrap record. The only
+valid record is `FOOTMAN_PROVENANCE_V1 `, one canonical JSON object and exactly
+one `LF`, at most 512 source bytes including prefix and `LF`, with no `CR`, no
+BOM, no embedded literal newline and no trailing bytes. The object has exactly
+`schema_version` (integer `1`), `source_count` (non-boolean integer in
+`0..2**63-1` matching the verified set) and `set_sha256` (64 lowercase
+hexadecimal characters of the canonical source-set array SHA-256), serialized
+with `sort_keys=True`, `ensure_ascii=True` and `separators=(",", ":")`. The
+canonical source set is an array of objects with exactly `path`
+(package-relative POSIX source path) and `sha256` (lowercase source digest),
+sorted by `path`. A second reserved-prefix line is a duplicate failure even if
+its payload is malformed.
+
+**Emission.** The bootstrap builds the complete record in memory, then performs
+exactly one write of the whole record to the borrowed inherited binary stderr,
+checks that the write returned the full record length, and flushes, before any
+service or SDK/server task or logging writer starts. A short write, a write or
+flush failure, or an interruption fails the bootstrap without re-emitting the
+record, without retry, and without dispatching the service; inherited stderr is
+never adopted into an owner and never closed by the bootstrap.
+
+**Parsing and evidence.** The immediate parent (the Phase-9 fixture or a later
+runner) collects the child's stderr through one `stream()` collection and parses
+it incrementally: at most 512 candidate bytes plus fixed line state, ordinary
+diagnostic bodies drained and discarded, arbitrary chunk boundaries handled, and
+excerpts, capture limits and retained tails never supplied to the parser. A
+complete matching line is provisional, so MCP initialization may start while the
+service runs; duplicates keep being detected for the whole child lifetime. Final
+confirmation requires exactly one matching record, no parser failure and
+terminal stderr `StreamOutcome.EOF`; `READ_FAILED`, `ABORTED` or a pending
+terminal outcome means stderr verification is incomplete even when a valid line
+was already seen, and an unterminated reserved candidate at EOF is a truncated
+attestation rather than absence.
+
+Only after final confirmation does the parent write its own schema-version-1
+evidence file, at an absolute path it chose and recorded under external scratch
+or evidence directories, through sole owners, and read the persisted bytes back
+and recompute the set, count and digest before claiming retention. A parent-side
+expected set alone is never child-verified evidence; missing, duplicate,
+truncated, malformed, mismatched, unwritable or inconsistent attestation or
+evidence fails closed while the child's own process status stays separate.
+
+**Diagnostic collision guard and raw bytes.** Footman's generated diagnostics,
+logging including multiline exception formatting, configuration and startup
+refusals and generated helper-failure reports never begin a physical stderr line
+with the reserved prefix; the server prefixes each physical diagnostic line, and
+this guard is proven against actual collected server stderr. The guard is a
+formatting boundary only: retained raw helper, command and startup bytes stay
+byte-exact in their own files and are never redacted, rewritten or blindly
+forwarded into service stderr.
+
+**Ordinary fixture and synthetic controls.** Ordinary `tests/mcp_protocol_child.py`
+fixture modes emit no reserved-prefix line and authorize no verified-set
+evidence. Reserved, duplicate or malformed parser inputs come from explicitly
+synthetic byte/stream controls in `tests/test_mcp_transport.py` marked as parser
+controls; they are never service attestations.
+
+**Lifecycle journal is separate evidence.** The bootstrap's optional
+`--lifecycle <absolute input>` test-bootstrap input and the journal it publishes
+before dispatch are distinct from provenance attestation and evidence. They
+account for the instance token, PID, OS process incarnation, start status and
+inherited deadlines, and grant no release authority to any observer. See
+[inherited stdio and diagnostics](process-lifecycle.md#inherited-stdio-and-diagnostics)
+for the runtime-owned inherited stream rule that keeps this namespace writable
+only by the bootstrap.
+
 ## Descriptor, stream and process helpers
 
 `tests/test_filesystem_*.py` and `tests/test_process_*.py` cover the helpers
@@ -425,7 +625,7 @@ serial commands. Intentionally serial policy probes remain in test code, not
 verification-suite examples. See `docs/python-checks.md` for the same contract.
 Development phases 1–10 run inside the Docker-free development container:
 `tests/` is the complete development suite, using disposable real Git repositories,
-a real MCP client when delivered, and the controlled Docker CLI executable stub.
+a real SDK MCP client, and the controlled Docker CLI executable stub.
 No Docker socket, daemon, image or npm is required for this gate. The stub records
 literal argv and fixture-owned identities and scripts responses, bytes, delays
 and failures; it does not prove actual container behavior.

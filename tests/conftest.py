@@ -23,6 +23,61 @@ def pytest_configure(config):
     )
 
 
+@pytest.fixture(scope="session")
+def _mcp_worker_wheel(request, tmp_path_factory):
+    from pathlib import Path
+
+    from tests import mcp_contract_support as support
+    from tests import mcp_provenance as p
+    from tests import mcp_wheel_support as wheel
+
+    root = tmp_path_factory.mktemp("mcp-worker-wheel")
+    prepared = support.prepare_inputs(
+        Path(__file__).resolve().parents[1], root / "inputs"
+    )
+    evidence = root / "installation"
+    evidence.mkdir(mode=0o700)
+    bound = wheel.build_and_install_contract_wheel(
+        prepared, evidence_directory=evidence
+    )
+    p.write(
+        root / "setup.json",
+        p.canonical(
+            {
+                "schema_version": 1,
+                "worker": getattr(request.config, "workerinput", {}).get(
+                    "workerid", "master"
+                ),
+                "build_count": 1,
+                "venv_count": 1,
+                "wheel_sha256": bound.wheel_sha256,
+                "environment": str(bound.environment),
+                "support_root": str(bound.support_root),
+                "build_started_monotonic": bound.command["started_monotonic"],
+                "build_status": bound.command["status"],
+                "build_root": str(bound.repository_root),
+            }
+        ),
+    )
+    return bound
+
+
+@pytest.fixture(autouse=True)
+def _mcp_build_admission(request, tmp_path_factory, monkeypatch):
+    if request.node.path.name not in {"test_mcp_transport.py", "test_mcp_server.py"}:
+        return
+    from tests import mcp_contract_support, mcp_wheel_support
+
+    monkeypatch.setattr(
+        mcp_contract_support,
+        "WHEEL_PROVIDER",
+        lambda: request.getfixturevalue("_mcp_worker_wheel"),
+    )
+    base = tmp_path_factory.getbasetemp()
+    shared = base.parent if hasattr(request.config, "workerinput") else base
+    monkeypatch.setattr(mcp_wheel_support, "BUILD_SLOT_PATH", shared / "mcp-build.lock")
+
+
 @pytest.fixture
 def process_clock():
     """One frozen process timeline for a marked process migration scenario."""

@@ -97,15 +97,16 @@ Cleanup does not require rewriting retained evidence. Ordinary release failures
 cannot replace an active operation failure or interruption; independent releases
 are attempted once and repeat cleanup cannot restart publication.
 
-The future MCP adapter must translate ordinary publication application errors
+The MCP adapter translates ordinary publication application errors
 to a structured unsuccessful tool result with `isError: true`, the publication
 diagnostic, observed nullable command code and paths for created files. For
 example, command code 0 plus directory-sync failure yields `output_failed`
 unless interruption or timeout has precedence, even if the visible manifest says
 `succeeded`. A publication invocation error alone must not terminate the server;
-a subsequent independent request can succeed. This is the adapter contract,
-not a claim that Phase 7 delivers or verifies the public MCP server. Never infer
-invocation success solely from command code, manifest contents or file existence.
+a subsequent independent request can succeed. See [MCP client setup](mcp.md) and
+the real-client protocol suite for that boundary; persistence-only tests do not
+by themselves establish public MCP delivery. Never infer invocation success
+solely from command code, manifest contents or file existence.
 
 ## Infrastructure summaries and sensitive evidence
 

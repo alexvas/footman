@@ -1,17 +1,19 @@
-"""Operator entry point; MCP startup will be implemented here later."""
+"""Operator entry point for the stdio MCP service."""
 
 import argparse
 import sys
+import traceback
 from collections.abc import Sequence
 
 from footman.configuration import ConfigurationError, ConfiguredApplication
+from footman.server import diagnostic
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse startup options without pretending the MCP server exists yet."""
-    parser = argparse.ArgumentParser(
+    """Load the immutable operator configuration before protocol startup."""
+    parser = DiagnosticParser(
         prog="footman",
-        description="Stdio MCP dispatcher (project scaffold; not implemented yet).",
+        description="Staged-snapshot privileged command dispatcher over stdio MCP.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", required=True, metavar="CONFIG.TOML")
@@ -19,12 +21,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         application = ConfiguredApplication.from_path(args.config)
     except ConfigurationError as error:
-        print(str(error), file=sys.stderr)
+        print(diagnostic(str(error)), file=sys.stderr)
         return 1
-    return serve(application)
+    try:
+        return serve(application)
+    except Exception as error:
+        print(
+            diagnostic("".join(traceback.format_exception(error)).rstrip("\n")),
+            file=sys.stderr,
+        )
+        return 1
+
+
+class DiagnosticParser(argparse.ArgumentParser):
+    def _print_message(self, message: str | None, file=None) -> None:
+        if message:
+            target = file or sys.stderr
+            target.write(diagnostic(message) if target is sys.stderr else message)
 
 
 def serve(application: ConfiguredApplication) -> int:
-    """Protocol adapter is pending; never dispatch directly from the CLI."""
-    print("MCP server is not implemented yet; no command was executed", file=sys.stderr)
-    return 1
+    """Serve MCP only; there is no direct-dispatch CLI."""
+    from footman.server import serve as run_server
+
+    return run_server(application)

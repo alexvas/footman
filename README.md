@@ -41,7 +41,9 @@ footman --config /absolute/path/config.toml
 `footman` is the process entry point used by an MCP client to start the stdio
 service, not an interface for directly executing tests. There are no `run` or
 `mcp` subcommands. The dispatch interface is the MCP
-`run_privileged_command` tool, not a direct command-execution CLI.
+`run_privileged_command` tool, not a direct command-execution CLI. See
+[MCP client setup](docs/mcp.md) for arguments, retained paths, restart semantics
+and publication-error handling.
 
 ## Layout
 
@@ -49,7 +51,7 @@ service, not an interface for directly executing tests. There are no `run` or
 - `src/footman/`: package and operator entry point.
 - `src/footman/filesystem/`, `src/footman/process.py`: descriptor, stream and subprocess helpers ported from Jigbox.
 - `scripts/`: green gate and read-only source/type check entry points.
-- `tests/`: scaffold, foundation (`test_foundation.py`, `test_foundation_ownership.py`), helper lifecycle, check-tooling and verification-policy suites; `dispatcher_harness.py` and `docker_cli_stub.py` support the disposable Git and Docker-free CLI fixtures. See [docs/testing.md](docs/testing.md).
+- `tests/`: Docker-free dispatcher, real MCP stdio, foundation/lifecycle, check-tooling and verification-policy suites. Disposable Git repositories and controlled Docker CLI peers isolate execution; installed-wheel client/service fixtures check package attribution. See [docs/testing.md](docs/testing.md).
 - `tests/test_configuration.py`: configuration, request-boundary and startup-lifetime suite.
 - `docs/configuration.md`: operator configuration schema and authority.
 - `examples/footman.toml`: annotated operator configuration example.

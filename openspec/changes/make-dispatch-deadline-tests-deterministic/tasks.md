@@ -212,7 +212,7 @@ No phase may depend on itself or a later phase. Within a phase, tasks are ordere
 
 ### RED
 
-- [ ] 1.1 Add a request-before-acquisition contract test; completion: it demonstrates that an entered launch is recorded before the injected acquisition callback runs, even with no child file.
+- [x] 1.1 Add a request-before-acquisition contract test; completion: it demonstrates that an entered launch is recorded before the injected acquisition callback runs, even with no child file.
 - [ ] 1.2 Add failed-acquisition classification tests; completion: they require the original acquisition exception and forbid an acquired outcome for that attempt.
 - [ ] 1.3 Add acquisition-interruption classification tests; completion: they require preservation of the same interruption object without a false acquired outcome.
 - [ ] 1.4 Add independent-cursor contract tests; completion: every valid working prefix can transition to the two exact cleanup requests, while reordered/unknown/extra requests are rejected.

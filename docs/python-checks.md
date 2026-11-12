@@ -184,7 +184,8 @@ virtual environment. Those are recorded as prerequisites: the test fails with
 an actionable message instead of skipping, because this repository has no
 approved skip exceptions. The complete `tests/` development gate is Docker-free:
 phases 1–10 use real disposable Git repositories and a controlled Docker CLI stub,
-not Docker access or npm. Real MCP clients are required when their suites arrive.
+not Docker access or npm. The MCP protocol suites use real SDK clients; only
+Docker is replaced at the CLI boundary.
 Phase 11 adds separately discovered `host_tests/` and mandatory real-Docker host
 acceptance against an exact installed wheel and an operator-prepared image;
 development success cannot replace that gate. Missing host prerequisites fail

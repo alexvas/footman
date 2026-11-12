@@ -481,6 +481,38 @@ Keep fault injection in tests rather than in usage examples. Concrete scenarios:
 - [Reporter/default/fallback](../tests/test_process_strict_actions_and_reporting.py "test_reporting_defaults_are_fixed_safe_and_nonrecursive"): fixed-safe, nonrecursive diagnostics.
 - [Rejected legacy transport](../tests/test_process_orthogonal_results.py "test_no_legacy_field_conversion"): no conversion of obsolete result fields.
 
+## Inherited stdio and diagnostics
+
+The Footman process runtime owns the interpreter's inherited `sys.stdin`,
+`sys.stdout` and `sys.stderr` and their underlying binary/text buffers. They are
+inherited, not acquired, so no `OwnedStream`, `OwnedDescriptor` or other
+foundation owner adopts them, and no wrapper, facade or adapter gains release
+authority over them. Server and bootstrap code borrows them:
+
+- the production stdio MCP server passes the SDK's `stdio_server` only both
+  stdin and stdout explicitly as borrowed async UTF-8 text facades over the
+  borrowed binary buffers; the SDK default path that constructs deliberately
+  unclosed `TextIOWrapper` objects over the inherited buffers is not used, no
+  fd-owning stream is created over them, and adapter-created tasks and memory
+  streams get scoped cleanup instead of garbage-collection-dependent release;
+- setup failure, interruption and repeated cleanup on those paths must not close
+  an inherited handle, create a second owner for one descriptor or retry an
+  ambiguous operation;
+- the test bootstrap in `tests/mcp_server_child.py` writes exactly one bounded
+  provenance record with one full-length write and a flush through the borrowed
+  inherited binary stderr before dispatching service code. That emission
+  borrows the handle: it acquires no owner, never closes stderr, and gains no
+  retry right when the write, flush or an interruption fails;
+- stdout carries only serialized JSON-RPC protocol messages. Logging, startup
+  refusal, exception diagnostics and ordinary messages go to stderr or retained
+  files, and the reserved test-bootstrap line namespace is documented in
+  [testing.md](testing.md#test-bootstrap-stderr-provenance).
+
+Any new actual fd-owning resource on such a path still requires exactly one
+foundation owner and the full acquisition, operation-plus-close, sole-close,
+interruption and repeat-cleanup branch matrix. Borrowing an inherited handle is
+not an acquisition and is not a licence to skip that rule for anything new.
+
 ## Exclusions and ownership rules
 
 ### Fully encapsulated synchronous subprocess calls

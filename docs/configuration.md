@@ -7,10 +7,11 @@ once before entering the service adapter. Restart to apply TOML edits; changing
 or deleting the file does not change an already constructed application's
 configuration or its effective identity.
 
-The protocol/dispatch adapter is delivered in later phases. At this phase valid
-configuration reaches the explicitly unimplemented MCP adapter; invalid startup
-configuration is already refused with a nonzero status and a stderr diagnostic,
-without protocol stdout, output/snapshot reservation or container/command launch.
+Valid configuration starts the stdio MCP service; see [client setup](mcp.md).
+Statically invalid startup configuration is refused with a nonzero status and a
+stderr diagnostic, without protocol stdout, output/snapshot reservation or
+container/command launch. Later reservation, filesystem, container-validation or
+copy failures are unsuccessful request results, not configuration reloads.
 There is no direct dispatch CLI or configuration-validation subcommand.
 
 ## Version 1 schema

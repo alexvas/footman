@@ -1,6 +1,8 @@
 """Shared deadlines and independent request ownership contracts."""
 
+import importlib
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -10,6 +12,40 @@ from tests.launcher_case_support import ID, config, source, steps
 from tests.launcher_support import DockerSequence
 
 __all__ = ["source"]
+
+
+def test_request_is_journaled_before_acquisition(tmp_path):
+    """Parent admission is observable even when no child can write a record."""
+    support_path = Path(__file__).with_name("dispatch_deadline_support.py")
+    assert support_path.is_file(), "required parent-side deadline launch journal is absent"
+    support = importlib.import_module("tests.dispatch_deadline_support")
+    argv = ("docker", "run", "--pull=never", "fixture-image")
+    failure = OSError("synthetic acquisition failure; no child or fd acquired")
+    observed = []
+    journal = support.LaunchJournal(working=(argv,), cleanup=())
+
+    def acquire(actual, **options):
+        snapshot = journal.snapshot()
+        observed.append(snapshot)
+        assert len(snapshot) == 1
+        attempt = snapshot[0]
+        assert attempt.ordinal == 0
+        assert attempt.phase == "working"
+        assert attempt.argv == argv == tuple(actual)
+        assert attempt.deadline_seconds == options["deadline_seconds"] == 0.3
+        assert attempt.grace_seconds == options["grace_seconds"] == 1
+        assert attempt.acquisition == "requested"
+        assert attempt.owner is None and attempt.error is None
+        assert list(tmp_path.iterdir()) == []
+        raise failure
+
+    with pytest.raises(OSError) as caught:
+        journal.launch(argv, acquire=acquire, deadline_seconds=0.3, grace_seconds=1)
+    assert caught.value is failure
+    assert observed[0][0].acquisition == "requested", "snapshots must not mutate"
+    attempt = journal.snapshot()[0]
+    assert attempt.acquisition == "failed"
+    assert attempt.error is failure and attempt.owner is None
 
 
 @pytest.mark.parametrize("position", [1, 2, 3])

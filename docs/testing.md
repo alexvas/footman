@@ -313,6 +313,34 @@ and no-follow cleanup. See [incomplete-run reconciliation](reconciliation.md). I
 removal or copy proofs. Validation also runs every earlier phase suite, the
 unscoped green gate, build/help and exact-wheel installation checks.
 
+### Deterministic deadline-policy scenarios
+
+`LogicalScenario` installs the shared read-pure `ManualClock` through
+`module_clock` on `footman.container` only, before constructing the real
+supervisor. The clock starts at zero. Named successful-helper completion
+boundaries spend time explicitly; repeated reads, scheduler pauses and cleanup
+observations spend none. Process, supervisor cleanup and watchdog clocks remain
+real. The module reference is restored on normal return, assertion failure and
+interruption; no logical participant survives scenario execution.
+
+Synthetic no-fd helpers run through `launch=` and deliver separate protocol
+streams and EOF to production parsing. They expose exactly one collection and
+context exit, but are not evidence of real child execution or OS release.
+Inspection, mkdir and cp admission cases each check exact and past exhaustion:
+no next working request is permitted when the remaining budget is zero or
+negative. Positive-remainder controls admit that same operation, and cumulative
+named expenditures require decreasing positive shared allowances (numerical
+comparison uses relative and absolute tolerance 1e-12). Assertions compare
+predeclared literal working prefixes and independent recorded-ID removal and
+confirmation, not launch counts or child-written files. Advancement journals
+prove the intended charges exactly once.
+
+These are deterministic policy tests, not real-process timeout evidence or
+Docker semantics. Real executable-boundary checks must independently retain a
+positive timeout and local settlement; logical helpers cannot establish either
+for an actual child. Missing child records do not become acceptable merely
+because the logical policy tests pass.
+
 ### Settlement, records and expected failures
 
 `DockerSequence.assert_owners_settled()` checks local cleanup completion only

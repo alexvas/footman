@@ -3,7 +3,6 @@
 import importlib
 import json
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -855,23 +854,153 @@ def test_journal_rejects_invalid_observation_ordinals(ordinal, kind):
     assert journal.snapshot()[0].record.availability == "unobserved"
 
 
-@pytest.mark.parametrize("position", [1, 2, 3])
-def test_shared_deadline_suppresses_downstream_work(tmp_path, source, position):
-    script = steps(source)[: position + 1]
-    script[position]["delay"] = 2
-    script.extend(removal())
-    start = time.monotonic()
-    run, sequence = run_case(
-        tmp_path,
-        source,
-        script=script,
-        cfg=config(timeout_seconds=0.3, cleanup_grace_seconds=1),
+def _logical_support():
+    support = importlib.import_module("tests.dispatch_deadline_support")
+    assert hasattr(support, "LogicalScenario"), (
+        "required no-fd logical scenario support is absent"
     )
-    assert time.monotonic() - start < 2
-    assert run.failure is not None
-    assert run.cleanup.confirmed_absent
-    assert len(sequence.parameters) == position + 3
-    sequence.assert_settled()
+    return support
+
+
+def test_logical_helper_streams_counts_and_expenditure():
+    from footman.process import ProcessStream, StreamOutcome
+    from tests.clock_support import ManualClock
+
+    support = _logical_support()
+    clock = ManualClock()
+    owner = support.ScriptedHelper(
+        {"stdout": b"output", "stderr": b"error"},
+        clock,
+        expenditure=(0.125, "startup complete"),
+    )
+    chunks, endings = [], []
+    with owner:
+        result = owner.stream(
+            lambda *pair: chunks.append(pair),
+            on_stream_end=lambda *pair: endings.append(pair),
+        )
+    assert chunks == [
+        (ProcessStream.STDOUT, b"output"),
+        (ProcessStream.STDERR, b"error"),
+    ]
+    assert endings == [(s, StreamOutcome.EOF) for s in ProcessStream]
+    assert result.returncode == 0 and not result.timed_out
+    assert result.lifecycle.complete and result.lifecycle.failures == ()
+    assert result.stream_outcomes == tuple(endings)
+    assert owner.collections == owner.context_exits == 1
+    assert not hasattr(owner, "fileno") and not hasattr(owner, "process")
+    before = clock.journal()
+    assert [(a.seconds, a.label) for a in before] == [(0.125, "startup complete")]
+    for _ in range(10):
+        assert clock.monotonic() == 0.125
+    assert clock.journal() == before
+    with pytest.raises(RuntimeError):
+        owner.stream(lambda *_: None)
+    assert owner.collections == 1
+
+
+@pytest.mark.parametrize("position", [1, 2, 3])
+def test_logical_boundary_oracle_rejects_forbidden_request(source, position):
+    support = _logical_support()
+    working = tuple(tuple(s["argv"]) for s in steps(source))
+    cleanup = tuple(tuple(s["argv"]) for s in removal())
+    valid = (*working[:position], *cleanup)
+    support.assert_policy_trace(
+        valid, working=working, cleanup=cleanup, prefix=position
+    )
+    with pytest.raises(AssertionError):
+        support.assert_policy_trace(
+            (*working[: position + 1], *cleanup),
+            working=working,
+            cleanup=cleanup,
+            prefix=position,
+        )
+
+
+def test_logical_cumulative_oracle_rejects_renewed_budget():
+    support = _logical_support()
+    support.assert_allowances((0.5, 0.375, 0.25), (0.5, 0.375, 0.25))
+    with pytest.raises(AssertionError):
+        support.assert_allowances((0.5, 0.5, 0.5), (0.5, 0.375, 0.25))
+    with pytest.raises(AssertionError):
+        support.assert_allowances((0.0,), (0.0,))
+
+
+@pytest.mark.parametrize("exit_kind", ["normal", "assertion", "interruption"])
+def test_logical_scenario_restores_only_container_clock(source, exit_kind):
+    import footman.container as container
+    import footman.process as process
+    import footman.supervision as supervision
+
+    support = _logical_support()
+    originals = (container.time, process.time, supervision.time)
+    failure = {
+        "normal": None,
+        "assertion": AssertionError("synthetic"),
+        "interruption": KeyboardInterrupt("synthetic"),
+    }[exit_kind]
+    caught = None
+    try:
+        with support.LogicalScenario(
+            source, config(timeout_seconds=0.3, cleanup_grace_seconds=1)
+        ) as scenario:
+            assert container.time is not originals[0]
+            assert process.time is originals[1] and supervision.time is originals[2]
+            assert scenario.clock.monotonic() == 0
+            assert scenario.run.execution is not None
+            if failure is not None:
+                raise failure
+            scenario.execute()
+    except BaseException as error:
+        caught = error
+    assert caught is failure
+    assert (container.time, process.time, supervision.time) == originals
+
+
+@pytest.mark.parametrize("position", [1, 2, 3])
+@pytest.mark.parametrize("spent", [0.3, 0.4, 0.125], ids=["exact", "past", "positive"])
+def test_shared_deadline_suppresses_downstream_work(source, position, spent):
+    support = _logical_support()
+    label = f"before working {position}"
+    with support.LogicalScenario(
+        source,
+        config(timeout_seconds=0.3, cleanup_grace_seconds=1),
+        expenditures=((position - 1, (spent, label)),),
+    ) as scenario:
+        run = scenario.execute()
+        attempts = scenario.journal.snapshot()
+        working = tuple(tuple(s["argv"]) for s in scenario.working)
+        cleanup = tuple(tuple(s["argv"]) for s in scenario.cleanup)
+        prefix = 5 if spent < 0.3 else position
+        support.assert_policy_trace(
+            tuple(a.argv for a in attempts),
+            working=working,
+            cleanup=cleanup,
+            prefix=prefix,
+        )
+        assert all(a.acquisition == "acquired" for a in attempts)
+        assert (
+            tuple(a.phase for a in attempts) == ("working",) * prefix + ("cleanup",) * 2
+        )
+        assert run.cleanup.confirmed_absent and run.snapshot_deleted
+        assert not run.unresolved_resources
+        if spent < 0.3:
+            assert run.failure is None
+            assert attempts[position].argv == working[position]
+            support.assert_allowances(
+                (attempts[position].deadline_seconds,), (0.3 - spent,)
+            )
+        else:
+            assert run.failure is not None
+            assert working[position] not in tuple(a.argv for a in attempts)
+        assert [(a.seconds, a.label) for a in scenario.clock.journal()] == [
+            (spent, label)
+        ]
+        before = scenario.clock.journal()
+        for _ in range(10):
+            scenario.clock.monotonic()
+        assert scenario.clock.journal() == before
+        scenario.assert_helpers_settled()
 
 
 @pytest.mark.parametrize("stage", [1, 2, 3, 4])
@@ -890,20 +1019,39 @@ def test_nonzero_terminal_path_removes_only_recorded_id(tmp_path, source, stage)
     sequence.assert_settled()
 
 
-def test_cumulative_deadline_not_fresh_per_child(tmp_path, source):
-    script = steps(source)[:3]
-    script[0]["delay"] = 0.15
-    script[1]["delay"] = 0.15
-    script[2]["delay"] = 2
-    script.extend(removal())
-    run, sequence = run_case(
-        tmp_path, source, script=script, cfg=config(timeout_seconds=0.5)
+def test_cumulative_deadline_not_fresh_per_child(source):
+    support = _logical_support()
+    charges = (
+        (0, (0.125, "startup")),
+        (1, (0.125, "inspection")),
+        (2, (0.25, "mkdir")),
     )
-    deadlines = [options["deadline_seconds"] for _, options in sequence.parameters[:3]]
-    assert deadlines[0] > deadlines[1] > deadlines[2]
-    assert deadlines[2] < 0.2
-    assert run.failure is not None and run.cleanup.confirmed_absent
-    sequence.assert_settled()
+    with support.LogicalScenario(
+        source,
+        config(timeout_seconds=0.5, cleanup_grace_seconds=2),
+        expenditures=charges,
+    ) as scenario:
+        run = scenario.execute()
+        attempts = scenario.journal.snapshot()
+        working = tuple(tuple(s["argv"]) for s in scenario.working)
+        cleanup = tuple(tuple(s["argv"]) for s in scenario.cleanup)
+        support.assert_policy_trace(
+            tuple(a.argv for a in attempts), working=working, cleanup=cleanup, prefix=3
+        )
+        support.assert_allowances(
+            tuple(a.deadline_seconds for a in attempts if a.phase == "working"),
+            (0.5, 0.375, 0.25),
+        )
+        assert run.failure is not None and run.cleanup.confirmed_absent
+        assert run.snapshot_deleted and not run.unresolved_resources
+        assert [(a.seconds, a.label) for a in scenario.clock.journal()] == [
+            charge for _, charge in charges
+        ]
+        before = scenario.clock.journal()
+        for _ in range(10):
+            assert scenario.clock.monotonic() == 0.5
+        assert scenario.clock.journal() == before
+        scenario.assert_helpers_settled()
 
 
 @pytest.mark.parametrize("stage", [0, 4])

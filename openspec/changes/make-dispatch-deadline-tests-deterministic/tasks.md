@@ -261,44 +261,44 @@ Dependency: accepted Phase 1. Do not begin RED until task 1.33 and all preceding
 
 ### RED
 
-- [ ] 2.1 Add the logical-scenario helper contract tests; completion: no-fd scripted results deliver separate streams/EOF, expose collection/context-exit counts and support explicit named clock expenditure without acquiring a real resource.
-- [ ] 2.2 Add boundary-oracle contract tests for positions 1, 2 and 3; completion: they require exact expected working prefixes and the absence of the next launch after exhaustion, and reject an isolated trace containing the forbidden request.
-- [ ] 2.3 Add cumulative-budget oracle tests; completion: they require the shared remaining allowances and reject a synthetic trace that renews the full timeout for each child.
-- [ ] 2.4 Add clock-restoration contract tests; completion: normal return, assertion failure and interruption restore the original module reference without touching process/cleanup clocks.
-- [ ] 2.5 Record Phase-2 RED with S07 before implementing the missing scenario support; completion: the summary identifies actual new assertion failures and the actual nonzero status, not a fabricated production defect or a passing negative-control run.
+- [x] 2.1 Add the logical-scenario helper contract tests; completion: no-fd scripted results deliver separate streams/EOF, expose collection/context-exit counts and support explicit named clock expenditure without acquiring a real resource.
+- [x] 2.2 Add boundary-oracle contract tests for positions 1, 2 and 3; completion: they require exact expected working prefixes and the absence of the next launch after exhaustion, and reject an isolated trace containing the forbidden request.
+- [x] 2.3 Add cumulative-budget oracle tests; completion: they require the shared remaining allowances and reject a synthetic trace that renews the full timeout for each child.
+- [x] 2.4 Add clock-restoration contract tests; completion: normal return, assertion failure and interruption restore the original module reference without touching process/cleanup clocks.
+- [x] 2.5 Record Phase-2 RED with S07 before implementing the missing scenario support; completion: the summary identifies actual new assertion failures and the actual nonzero status, not a fabricated production defect or a passing negative-control run.
 
 ### GREEN
 
-- [ ] 2.6 Implement no-fd scripted scenario helpers; completion: test 2.1 passes and every helper has exactly one collection and context-exit observation without owning a real fd or child.
-- [ ] 2.7 Implement scoped logical-clock scenario setup; completion: test 2.4 passes with the adapter installed before supervisor construction and restored on all three exit paths.
-- [ ] 2.8 Replace position 1 with deterministic expiry before inspection; completion: real admission logic records only startup as working work and then exact known-ID cleanup, with no inspection request.
-- [ ] 2.9 Replace position 2 with deterministic expiry before mkdir; completion: real admission logic records only startup/inspection before exact known-ID cleanup, with no mkdir request.
-- [ ] 2.10 Replace position 3 with deterministic expiry before cp; completion: real admission logic records only startup/inspection/mkdir before exact known-ID cleanup, with no cp request.
-- [ ] 2.11 Add exact-deadline admission verification; completion: setting logical time exactly to the configured deadline forbids the next working request at each of the three boundaries.
-- [ ] 2.12 Add past-deadline admission verification; completion: advancing logical time beyond the deadline forbids the next working request at each boundary.
-- [ ] 2.13 Add positive-remainder admission verification; completion: before expiry the same next operation is requested with a strictly positive remaining allowance, preventing a vacuous always-reject oracle.
-- [ ] 2.14 Rewrite `test_cumulative_deadline_not_fresh_per_child`; completion: named expenditures produce the expected decreasing positive allowances under the prescribed tolerance and exhaustion prevents the next working request without sleeps.
-- [ ] 2.15 Synchronize Phase-2 dispatch inventory registration; completion: explicit expected function names include every Phase-2 addition/rename currently present, including any renamed boundary/cumulative functions, retain unaffected contracts and any created support-module registration, and CI exits zero with exact equality and module ownership unchanged. Refresh registration and CI for later Phase-2 function changes.
-- [ ] 2.16 Verify logical-time expenditure integrity; completion: scenario advancement journals contain exactly the intended deltas/labels once, and repeated clock reads leave them unchanged.
-- [ ] 2.17 Verify policy-oracle sensitivity; completion: isolated forbidden-request and renewed-budget traces from tests 2.2/2.3 are rejected while valid traces are accepted, without editing production source.
-- [ ] 2.18 Document deterministic-policy scenarios; completion: `docs/testing.md` explains clock scope, exact admission semantics and the real-process distinction without changing suite commands, retains exactly one canonical full-suite-command occurrence, and every added fenced pytest suite/focused example has exactly one decimal `-n <N>` and exactly one `--dist worksteal`, with no `--numprocesses` or disabled xdist; CD exits zero.
-- [ ] 2.19 Run G on the Phase-2 GREEN candidate; completion: actual exit zero, no skip/xfail/xpass and complete check-process cleanup.
-- [ ] 2.20 Run B on the Phase-2 candidate; completion: exit zero and its exact wheel path/digest are recorded.
-- [ ] 2.21 Run H1 on the Phase-2 candidate; completion: exit zero with captured help output.
-- [ ] 2.22 Run H2 on the Phase-2 candidate; completion: exit zero with captured help output.
-- [ ] 2.23 Complete W for the Phase-2 wheel; completion: a new external environment passes exact-wheel provenance and both installed help checks with all statuses recorded.
+- [x] 2.6 Implement no-fd scripted scenario helpers; completion: test 2.1 passes and every helper has exactly one collection and context-exit observation without owning a real fd or child.
+- [x] 2.7 Implement scoped logical-clock scenario setup; completion: test 2.4 passes with the adapter installed before supervisor construction and restored on all three exit paths.
+- [x] 2.8 Replace position 1 with deterministic expiry before inspection; completion: real admission logic records only startup as working work and then exact known-ID cleanup, with no inspection request.
+- [x] 2.9 Replace position 2 with deterministic expiry before mkdir; completion: real admission logic records only startup/inspection before exact known-ID cleanup, with no mkdir request.
+- [x] 2.10 Replace position 3 with deterministic expiry before cp; completion: real admission logic records only startup/inspection/mkdir before exact known-ID cleanup, with no cp request.
+- [x] 2.11 Add exact-deadline admission verification; completion: setting logical time exactly to the configured deadline forbids the next working request at each of the three boundaries.
+- [x] 2.12 Add past-deadline admission verification; completion: advancing logical time beyond the deadline forbids the next working request at each boundary.
+- [x] 2.13 Add positive-remainder admission verification; completion: before expiry the same next operation is requested with a strictly positive remaining allowance, preventing a vacuous always-reject oracle.
+- [x] 2.14 Rewrite `test_cumulative_deadline_not_fresh_per_child`; completion: named expenditures produce the expected decreasing positive allowances under the prescribed tolerance and exhaustion prevents the next working request without sleeps.
+- [x] 2.15 Synchronize Phase-2 dispatch inventory registration; completion: explicit expected function names include every Phase-2 addition/rename currently present, including any renamed boundary/cumulative functions, retain unaffected contracts and any created support-module registration, and CI exits zero with exact equality and module ownership unchanged. Refresh registration and CI for later Phase-2 function changes.
+- [x] 2.16 Verify logical-time expenditure integrity; completion: scenario advancement journals contain exactly the intended deltas/labels once, and repeated clock reads leave them unchanged.
+- [x] 2.17 Verify policy-oracle sensitivity; completion: isolated forbidden-request and renewed-budget traces from tests 2.2/2.3 are rejected while valid traces are accepted, without editing production source.
+- [x] 2.18 Document deterministic-policy scenarios; completion: `docs/testing.md` explains clock scope, exact admission semantics and the real-process distinction without changing suite commands, retains exactly one canonical full-suite-command occurrence, and every added fenced pytest suite/focused example has exactly one decimal `-n <N>` and exactly one `--dist worksteal`, with no `--numprocesses` or disabled xdist; CD exits zero.
+- [x] 2.19 Run G on the Phase-2 GREEN candidate; completion: actual exit zero, no skip/xfail/xpass and complete check-process cleanup.
+- [x] 2.20 Run B on the Phase-2 candidate; completion: exit zero and its exact wheel path/digest are recorded.
+- [x] 2.21 Run H1 on the Phase-2 candidate; completion: exit zero with captured help output.
+- [x] 2.22 Run H2 on the Phase-2 candidate; completion: exit zero with captured help output.
+- [x] 2.23 Complete W for the Phase-2 wheel; completion: a new external environment passes exact-wheel provenance and both installed help checks with all statuses recorded.
 
 ### INTROSPECT
 
-- [ ] 2.24 Audit use of the real policy boundary; completion: record that tests execute production admission/parsing through `launch=` rather than patched `_remaining`, stored deadlines or clock-read side effects.
-- [ ] 2.25 Audit clock-domain isolation; completion: record restoration-test results and confirm no real watchdog, process clock or cleanup clock is replaced and no scenario participant survives teardown.
-- [ ] 2.26 Audit Phase-2 coverage completeness; completion: map inspection/mkdir/cp, exact/past/positive boundaries and cumulative spending to executed node IDs, and confirm no real-resource branch was introduced without its matrix.
+- [x] 2.24 Audit use of the real policy boundary; completion: record that tests execute production admission/parsing through `launch=` rather than patched `_remaining`, stored deadlines or clock-read side effects.
+- [x] 2.25 Audit clock-domain isolation; completion: record restoration-test results and confirm no real watchdog, process clock or cleanup clock is replaced and no scenario participant survives teardown.
+- [x] 2.26 Audit Phase-2 coverage completeness; completion: map inspection/mkdir/cp, exact/past/positive boundaries and cumulative spending to executed node IDs, and confirm no real-resource branch was introduced without its matrix.
 
 ### VALIDATE
 
-- [ ] 2.27 Run S01–S10 once each on the accepted Phase-2 candidate; completion: every suite passes with no skip/xfail/xpass and its counts/status are recorded.
-- [ ] 2.28 Run F in the Phase-2 W environment; completion: exit zero with no skip/xfail/xpass and installed-package provenance retained.
-- [ ] 2.29 Accept the Phase-2 evidence package; completion: its self-contained summary accounts for all required commands/deliverables, confirms G/B/H1/H2/W applicability after review and identifies no unresolved failure or out-of-scope change.
+- [x] 2.27 Run S01–S10 once each on the accepted Phase-2 candidate; completion: every suite passes with no skip/xfail/xpass and its counts/status are recorded.
+- [x] 2.28 Run F in the Phase-2 W environment; completion: exit zero with no skip/xfail/xpass and installed-package provenance retained.
+- [x] 2.29 Accept the Phase-2 evidence package; completion: its self-contained summary accounts for all required commands/deliverables, confirms G/B/H1/H2/W applicability after review and identifies no unresolved failure or out-of-scope change.
 
 ## 3. Phase 3 — Real-process timeout and record-race verification
 

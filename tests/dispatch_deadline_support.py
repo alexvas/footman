@@ -270,3 +270,151 @@ class LaunchJournal:
                 primary.add_note("deadline diagnostics unavailable")
             except BaseException as note_error:
                 _secondary(primary, note_error)
+
+
+def assert_policy_trace(actual, *, working, cleanup, prefix):
+    """Require a predeclared exact prefix and independent literal cleanup."""
+    expected = (*working[:prefix], *cleanup)
+    if tuple(actual) != expected:
+        raise AssertionError(
+            f"unexpected policy trace: {actual!r}; expected {expected!r}"
+        )
+
+
+def assert_allowances(actual, expected):
+    """Check positive shared remainders, not approximate admission decisions."""
+    import pytest
+
+    actual, expected = tuple(actual), tuple(expected)
+    if not all(value > 0 for value in actual):
+        raise AssertionError(f"nonpositive admitted allowance: {actual!r}")
+    if actual != pytest.approx(expected, rel=1e-12, abs=1e-12):
+        raise AssertionError(
+            f"renewed or incorrect budget: {actual!r}; expected {expected!r}"
+        )
+
+
+class ScriptedHelper:
+    """Explicitly synthetic no-fd helper; no process, stream or release acquired.
+
+    Delivers separate protocol bytes/EOF exactly once. Time is charged only at
+    the named completion boundary, never on clock reads or cleanup observation.
+    Context exit counts are observations, not simulated OS close evidence.
+    """
+
+    def __init__(self, step, clock, *, expenditure=None):
+        from footman.process import LifecycleResult
+
+        self.step = step
+        self.clock = clock
+        self.expenditure = expenditure
+        self.collections = 0
+        self.context_exits = 0
+        self.cleanup_status = LifecycleResult(True)
+        self.result = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.context_exits += 1
+
+    def stream(self, callback, *, on_stream_end=None):
+        from footman.process import ProcessResult, ProcessStream, StreamOutcome
+
+        if self.collections:
+            raise RuntimeError("scripted helper already collected")
+        self.collections += 1
+        for stream, key in (
+            (ProcessStream.STDOUT, "stdout"),
+            (ProcessStream.STDERR, "stderr"),
+        ):
+            data = self.step.get(key, b"")
+            if data:
+                callback(stream, data)
+            if on_stream_end is not None:
+                on_stream_end(stream, StreamOutcome.EOF)
+        if self.expenditure is not None:
+            seconds, label = self.expenditure
+            self.clock.advance(seconds, label=label)
+        self.result = ProcessResult(
+            self.step.get("stdout", b""),
+            self.step.get("stderr", b""),
+            self.step.get("status", 0),
+            False,
+            self.cleanup_status,
+            tuple((s, StreamOutcome.EOF) for s in ProcessStream),
+        )
+        return self.result
+
+
+class LogicalScenario:
+    """Real supervisor admission/parsing with synthetic helpers and one clock.
+
+    Only footman.container's time reference changes, before construction. The
+    supervisor/cleanup/process clocks and real watchdogs remain untouched.
+    Acquired helpers are no-fd values; no new OS lifecycle branch is introduced.
+    """
+
+    def __init__(self, source, config, *, expenditures=()):
+        from tests.clock_support import ManualClock
+        from tests.dispatch_support import removal
+        from tests.launcher_case_support import steps
+
+        self.source, self.config = source, config
+        self.clock = ManualClock()
+        self.working = tuple(steps(source, config))
+        self.cleanup = tuple(removal())
+        self.expenditures = dict(expenditures)
+        self.journal = LaunchJournal(
+            working=tuple(tuple(s["argv"]) for s in self.working),
+            cleanup=tuple(tuple(s["argv"]) for s in self.cleanup),
+        )
+        self.helpers = []
+        self._script = {tuple(s["argv"]): (i, s) for i, s in enumerate(self.working)}
+        self._script.update({tuple(s["argv"]): (None, s) for s in self.cleanup})
+
+    def __enter__(self):
+        import footman.container as container
+        from tests.clock_support import module_clock
+        from tests.dispatch_support import api
+
+        self._scope = module_clock(container, self.clock)
+        self._scope.__enter__()
+        try:
+            self.run = api().RunSupervisor(self.config, self.source, launch=self.launch)
+        except BaseException as error:
+            self._scope.__exit__(type(error), error, error.__traceback__)
+            raise
+        return self
+
+    def __exit__(self, *args):
+        return self._scope.__exit__(*args)
+
+    def launch(self, argv, **options):
+        def acquire(actual, **passed):
+            index, step = self._script[tuple(actual)]
+            helper = ScriptedHelper(
+                step, self.clock, expenditure=self.expenditures.get(index)
+            )
+            self.helpers.append(helper)
+            return helper
+
+        return self.journal.launch(argv, acquire=acquire, **options)
+
+    def execute(self):
+        self.run.execute(lambda *_: None, lambda *_: None)
+        for attempt in self.journal.snapshot():
+            if attempt.owner is not None:
+                self.journal.observe_result(attempt.ordinal, attempt.owner.result)
+        self.assert_helpers_settled()
+        return self.run
+
+    def assert_helpers_settled(self):
+        for helper in self.helpers:
+            if helper.collections != 1 or helper.context_exits != 1:
+                raise AssertionError(
+                    "scripted helper must be collected/exited exactly once"
+                )
+            if not helper.cleanup_status.complete or helper.cleanup_status.failures:
+                raise AssertionError("scripted helper did not settle cleanly")

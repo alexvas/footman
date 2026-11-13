@@ -213,47 +213,47 @@ No phase may depend on itself or a later phase. Within a phase, tasks are ordere
 ### RED
 
 - [x] 1.1 Add a request-before-acquisition contract test; completion: it demonstrates that an entered launch is recorded before the injected acquisition callback runs, even with no child file.
-- [ ] 1.2 Add failed-acquisition classification tests; completion: they require the original acquisition exception and forbid an acquired outcome for that attempt.
-- [ ] 1.3 Add acquisition-interruption classification tests; completion: they require preservation of the same interruption object without a false acquired outcome.
-- [ ] 1.4 Add independent-cursor contract tests; completion: every valid working prefix can transition to the two exact cleanup requests, while reordered/unknown/extra requests are rejected.
-- [ ] 1.5 Add journal concurrency tests using real synchronization rather than sleeps; completion: request ordinals and acquisition/result associations stay coherent across a controlled cleanup-thread interleaving.
-- [ ] 1.6 Add strict record/settlement baseline tests; completion: missing successful-helper records, complete invalid records and incomplete owners each remain failures for existing callers.
-- [ ] 1.7 Add diagnostic-precedence contract tests; completion: required diagnostic fields and the 64-KiB bound are checked, and ordinary rendering failures cannot replace an existing primary failure.
-- [ ] 1.8 Record Phase-1 RED with S07 before implementation; completion: the phase summary contains the predeclared command, actual nonzero status and new assertion failures attributable to missing Phase-1 behavior, with complete output temporarily captured.
+- [x] 1.2 Add failed-acquisition classification tests; completion: they require the original acquisition exception and forbid an acquired outcome for that attempt.
+- [x] 1.3 Add acquisition-interruption classification tests; completion: they require preservation of the same interruption object without a false acquired outcome.
+- [x] 1.4 Add independent-cursor contract tests; completion: every valid working prefix can transition to the two exact cleanup requests, while reordered/unknown/extra requests are rejected.
+- [x] 1.5 Add journal concurrency tests using real synchronization rather than sleeps; completion: request ordinals and acquisition/result associations stay coherent across a controlled cleanup-thread interleaving.
+- [x] 1.6 Add strict record/settlement baseline tests; completion: missing successful-helper records, complete invalid records and incomplete owners each remain failures for existing callers.
+- [x] 1.7 Add diagnostic-precedence contract tests; completion: required diagnostic fields and the 64-KiB bound are checked, and ordinary rendering failures cannot replace an existing primary failure.
+- [x] 1.8 Record Phase-1 RED with S07 before implementation; completion: the phase summary contains the predeclared command, actual nonzero status and new assertion failures attributable to missing Phase-1 behavior, with complete output temporarily captured.
 
 ### GREEN
 
-- [ ] 1.9 Implement parent request journaling; completion: test 1.1 passes with exact immutable observation snapshots and untruncated argv available to assertions.
-- [ ] 1.10 Synchronize Phase-1 dispatch inventory registration; completion: explicit expected function names include every Phase-1 addition/rename currently present, preserve all unaffected contracts, and CI exits zero with exact equality and module ownership unchanged. If the deadline support module exists, its no-test-functions registration is present. Refresh this registration and CI again for later Phase-1 function changes.
-- [ ] 1.11 Implement acquisition outcome association; completion: tests 1.2 and 1.3 pass without replacing the original exception/interruption or creating a second owner.
-- [ ] 1.12 Implement the independent strict script cursors; completion: test 1.4 passes without search-ahead, wildcard argv acceptance or reliance on a fixed overall cleanup offset.
-- [ ] 1.13 Implement synchronization for the journal; completion: test 1.5 passes and each request retains one stable ordinal and its own outcome.
-- [ ] 1.14 Separate settlement checking from strict record validation without enabling timeout tolerance yet; completion: test 1.6 passes and existing `DockerSequence` behavior remains strict by default.
-- [ ] 1.15 Implement bounded diagnostic rendering; completion: test 1.7 passes without additional stream collection or mandatory diagnostic-file I/O.
-- [ ] 1.16 Verify operation-plus-close precedence for each Phase-1 ownership branch; completion: the matrix maps every such branch to a passing case preserving the operation failure and retaining the ordinary close failure.
-- [ ] 1.17 Verify sole-close failure visibility for each Phase-1 ownership branch; completion: the mapped cases reject successful verification when release alone fails.
-- [ ] 1.18 Verify interruption cleanup for each Phase-1 ownership branch; completion: the mapped cases preserve interruption identity and attempt every independent release.
-- [ ] 1.19 Verify repeat-cleanup behavior for each Phase-1 ownership branch; completion: mapped cases prove once-only release and retained incomplete owners/continuation without a fresh budget.
-- [ ] 1.20 Verify independent-resource cleanup for each Phase-1 ownership branch; completion: mapped cases prove a sibling ordinary release failure cannot suppress another independent release.
-- [ ] 1.21 Verify handoff/concurrency ownership for each applicable Phase-1 branch; completion: mapped cases prove no owner is orphaned or released twice across the transfer/interleaving, with explicit reasons for non-applicable matrix cells.
-- [ ] 1.22 Document the journal contract in support docstrings and the relevant testing-guide section; completion: the text distinguishes request/acquisition/child record/settlement, preserves registered commands, retains exactly one canonical full-suite-command occurrence in `docs/testing.md`, and every added fenced pytest suite/focused example has exactly one decimal `-n <N>` and exactly one `--dist worksteal`, with no `--numprocesses` or disabled xdist; CD exits zero.
-- [ ] 1.23 Run G on the Phase-1 GREEN candidate; completion: actual exit zero, all independent gate checks attempted, no skip/xfail/xpass and complete check-process cleanup.
-- [ ] 1.24 Run B on the Phase-1 candidate; completion: exit zero and the exact produced wheel path and digest are recorded.
-- [ ] 1.25 Run H1 on the Phase-1 candidate; completion: exit zero with captured help output.
-- [ ] 1.26 Run H2 on the Phase-1 candidate; completion: exit zero with captured help output.
-- [ ] 1.27 Complete W for the Phase-1 wheel; completion: a fresh external environment passes exact-wheel import provenance and both installed help checks, with each status recorded.
+- [x] 1.9 Implement parent request journaling; completion: test 1.1 passes with exact immutable observation snapshots and untruncated argv available to assertions.
+- [x] 1.10 Synchronize Phase-1 dispatch inventory registration; completion: explicit expected function names include every Phase-1 addition/rename currently present, preserve all unaffected contracts, and CI exits zero with exact equality and module ownership unchanged. If the deadline support module exists, its no-test-functions registration is present. Refresh this registration and CI again for later Phase-1 function changes.
+- [x] 1.11 Implement acquisition outcome association; completion: tests 1.2 and 1.3 pass without replacing the original exception/interruption or creating a second owner.
+- [x] 1.12 Implement the independent strict script cursors; completion: test 1.4 passes without search-ahead, wildcard argv acceptance or reliance on a fixed overall cleanup offset.
+- [x] 1.13 Implement synchronization for the journal; completion: test 1.5 passes and each request retains one stable ordinal and its own outcome.
+- [x] 1.14 Separate settlement checking from strict record validation without enabling timeout tolerance yet; completion: test 1.6 passes and existing `DockerSequence` behavior remains strict by default.
+- [x] 1.15 Implement bounded diagnostic rendering; completion: test 1.7 passes without additional stream collection or mandatory diagnostic-file I/O.
+- [x] 1.16 Verify operation-plus-close precedence for each Phase-1 ownership branch; completion: the matrix maps every such branch to a passing case preserving the operation failure and retaining the ordinary close failure.
+- [x] 1.17 Verify sole-close failure visibility for each Phase-1 ownership branch; completion: the mapped cases reject successful verification when release alone fails.
+- [x] 1.18 Verify interruption cleanup for each Phase-1 ownership branch; completion: the mapped cases preserve interruption identity and attempt every independent release.
+- [x] 1.19 Verify repeat-cleanup behavior for each Phase-1 ownership branch; completion: mapped cases prove once-only release and retained incomplete owners/continuation without a fresh budget.
+- [x] 1.20 Verify independent-resource cleanup for each Phase-1 ownership branch; completion: mapped cases prove a sibling ordinary release failure cannot suppress another independent release.
+- [x] 1.21 Verify handoff/concurrency ownership for each applicable Phase-1 branch; completion: mapped cases prove no owner is orphaned or released twice across the transfer/interleaving, with explicit reasons for non-applicable matrix cells.
+- [x] 1.22 Document the journal contract in support docstrings and the relevant testing-guide section; completion: the text distinguishes request/acquisition/child record/settlement, preserves registered commands, retains exactly one canonical full-suite-command occurrence in `docs/testing.md`, and every added fenced pytest suite/focused example has exactly one decimal `-n <N>` and exactly one `--dist worksteal`, with no `--numprocesses` or disabled xdist; CD exits zero.
+- [x] 1.23 Run G on the Phase-1 GREEN candidate; completion: actual exit zero, all independent gate checks attempted, no skip/xfail/xpass and complete check-process cleanup.
+- [x] 1.24 Run B on the Phase-1 candidate; completion: exit zero and the exact produced wheel path and digest are recorded.
+- [x] 1.25 Run H1 on the Phase-1 candidate; completion: exit zero with captured help output.
+- [x] 1.26 Run H2 on the Phase-1 candidate; completion: exit zero with captured help output.
+- [x] 1.27 Complete W for the Phase-1 wheel; completion: a fresh external environment passes exact-wheel import provenance and both installed help checks, with each status recorded.
 
 ### INTROSPECT
 
-- [ ] 1.28 Audit the Phase-1 journal's observation boundary; completion: record a review showing that neither child files nor launch counts substitute for exact parent argv and acquisition outcomes.
-- [ ] 1.29 Audit Phase-1 ownership and concurrency; completion: record the branch-to-matrix mapping and confirm no extra owner, second collection, independent signal/reap or unprotected handoff remains.
-- [ ] 1.30 Audit compatibility of existing support callers; completion: record the strict-default regression results and resolve every unintended change before proceeding.
+- [x] 1.28 Audit the Phase-1 journal's observation boundary; completion: record a review showing that neither child files nor launch counts substitute for exact parent argv and acquisition outcomes.
+- [x] 1.29 Audit Phase-1 ownership and concurrency; completion: record the branch-to-matrix mapping and confirm no extra owner, second collection, independent signal/reap or unprotected handoff remains.
+- [x] 1.30 Audit compatibility of existing support callers; completion: record the strict-default regression results and resolve every unintended change before proceeding.
 
 ### VALIDATE
 
-- [ ] 1.31 Run S01–S10 once each on the accepted Phase-1 candidate; completion: every suite passes with no skip/xfail/xpass and its counts/status are recorded.
-- [ ] 1.32 Run F in the Phase-1 W environment; completion: exit zero with no skip/xfail/xpass and installed-package provenance retained.
-- [ ] 1.33 Accept the Phase-1 evidence package; completion: its self-contained summary accounts for every required command and deliverable, confirms G/B/H1/H2/W applicability after review, and identifies no unresolved failure or out-of-scope change.
+- [x] 1.31 Run S01–S10 once each on the accepted Phase-1 candidate; completion: every suite passes with no skip/xfail/xpass and its counts/status are recorded.
+- [x] 1.32 Run F in the Phase-1 W environment; completion: exit zero with no skip/xfail/xpass and installed-package provenance retained.
+- [x] 1.33 Accept the Phase-1 evidence package; completion: its self-contained summary accounts for every required command and deliverable, confirms G/B/H1/H2/W applicability after review, and identifies no unresolved failure or out-of-scope change.
 
 ## 2. Phase 2 — Deterministic deadline policy
 

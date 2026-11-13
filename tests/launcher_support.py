@@ -50,8 +50,31 @@ class DockerSequence:
     def calls(self):
         return [json.loads(read_bytes(path)) for path in self.stub.records]
 
-    def assert_settled(self):
-        assert all(owner.cleanup_status.complete for owner in self.owners)
+    def assert_owners_settled(self):
+        """Check local completion only, retaining failures for scenario policy.
+
+        A settled owner can retain an operation or release failure. Returning
+        these same observations lets callers check failure policy separately,
+        without another wait, collection, cleanup attempt or renewed budget.
+        """
+        observations = tuple(owner.cleanup_status for owner in self.owners)
+        if not all(status.complete for status in observations):
+            raise AssertionError(f"helper settlement incomplete: {observations!r}")
+        return observations
+
+    def assert_records(self):
+        """Strict child evidence for every requested record, without tolerance."""
         for call, (argv, _) in zip(self.calls(), self.parameters, strict=True):
-            assert call["argv"] == argv[1:]
-            assert call["stdin_eof"], "every helper must receive closed stdin"
+            if call["argv"] != argv[1:]:
+                raise AssertionError("unexpected child argv")
+            if call["stdin_eof"] is not True:
+                raise AssertionError("every helper must receive closed stdin")
+
+    def assert_settled(self):
+        """Require completion and strict records, not operation success.
+
+        As in existing negative-contract callers, the scenario must separately
+        check retained failures. Completion does not certify successful release.
+        """
+        self.assert_owners_settled()
+        self.assert_records()

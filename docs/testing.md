@@ -313,6 +313,53 @@ and no-follow cleanup. See [incomplete-run reconciliation](reconciliation.md). I
 removal or copy proofs. Validation also runs every earlier phase suite, the
 unscoped green gate, build/help and exact-wheel installation checks.
 
+### Settlement, records and expected failures
+
+`DockerSequence.assert_owners_settled()` checks local cleanup completion only
+and returns the retained lifecycle observations. Completion does not mean the
+operation or every release succeeded. `assert_records()` separately requires
+valid child records; the compatibility entry point `assert_settled()` requires
+both completion and strict records, leaving operation verdicts to each scenario.
+A child record proves that the helper reached its recording point, not that
+cleanup or external work succeeded; a parent launch request alone proves neither
+acquisition nor child execution.
+
+The deadline-only `LaunchJournal` records entry to the parent launch boundary
+before acquisition, with a stable ordinal, literal argv and the passed execution
+and grace allowances. Its working and cleanup scripts have independent strict
+cursors: any valid working prefix may transition to exact recorded-ID cleanup,
+without search-ahead or a fixed cleanup offset. Immutable snapshots distinguish
+requested, acquired, failed and interrupted attempts; results and caller-supplied
+child-record observations attach to the original ordinal, including across
+cleanup-thread interleavings. Requested paths and launch counts never substitute
+for acquisition outcomes or ordered exact argv. Admission observations do not
+claim atomic kernel process creation before an absolute timestamp.
+
+The journal and its diagnostics borrow existing owners and results. Successful
+handoff leaves context exit with the caller; if publication fails after
+acquisition, the launch wrapper forwards context exit exactly once to that same
+sole owner, retaining it for observation even if cleanup is incomplete. It never
+creates a second owner, collects again or independently signals/reaps/releases
+borrowed pipes. Acquisition exceptions and first interruptions retain authority
+over ordinary observation/release failures. Diagnostics use retained observations
+only, are capped at 64 KiB of UTF-8 with an explicit truncation marker, and keep
+full argv and record bytes in memory for assertions. Record availability is
+explicitly unobserved until the caller supplies evidence; retaining absent,
+available or read-failed evidence neither validates a record nor permits its
+absence. No timeout-record tolerance is enabled by this Phase-1 support.
+
+Deadline-specific `assert_lifecycle_failures()` defaults to rejecting every
+retained failure. Negative scenarios can declare exact expected ACTION/CALLBACK
+observations for that helper: exception identity, kind, phase, stream, order and
+multiplicity must match. Expectations must be independently declared, never
+copied from the actual failures to make a check pass. Release or other helper
+infrastructure failures and unexpected defects cannot be declared acceptable.
+An expected operation failure therefore cannot hide a simultaneous release
+failure, incomplete local cleanup or a missing mandatory record. These checks
+only inspect retained observations; they do not collect again, retry cleanup or
+renew budgets. Existing domain-failure/interruption scenarios retain their
+separate verdict assertions.
+
 ## Phase 7 result delivery suite
 
 Use the Phase 1 prerequisites; Docker is not required. Run this exact command

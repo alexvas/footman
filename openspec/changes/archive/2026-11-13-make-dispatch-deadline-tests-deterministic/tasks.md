@@ -306,53 +306,53 @@ Dependency: accepted Phase 2. Do not begin RED until task 2.29 and all preceding
 
 ### RED
 
-- [ ] 3.1 Add per-helper timeout-record eligibility tests; completion: only an acquired positively timed-out working helper with completed local cleanup can have unavailable record evidence.
-- [ ] 3.2 Add incomplete-record classification tests; completion: proper expected prefixes are distinguishable from complete invalid records, arbitrary corruption and independent read/release errors.
-- [ ] 3.3 Add timeout-verdict rejection tests; completion: synthetic acquisition/import/ordinary-exit failures and unexpected lifecycle failures cannot satisfy the real-timeout verdict merely because the run failed.
-- [ ] 3.4 Add known-identity cleanup-verdict tests; completion: the verdict requires exact ordered rm/confirmation, complete empty successful listing, local settlement and expected snapshot deletion.
-- [ ] 3.5 Add unknown-identity cleanup-verdict tests; completion: no guessed cleanup, retained snapshot and explicit unresolved state are required despite local settlement.
-- [ ] 3.6 Record Phase-3 RED with S07 before implementation; completion: actual new assertion failures establish missing Phase-3 behavior with the exact nonzero status and complete output temporarily captured.
+- [x] 3.1 Add per-helper timeout-record eligibility tests; completion: only an acquired positively timed-out working helper with completed local cleanup can have unavailable record evidence.
+- [x] 3.2 Add incomplete-record classification tests; completion: proper expected prefixes are distinguishable from complete invalid records, arbitrary corruption and independent read/release errors.
+- [x] 3.3 Add timeout-verdict rejection tests; completion: synthetic acquisition/import/ordinary-exit failures and unexpected lifecycle failures cannot satisfy the real-timeout verdict merely because the run failed.
+- [x] 3.4 Add known-identity cleanup-verdict tests; completion: the verdict requires exact ordered rm/confirmation, complete empty successful listing, local settlement and expected snapshot deletion.
+- [x] 3.5 Add unknown-identity cleanup-verdict tests; completion: no guessed cleanup, retained snapshot and explicit unresolved state are required despite local settlement.
+- [x] 3.6 Record Phase-3 RED with S07 before implementation; completion: actual new assertion failures establish missing Phase-3 behavior with the exact nonzero status and complete output temporarily captured.
 
 ### GREEN
 
-- [ ] 3.7 Implement explicit per-attempt timeout-record eligibility; completion: test 3.1 passes without changing strict defaults or inferring timeout/acquisition from file absence.
-- [ ] 3.8 Implement incomplete-record classification; completion: test 3.2 passes under the prescribed prefix rule without a blanket file/decode-error filter.
-- [ ] 3.9 Implement the positive-timeout verdict; completion: test 3.3 passes using the exact retained attempt result and rejecting unexplained status/lifecycle failures.
-- [ ] 3.10 Implement the known-identity cleanup verdict; completion: test 3.4 passes and rejects incomplete/nonempty/failed confirmation or premature snapshot deletion.
-- [ ] 3.11 Implement the unknown-identity cleanup verdict; completion: test 3.5 passes and rejects guessed cleanup, missing unresolved state or deleted snapshot.
-- [ ] 3.12 Add the stage-independent real-process timeout scenario; completion: real sole-owned children use the fixed 0.3/1-second allowances and full working script with terminal delay 2, the actual timed-out attempt is identified, and no later working request appears.
-- [ ] 3.13 Synchronize Phase-3 dispatch inventory registration; completion: explicit expected function names include every Phase-3 addition/rename currently present, retain all unaffected contracts and any created support-module registration, and CI exits zero with exact equality and module ownership unchanged. Refresh registration and CI for later Phase-3 function changes.
-- [ ] 3.14 Verify real-process local settlement; completion: task 3.12 checks every acquired owner after execution and fails on incomplete cleanup or unexpected release failure without new waits/budgets outside the existing owner contract.
-- [ ] 3.15 Add deterministic absent-record classification coverage; completion: explicitly synthetic acquired/timed-out/settled attempt observations admit only their own deliberately absent fixture record, with no claim that synthetic data proves real child execution. Real timeout evidence remains independently required by task 3.12.
-- [ ] 3.16 Add deterministic interrupted-record classification coverage; completion: explicitly supplied proper-prefix fixture bytes are admitted only for the mapped synthetic timed-out/settled attempt. Do not require a real child to reach a write before the deadline, seed fake child evidence into the real integration scenario, or claim an actual interrupted write from this classifier test.
-- [ ] 3.17 Verify complete-record strictness for timed-out helpers; completion: complete wrong-argv, invalid-schema and stdin-not-EOF records are rejected even when their synthetic or real result is timed out, with synthetic controls labeled.
-- [ ] 3.18 Verify mandatory records for successful helpers; completion: a successful working or cleanup helper with absent/incomplete/corrupt evidence is rejected and cannot inherit another attempt's timeout eligibility.
-- [ ] 3.19 Verify known-identity handling through the real supervisor using controlled no-fd results; completion: the executed known-ID branch confirms absence, deletes its snapshot and reports no unresolved resources without relying on random real-child stage timing.
-- [ ] 3.20 Verify unknown-identity handling through the real supervisor using controlled no-fd results; completion: the executed startup-timeout branch retains its snapshot and unresolved state, launches no guessed cleanup and settles local owners.
-- [ ] 3.21 Verify Phase-3 operation-plus-close precedence; completion: every new/changed ownership branch has a passing case preserving the operation failure while retaining the ordinary close failure, or a justified unchanged-branch/non-applicability mapping.
-- [ ] 3.22 Verify Phase-3 sole-close failure visibility; completion: the mapped cases reject successful verification when release alone fails.
-- [ ] 3.23 Verify Phase-3 interruption cleanup; completion: the mapped cases preserve interruption identity and attempt independent releases.
-- [ ] 3.24 Verify Phase-3 repeat-cleanup behavior; completion: the mapped cases prove once-only release and retained incomplete owners/continuation without a fresh budget.
-- [ ] 3.25 Verify Phase-3 independent-resource cleanup; completion: mapped cases prove one ordinary release failure cannot suppress a sibling independent release.
-- [ ] 3.26 Verify Phase-3 handoff/concurrency ownership; completion: applicable mapped cases prove a coherent handoff/interleaving with one release authority; justify non-applicable cells explicitly.
-- [ ] 3.27 Document the final evidence rules; completion: guide/docstrings explain scoped record absence, stage-independent real timeout and both identity branches without claiming Docker semantics or historical root cause; preserve registered commands and exactly one canonical full-suite-command occurrence in `docs/testing.md`; every added fenced pytest suite/focused example has exactly one decimal `-n <N>` and exactly one `--dist worksteal`, with no `--numprocesses` or disabled xdist; CD exits zero.
-- [ ] 3.28 Run G on the Phase-3 GREEN candidate; completion: actual exit zero, no skip/xfail/xpass and complete check-process cleanup.
-- [ ] 3.29 Run B on the Phase-3 candidate; completion: exit zero and its exact wheel path/digest are recorded.
-- [ ] 3.30 Run H1 on the Phase-3 candidate; completion: exit zero with captured help output.
-- [ ] 3.31 Run H2 on the Phase-3 candidate; completion: exit zero with captured help output.
-- [ ] 3.32 Complete W for the Phase-3 wheel; completion: a new external environment passes exact-wheel provenance and both installed help checks with all statuses recorded.
+- [x] 3.7 Implement explicit per-attempt timeout-record eligibility; completion: test 3.1 passes without changing strict defaults or inferring timeout/acquisition from file absence.
+- [x] 3.8 Implement incomplete-record classification; completion: test 3.2 passes under the prescribed prefix rule without a blanket file/decode-error filter.
+- [x] 3.9 Implement the positive-timeout verdict; completion: test 3.3 passes using the exact retained attempt result and rejecting unexplained status/lifecycle failures.
+- [x] 3.10 Implement the known-identity cleanup verdict; completion: test 3.4 passes and rejects incomplete/nonempty/failed confirmation or premature snapshot deletion.
+- [x] 3.11 Implement the unknown-identity cleanup verdict; completion: test 3.5 passes and rejects guessed cleanup, missing unresolved state or deleted snapshot.
+- [x] 3.12 Add the stage-independent real-process timeout scenario; completion: real sole-owned children use the fixed 0.3/1-second allowances and full working script with terminal delay 2, the actual timed-out attempt is identified, and no later working request appears.
+- [x] 3.13 Synchronize Phase-3 dispatch inventory registration; completion: explicit expected function names include every Phase-3 addition/rename currently present, retain all unaffected contracts and any created support-module registration, and CI exits zero with exact equality and module ownership unchanged. Refresh registration and CI for later Phase-3 function changes.
+- [x] 3.14 Verify real-process local settlement; completion: task 3.12 checks every acquired owner after execution and fails on incomplete cleanup or unexpected release failure without new waits/budgets outside the existing owner contract.
+- [x] 3.15 Add deterministic absent-record classification coverage; completion: explicitly synthetic acquired/timed-out/settled attempt observations admit only their own deliberately absent fixture record, with no claim that synthetic data proves real child execution. Real timeout evidence remains independently required by task 3.12.
+- [x] 3.16 Add deterministic interrupted-record classification coverage; completion: explicitly supplied proper-prefix fixture bytes are admitted only for the mapped synthetic timed-out/settled attempt. Do not require a real child to reach a write before the deadline, seed fake child evidence into the real integration scenario, or claim an actual interrupted write from this classifier test.
+- [x] 3.17 Verify complete-record strictness for timed-out helpers; completion: complete wrong-argv, invalid-schema and stdin-not-EOF records are rejected even when their synthetic or real result is timed out, with synthetic controls labeled.
+- [x] 3.18 Verify mandatory records for successful helpers; completion: a successful working or cleanup helper with absent/incomplete/corrupt evidence is rejected and cannot inherit another attempt's timeout eligibility.
+- [x] 3.19 Verify known-identity handling through the real supervisor using controlled no-fd results; completion: the executed known-ID branch confirms absence, deletes its snapshot and reports no unresolved resources without relying on random real-child stage timing.
+- [x] 3.20 Verify unknown-identity handling through the real supervisor using controlled no-fd results; completion: the executed startup-timeout branch retains its snapshot and unresolved state, launches no guessed cleanup and settles local owners.
+- [x] 3.21 Verify Phase-3 operation-plus-close precedence; completion: every new/changed ownership branch has a passing case preserving the operation failure while retaining the ordinary close failure, or a justified unchanged-branch/non-applicability mapping.
+- [x] 3.22 Verify Phase-3 sole-close failure visibility; completion: the mapped cases reject successful verification when release alone fails.
+- [x] 3.23 Verify Phase-3 interruption cleanup; completion: the mapped cases preserve interruption identity and attempt independent releases.
+- [x] 3.24 Verify Phase-3 repeat-cleanup behavior; completion: the mapped cases prove once-only release and retained incomplete owners/continuation without a fresh budget.
+- [x] 3.25 Verify Phase-3 independent-resource cleanup; completion: mapped cases prove one ordinary release failure cannot suppress a sibling independent release.
+- [x] 3.26 Verify Phase-3 handoff/concurrency ownership; completion: applicable mapped cases prove a coherent handoff/interleaving with one release authority; justify non-applicable cells explicitly.
+- [x] 3.27 Document the final evidence rules; completion: guide/docstrings explain scoped record absence, stage-independent real timeout and both identity branches without claiming Docker semantics or historical root cause; preserve registered commands and exactly one canonical full-suite-command occurrence in `docs/testing.md`; every added fenced pytest suite/focused example has exactly one decimal `-n <N>` and exactly one `--dist worksteal`, with no `--numprocesses` or disabled xdist; CD exits zero.
+- [x] 3.28 Run G on the Phase-3 GREEN candidate; completion: actual exit zero, no skip/xfail/xpass and complete check-process cleanup.
+- [x] 3.29 Run B on the Phase-3 candidate; completion: exit zero and its exact wheel path/digest are recorded.
+- [x] 3.30 Run H1 on the Phase-3 candidate; completion: exit zero with captured help output.
+- [x] 3.31 Run H2 on the Phase-3 candidate; completion: exit zero with captured help output.
+- [x] 3.32 Complete W for the Phase-3 wheel; completion: a new external environment passes exact-wheel provenance and both installed help checks with all statuses recorded.
 
 ### INTROSPECT
 
-- [ ] 3.33 Audit the timeout/record decision table; completion: record executed passing/rejected node IDs for every row and confirm no missing evidence is upgraded into child-execution or external-success proof.
-- [ ] 3.34 Audit Phase-3 lifecycle and budgets; completion: record the branch-to-matrix mapping and confirm sole release authority, once-only collection, fixed allowances, no helper retries and no independent signal/wait/reap/borrowed close.
-- [ ] 3.35 Audit final scope and spec coverage; completion: map all seven spec requirements to executed nodes, verify each phase's documentation is present, and confirm no unauthorized path, Cold-gate optimization, pending-change task or production behavior was changed.
+- [x] 3.33 Audit the timeout/record decision table; completion: record executed passing/rejected node IDs for every row and confirm no missing evidence is upgraded into child-execution or external-success proof.
+- [x] 3.34 Audit Phase-3 lifecycle and budgets; completion: record the branch-to-matrix mapping and confirm sole release authority, once-only collection, fixed allowances, no helper retries and no independent signal/wait/reap/borrowed close.
+- [x] 3.35 Audit final scope and spec coverage; completion: map all seven spec requirements to executed nodes, verify each phase's documentation is present, and confirm no unauthorized path, Cold-gate optimization, pending-change task or production behavior was changed.
 
 ### VALIDATE
 
-- [ ] 3.36 Run S01–S10 once each on the accepted final candidate; completion: every suite passes with no skip/xfail/xpass and its counts/status are recorded.
-- [ ] 3.37 Run F in the Phase-3 W environment; completion: exit zero with no skip/xfail/xpass and installed-package provenance retained.
-- [ ] 3.38 Accept the final evidence package; completion: the self-contained summary accounts for all required commands/deliverables, confirms final G/B/H1/H2/W applicability after review, preserves unsuccessful historical results and states no unresolved failure or unauthorized scope expansion.
+- [x] 3.36 Run S01–S10 once each on the accepted final candidate; completion: every suite passes with no skip/xfail/xpass and its counts/status are recorded.
+- [x] 3.37 Run F in the Phase-3 W environment; completion: exit zero with no skip/xfail/xpass and installed-package provenance retained.
+- [x] 3.38 Accept the final evidence package; completion: the self-contained summary accounts for all required commands/deliverables, confirms final G/B/H1/H2/W applicability after review, preserves unsuccessful historical results and states no unresolved failure or unauthorized scope expansion.
 
 ## Workflow follow-up
 

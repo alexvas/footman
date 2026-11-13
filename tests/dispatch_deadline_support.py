@@ -50,6 +50,161 @@ def assert_lifecycle_failures(lifecycle, *, expected=()):
         )
 
 
+def read_child_record(path, *, open_record=None, read_record=None, ops=None):
+    """Only an open-time ENOENT is absence; read/sole-close errors propagate.
+
+    Prepare adoption inputs before acquisition, then immediately assign the one
+    descriptor owner. Repeat observations never retry its close. Injection seams
+    are for synthetic lifecycle fault tests, not alternative release authority.
+    """
+    import os
+
+    from footman.filesystem.descriptors import OwnedDescriptor
+    from footman.filesystem.operations import PosixDescriptorOps
+
+    ops = PosixDescriptorOps() if ops is None else ops
+    open_record = os.open if open_record is None else open_record
+    read_record = os.read if read_record is None else read_record
+    label = "deadline child record"
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    try:
+        fd = open_record(path, flags)
+    except FileNotFoundError:
+        return ChildRecordObservation("absent")
+    with OwnedDescriptor(ops, fd, label=label) as owner:
+        chunks = []
+        while chunk := read_record(owner.fd, 65536):
+            chunks.append(chunk)
+        return ChildRecordObservation("available", b"".join(chunks))
+
+
+def _assert_attempt_settled(attempt):
+    """Borrow both delivered and current lifecycle observations; never wait."""
+    if (
+        attempt.acquisition != "acquired"
+        or attempt.owner is None
+        or attempt.error is not None
+    ):
+        raise AssertionError("attempt has no successful owner handoff")
+    if attempt.result is None:
+        raise AssertionError("attempt has no retained result")
+    for status in (attempt.result.lifecycle, attempt.owner.cleanup_status):
+        if not status.complete:
+            raise AssertionError("helper cleanup incomplete")
+        assert_lifecycle_failures(status)
+
+
+def validate_timeout_record(attempt, *, expected):
+    """Validate exact sequenced-stub bytes, with per-attempt timeout tolerance.
+
+    Synthetic callers prove classification only. Missing/proper-prefix bytes
+    never establish child execution, argv or stdin EOF. All complete records
+    remain strict; independent read/release errors are never absence.
+    """
+    import json
+
+    _assert_attempt_settled(attempt)
+    eligible = attempt.phase == "working" and attempt.result.timed_out is True
+    record = attempt.record
+    if record.error is not None or record.availability == "read-failed":
+        raise AssertionError("independent child record read/release failure")
+    if record.availability == "absent":
+        if not eligible:
+            raise AssertionError("mandatory child record absent")
+        return "absent"
+    if record.availability != "available" or not isinstance(record.data, bytes):
+        raise AssertionError("child record not observed")
+    data = record.data
+    if len(data) < len(expected) and expected.startswith(data):
+        if not eligible:
+            raise AssertionError("mandatory child record incomplete")
+        return "incomplete"
+    try:
+        value = json.loads(data)
+        declared = json.loads(expected)
+    except (ValueError, UnicodeError) as error:
+        raise AssertionError("corrupt child record") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"argv", "container_id", "status", "stdin_eof"}
+        or type(value.get("status")) is not int
+        or value.get("argv") != list(attempt.argv[1:])
+        or value.get("stdin_eof") is not True
+        or value != declared
+    ):
+        raise AssertionError("invalid complete child record")
+    return "complete"
+
+
+def assert_positive_timeout(attempts):
+    """Return the exact retained timeout attempt; generic run failure is not proof."""
+    attempts = tuple(attempts)
+    for attempt in attempts:
+        _assert_attempt_settled(attempt)
+    working = tuple(a for a in attempts if a.phase == "working")
+    timed_out = tuple(a for a in working if a.result.timed_out is True)
+    if len(timed_out) != 1 or timed_out[0] is not working[-1]:
+        raise AssertionError("one positive timeout must terminate working requests")
+    for attempt in attempts:
+        if attempt is not timed_out[0] and (
+            attempt.result.timed_out or attempt.result.returncode != 0
+        ):
+            raise AssertionError("unexpected non-timeout helper failure")
+    return timed_out[0]
+
+
+def assert_identity_cleanup(run, attempts, *, cleanup):
+    """Check identity attribution independently of records and timeout evidence.
+
+    Callers must additionally validate mandatory child records. This verdict
+    borrows observations only: no cleanup retry, extra reader or fresh budget.
+    """
+    from footman.process import ProcessStream, StreamOutcome
+
+    attempts = tuple(attempts)
+    for attempt in attempts:
+        _assert_attempt_settled(attempt)
+    actual = tuple(a for a in attempts if a.phase == "cleanup")
+    if run.execution.container_id is None:
+        if (
+            actual
+            or not run.unresolved_resources
+            or run.snapshot_deleted
+            or not run.snapshot.path.exists()
+        ):
+            raise AssertionError(
+                "unknown identity must remain unresolved with retained snapshot and no guessed cleanup"
+            )
+        return
+    identity = run.execution.container_id
+    from tests.dispatch_support import removal
+
+    literal = tuple(tuple(s["argv"]) for s in removal(identity))
+    if tuple(cleanup) != literal or tuple(a.argv for a in actual) != literal:
+        raise AssertionError(
+            "known identity requires exact ordered removal and confirmation"
+        )
+    for attempt in actual:
+        result = attempt.result
+        if (
+            result.timed_out
+            or result.returncode != 0
+            or result.stream_outcomes
+            != tuple((s, StreamOutcome.EOF) for s in ProcessStream)
+        ):
+            raise AssertionError("cleanup helper did not complete successfully")
+    if actual[-1].result.stdout != b"":
+        raise AssertionError("removal confirmation must be empty")
+    if (
+        run.unresolved_resources
+        or not run.snapshot_deleted
+        or run.snapshot.path.exists()
+    ):
+        raise AssertionError(
+            "known identity cleanup did not resolve resources and delete snapshot"
+        )
+
+
 def _raise(error):
     raise error
 
@@ -341,7 +496,7 @@ class ScriptedHelper:
             self.step.get("stdout", b""),
             self.step.get("stderr", b""),
             self.step.get("status", 0),
-            False,
+            self.step.get("timed_out", False),
             self.cleanup_status,
             tuple((s, StreamOutcome.EOF) for s in ProcessStream),
         )

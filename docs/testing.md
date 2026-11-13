@@ -374,7 +374,33 @@ only, are capped at 64 KiB of UTF-8 with an explicit truncation marker, and keep
 full argv and record bytes in memory for assertions. Record availability is
 explicitly unobserved until the caller supplies evidence; retaining absent,
 available or read-failed evidence neither validates a record nor permits its
-absence. No timeout-record tolerance is enabled by this Phase-1 support.
+absence. No timeout-record tolerance is enabled by this Phase-1 journal itself.
+
+Phase-3 deadline verdicts opt in per attempt: only an acquired working helper
+with its own positive timeout result and completed, failure-free local cleanup
+may lack a child record. Empty bytes or a proper byte prefix of the independently
+expected sequenced-stub JSON are unavailable diagnostics, not proof of child
+execution, argv or stdin EOF. Complete records remain strict, including schema,
+argv and stdin EOF. Successful working and cleanup helpers require complete
+records and cannot inherit a neighboring helper's timeout eligibility.
+`read_child_record` uses one `OwnedDescriptor` and no-follow opening: only
+open-time file absence is classified as absent; read, permission and release
+errors remain failures. It never retries a close.
+
+The real-process scenario keeps the configured 0.3-second execution and 1-second
+cleanup budgets, supplies all five working steps and delays only the terminal
+step by 2 seconds. Existing production policy subdivides cleanup allowances
+among helpers; no budget is enlarged or renewed. The verdict identifies the
+actual retained timeout and forbids later working requests, without requiring a
+particular stage or any child write to have occurred. Real watchdogs stay real.
+Known identity requires exact recorded-ID removal and complete successful empty
+listing, local settlement and snapshot deletion. Startup timeout without an
+attributable identity requires no guessed cleanup, unresolved-resource reporting
+and snapshot retention. Controlled no-fd outcomes exercise both identity
+branches independently of real-child stage timing. Synthetic absent/prefix,
+invalid-record and lifecycle controls prove classification only, not OS child
+execution or external-resource success. These tests neither prove Docker
+semantics nor establish the historical missing record's root cause.
 
 Deadline-specific `assert_lifecycle_failures()` defaults to rejecting every
 retained failure. Negative scenarios can declare exact expected ACTION/CALLBACK

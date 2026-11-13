@@ -16,6 +16,590 @@ from tests.launcher_support import DockerSequence
 __all__ = ["source"]
 
 
+def _phase3_support():
+    support = importlib.import_module("tests.dispatch_deadline_support")
+    assert callable(getattr(support, "validate_timeout_record", None)), (
+        "required per-attempt timeout record validation is absent"
+    )
+    return support
+
+
+def _synthetic_timeout_attempt(**changes):
+    """Classifier input only: never evidence of real child execution."""
+    from footman.process import LifecycleResult, ProcessResult
+    from tests.dispatch_deadline_support import ChildRecordObservation, LaunchAttempt
+
+    status = LifecycleResult(True)
+    values = dict(
+        ordinal=0,
+        phase="working",
+        argv=("docker", "run", "fixture"),
+        deadline_seconds=0.3,
+        grace_seconds=1,
+        acquisition="acquired",
+        owner=SimpleNamespace(cleanup_status=status),
+        result=ProcessResult(b"", b"", -15, True, status),
+        record=ChildRecordObservation("absent"),
+    )
+    values.update(changes)
+    return LaunchAttempt(**values)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [None, "requested", "failed", "cleanup", "success", "incomplete", "release"],
+)
+def test_timeout_record_eligibility_is_per_attempt(defect):
+    """Synthetic observations must not lend eligibility to another helper."""
+    from dataclasses import replace
+
+    from footman.process import FailureInfo, FailureKind, FailurePhase, LifecycleResult
+
+    support = _phase3_support()
+    attempt = _synthetic_timeout_attempt()
+    if defect in ("requested", "failed"):
+        attempt = replace(attempt, acquisition=defect, owner=None)
+    elif defect == "cleanup":
+        attempt = replace(attempt, phase="cleanup")
+    elif defect == "success":
+        attempt = replace(
+            attempt, result=replace(attempt.result, timed_out=False, returncode=0)
+        )
+    elif defect in ("incomplete", "release"):
+        failures = (
+            ()
+            if defect == "incomplete"
+            else (
+                FailureInfo(
+                    OSError("synthetic close"),
+                    FailureKind.ORDINARY,
+                    FailurePhase.RELEASE,
+                ),
+            )
+        )
+        attempt = replace(
+            attempt,
+            owner=SimpleNamespace(
+                cleanup_status=LifecycleResult(defect != "incomplete", failures)
+            ),
+        )
+    expected = json.dumps(
+        {
+            "argv": list(attempt.argv[1:]),
+            "container_id": None,
+            "status": 0,
+            "stdin_eof": True,
+        }
+    ).encode()
+    if defect is None:
+        assert support.validate_timeout_record(attempt, expected=expected) == "absent"
+    else:
+        with pytest.raises(AssertionError):
+            support.validate_timeout_record(attempt, expected=expected)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "empty",
+        "prefix",
+        "complete",
+        "wrong-argv",
+        "schema",
+        "stdin",
+        "corrupt",
+        "read",
+        "close",
+    ],
+)
+def test_timeout_record_classifies_only_expected_prefixes(kind):
+    """Explicit synthetic bytes, not an assertion of an actual interrupted write."""
+    from dataclasses import replace
+
+    from tests.dispatch_deadline_support import ChildRecordObservation
+
+    support = _phase3_support()
+    payload = {
+        "argv": ["run", "fixture"],
+        "container_id": None,
+        "status": 0,
+        "stdin_eof": True,
+    }
+    expected = json.dumps(payload).encode()
+    data = expected
+    if kind == "empty":
+        data = b""
+    elif kind == "prefix":
+        data = expected[: len(expected) // 2]
+    elif kind == "corrupt":
+        data = b'{"arbitrary":broken'
+    elif kind in ("wrong-argv", "schema", "stdin"):
+        payload.update(
+            {
+                "wrong-argv": {"argv": ["rm", "guessed"]},
+                "schema": {"extra": 1},
+                "stdin": {"stdin_eof": False},
+            }[kind]
+        )
+        data = json.dumps(payload).encode()
+    error = (
+        OSError("synthetic independent record " + kind)
+        if kind in ("read", "close")
+        else None
+    )
+    record = ChildRecordObservation(
+        "read-failed" if error else "available", data, error
+    )
+    attempt = replace(_synthetic_timeout_attempt(), record=record)
+    if kind in ("empty", "prefix", "complete"):
+        assert support.validate_timeout_record(attempt, expected=expected) == (
+            "complete" if kind == "complete" else "incomplete"
+        )
+    else:
+        with pytest.raises(AssertionError):
+            support.validate_timeout_record(attempt, expected=expected)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [None, "acquisition", "import", "ordinary-exit", "release", "later-working"],
+)
+def test_timeout_verdict_requires_positive_retained_result(defect):
+    """Synthetic rejection controls cannot establish a real timeout."""
+    from dataclasses import replace
+
+    from footman.process import FailureInfo, FailureKind, FailurePhase, LifecycleResult
+
+    support = _phase3_support()
+    assert callable(getattr(support, "assert_positive_timeout", None)), (
+        "required positive timeout verdict is absent"
+    )
+    attempt = _synthetic_timeout_attempt()
+    if defect == "acquisition":
+        attempt = replace(
+            attempt,
+            acquisition="failed",
+            owner=None,
+            result=None,
+            error=OSError("synthetic acquisition"),
+        )
+    elif defect in ("import", "ordinary-exit"):
+        attempt = replace(
+            attempt, result=replace(attempt.result, timed_out=False, returncode=1)
+        )
+    elif defect == "release":
+        status = LifecycleResult(
+            True,
+            (
+                FailureInfo(
+                    OSError("synthetic release"),
+                    FailureKind.ORDINARY,
+                    FailurePhase.RELEASE,
+                ),
+            ),
+        )
+        attempt = replace(attempt, owner=SimpleNamespace(cleanup_status=status))
+    attempts = (attempt,)
+    if defect == "later-working":
+        attempts += (replace(_synthetic_timeout_attempt(), ordinal=1),)
+    if defect is None:
+        assert support.assert_positive_timeout(attempts) is attempt
+    else:
+        with pytest.raises(AssertionError):
+            support.assert_positive_timeout(attempts)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [None, "order", "nonempty", "failed", "incomplete", "unresolved", "snapshot"],
+)
+def test_known_identity_timeout_cleanup_verdict(defect):
+    """Synthetic cleanup verdict controls require independent confirmation."""
+    from dataclasses import replace
+
+    support = _phase3_support()
+    assert callable(getattr(support, "assert_identity_cleanup", None)), (
+        "required identity-aware cleanup verdict is absent"
+    )
+    cleanup = tuple(tuple(step["argv"]) for step in removal())
+    attempts = tuple(
+        replace(_synthetic_timeout_attempt(), ordinal=i + 1, phase="cleanup", argv=argv)
+        for i, argv in enumerate(cleanup)
+    )
+    attempts = tuple(
+        replace(a, result=replace(a.result, timed_out=False, returncode=0))
+        for a in attempts
+    )
+    run = SimpleNamespace(
+        execution=SimpleNamespace(container_id=ID),
+        unresolved_resources=False,
+        snapshot_deleted=True,
+        snapshot=SimpleNamespace(path=SimpleNamespace(exists=lambda: False)),
+    )
+    if defect == "order":
+        attempts = tuple(reversed(attempts))
+    elif defect in ("nonempty", "failed", "incomplete"):
+        result = replace(
+            attempts[-1].result,
+            stdout=b"unexpected-id\n" if defect == "nonempty" else b"",
+            returncode=1 if defect == "failed" else 0,
+            stream_outcomes=(),
+        )
+        attempts = (*attempts[:-1], replace(attempts[-1], result=result))
+    if defect != "incomplete":
+        from footman.process import ProcessStream, StreamOutcome
+
+        attempts = tuple(
+            replace(
+                a,
+                result=replace(
+                    a.result,
+                    stream_outcomes=tuple(
+                        (s, StreamOutcome.EOF) for s in ProcessStream
+                    ),
+                ),
+            )
+            for a in attempts
+        )
+    if defect == "unresolved":
+        run.unresolved_resources = True
+    if defect == "snapshot":
+        run.snapshot_deleted = False
+    if defect is None:
+        support.assert_identity_cleanup(run, attempts, cleanup=cleanup)
+    else:
+        with pytest.raises(AssertionError):
+            support.assert_identity_cleanup(run, attempts, cleanup=cleanup)
+
+
+@pytest.mark.parametrize(
+    "defect", [None, "guessed", "resolved", "deleted", "incomplete"]
+)
+def test_unknown_identity_timeout_cleanup_verdict(defect):
+    """Unknown identity is an unresolved negative contract, not external success."""
+    from dataclasses import replace
+
+    from footman.process import LifecycleResult
+
+    support = _phase3_support()
+    assert callable(getattr(support, "assert_identity_cleanup", None)), (
+        "required unknown-identity verdict is absent"
+    )
+    attempt = _synthetic_timeout_attempt()
+    if defect == "incomplete":
+        attempt = replace(
+            attempt, owner=SimpleNamespace(cleanup_status=LifecycleResult(False))
+        )
+    attempts = (attempt,)
+    if defect == "guessed":
+        attempts += (replace(attempt, ordinal=1, phase="cleanup"),)
+    run = SimpleNamespace(
+        execution=SimpleNamespace(container_id=None),
+        unresolved_resources=defect != "resolved",
+        snapshot_deleted=defect == "deleted",
+        snapshot=SimpleNamespace(
+            path=SimpleNamespace(exists=lambda: defect != "deleted")
+        ),
+    )
+    if defect is None:
+        support.assert_identity_cleanup(
+            run, attempts, cleanup=tuple(tuple(s["argv"]) for s in removal())
+        )
+    else:
+        with pytest.raises(AssertionError):
+            support.assert_identity_cleanup(
+                run, attempts, cleanup=tuple(tuple(s["argv"]) for s in removal())
+            )
+
+
+def test_real_timeout_is_stage_independent(tmp_path, source):
+    """Actual sole-owned children; no synthetic records or forced timeout stage."""
+    from tests.dispatch_deadline_support import (
+        LaunchJournal,
+        assert_identity_cleanup,
+        assert_positive_timeout,
+        read_child_record,
+        validate_timeout_record,
+    )
+
+    cfg = config(timeout_seconds=0.3, cleanup_grace_seconds=1)
+    working = [dict(step, container_id=ID) for step in steps(source, cfg)]
+    working[-1]["delay"] = 2
+    cleanup = removal()
+    expected_working = tuple(tuple(s["argv"]) for s in working)
+    expected_cleanup = tuple(tuple(s["argv"]) for s in cleanup)
+    journal = LaunchJournal(working=expected_working, cleanup=expected_cleanup)
+    sequences = {}
+    for phase, script in (("working", working), ("cleanup", cleanup)):
+        directory = tmp_path / phase
+        directory.mkdir()
+        sequences[phase] = DockerSequence(directory, script)
+
+    def launch(argv, **options):
+        def acquire(actual, **passed):
+            phase = "cleanup" if tuple(actual) in expected_cleanup else "working"
+            return sequences[phase].launch(actual, **passed)
+
+        return journal.launch(argv, acquire=acquire, **options)
+
+    run = api().RunSupervisor(cfg, source, launch=launch)
+    run.execute(lambda *_: None, lambda *_: None)
+    results = [
+        run.execution.startup_result,
+        *(op.result for op in run.execution.infrastructure_operations),
+        run.execution.command_result,
+    ]
+    mapped = dict(zip(expected_working, results, strict=True))
+    mapped.update(
+        zip(expected_cleanup, (op.result for op in run.cleanup.operations), strict=True)
+    )
+    try:
+        assert run.failure is not None
+        for attempt in journal.snapshot():
+            assert attempt.acquisition == "acquired"
+            journal.observe_result(attempt.ordinal, mapped[attempt.argv])
+        attempts = journal.snapshot()
+        timeout = assert_positive_timeout(attempts)
+        actual_working = tuple(a.argv for a in attempts if a.phase == "working")
+        assert actual_working == expected_working[: len(actual_working)]
+        assert timeout.argv == actual_working[-1]
+        assert all(
+            0 < a.deadline_seconds <= 0.3 for a in attempts if a.phase == "working"
+        )
+        for attempt in attempts:
+            if attempt.phase == "working":
+                expected_grace = (cfg.cleanup_grace_seconds / 10) * (
+                    6 if attempt.argv == expected_working[-1] else 1
+                )
+                assert attempt.grace_seconds == expected_grace
+        for phase, sequence in sequences.items():
+            sequence.assert_owners_settled()
+            phase_attempts = tuple(a for a in attempts if a.phase == phase)
+            for attempt, path, step in zip(
+                phase_attempts,
+                sequence.stub.records,
+                sequence.steps[: len(phase_attempts)],
+                strict=True,
+            ):
+                observation = read_child_record(path)
+                journal.observe_record(
+                    attempt.ordinal,
+                    availability=observation.availability,
+                    data=observation.data,
+                )
+                expected = json.dumps(
+                    {
+                        "argv": step["argv"][1:],
+                        "container_id": ID,
+                        "status": step.get("status", 0),
+                        "stdin_eof": True,
+                    }
+                ).encode()
+                validate_timeout_record(
+                    journal.snapshot()[attempt.ordinal], expected=expected
+                )
+        assert_identity_cleanup(run, journal.snapshot(), cleanup=expected_cleanup)
+    except BaseException as primary:
+        journal.annotate_failure(primary)
+        raise
+
+
+@pytest.mark.parametrize("phase", ["working", "cleanup"])
+@pytest.mark.parametrize("kind", ["absent", "prefix", "corrupt"])
+def test_successful_helper_cannot_inherit_timeout_record_tolerance(phase, kind):
+    """Synthetic neighboring timeout cannot excuse successful helper evidence."""
+    from dataclasses import replace
+
+    from tests.dispatch_deadline_support import ChildRecordObservation
+
+    support = _phase3_support()
+    timeout = _synthetic_timeout_attempt()
+    successful = replace(
+        timeout,
+        ordinal=1,
+        phase=phase,
+        result=replace(timeout.result, timed_out=False, returncode=0),
+    )
+    expected = json.dumps(
+        {
+            "argv": ["run", "fixture"],
+            "container_id": None,
+            "status": 0,
+            "stdin_eof": True,
+        }
+    ).encode()
+    record = (
+        ChildRecordObservation("absent")
+        if kind == "absent"
+        else ChildRecordObservation(
+            "available", expected[:10] if kind == "prefix" else b"corrupt"
+        )
+    )
+    successful = replace(successful, record=record)
+    assert support.validate_timeout_record(timeout, expected=expected) == "absent"
+    with pytest.raises(AssertionError):
+        support.validate_timeout_record(successful, expected=expected)
+
+
+@pytest.mark.parametrize("index", range(4), ids=["startup", "inspect", "mkdir", "cp"])
+def test_controlled_timeout_identity_branches_use_real_supervisor(source, index):
+    """Synthetic early timeouts retain production results and identity handling."""
+    from tests.dispatch_deadline_support import (
+        LogicalScenario,
+        assert_identity_cleanup,
+        assert_positive_timeout,
+    )
+
+    cfg = config(timeout_seconds=0.3, cleanup_grace_seconds=1)
+    scenario = LogicalScenario(source, cfg)
+    known = index > 0
+    argv = tuple(scenario.working[index]["argv"])
+    scenario._script[argv] = (
+        index,
+        dict(scenario.working[index], stdout=b"", status=-15, timed_out=True),
+    )
+    with scenario:
+        run = scenario.execute()
+        assert run.failure is not None
+        attempts = scenario.journal.snapshot()
+        timeout = assert_positive_timeout(attempts)
+        assert timeout.argv == argv
+        # Production _run retains the delivered result before rejecting timeout;
+        # its caller's assignment is never reached on this failure path.
+        results = (
+            run.execution.startup_result,
+            *(op.result for op in run.execution.infrastructure_operations),
+            run.execution.command_result,
+        )
+        assert results[index] is timeout.result is timeout.owner.result
+        assert results[index].timed_out is True
+        assert results[index].returncode == -15
+        assert all(
+            result is not None and not result.timed_out for result in results[:index]
+        )
+        assert all(result is None for result in results[index + 1 :])
+        assert tuple(a.argv for a in attempts if a.phase == "working") == tuple(
+            tuple(s["argv"]) for s in scenario.working[: index + 1]
+        )
+        assert run.execution.container_id == (ID if known else None)
+        assert_identity_cleanup(
+            run, attempts, cleanup=tuple(tuple(s["argv"]) for s in scenario.cleanup)
+        )
+        if known:
+            assert run.cleanup.confirmed_absent
+        else:
+            assert not run.cleanup.confirmed_absent
+            assert run.cleanup.observe().failures
+        scenario.assert_helpers_settled()
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "absent",
+        "open-denied",
+        "read",
+        "read-enoent",
+        "close",
+        "close-enoent",
+        "both",
+        "interrupt",
+        "close-interrupt",
+        "success",
+    ],
+)
+def test_deadline_record_reader_sole_owner_fault_matrix(monkeypatch, mode):
+    """Synthetic fd number only; distinguish open absence from read/release ENOENT."""
+    import footman.filesystem.descriptors as descriptors
+    from tests.dispatch_deadline_support import read_child_record
+
+    owners = []
+    constructor = descriptors.OwnedDescriptor
+
+    def adopt(*args, **kwargs):
+        owner = constructor(*args, **kwargs)
+        owners.append(owner)
+        return owner
+
+    monkeypatch.setattr(descriptors, "OwnedDescriptor", adopt)
+    primary = (
+        KeyboardInterrupt("synthetic read control")
+        if mode == "interrupt"
+        else FileNotFoundError("synthetic read ENOENT")
+        if mode == "read-enoent"
+        else OSError("synthetic read failure")
+    )
+    close = (
+        KeyboardInterrupt("synthetic close control")
+        if mode == "close-interrupt"
+        else FileNotFoundError("synthetic close ENOENT")
+        if mode == "close-enoent"
+        else OSError("synthetic close failure")
+    )
+    attempts = []
+
+    class Ops:
+        def close(self, fd):
+            attempts.append(fd)
+            if mode in ("close", "close-enoent", "both", "close-interrupt"):
+                raise close
+
+    def acquire(path, flags):
+        if mode == "absent":
+            raise FileNotFoundError("synthetic open ENOENT")
+        if mode == "open-denied":
+            raise PermissionError("synthetic no-follow/permission refusal")
+        return 123456  # No actual OS fd acquired by this synthetic fixture.
+
+    def read(fd, size):
+        if mode in ("read", "read-enoent", "both", "interrupt"):
+            raise primary
+        return b""
+
+    def invoke():
+        return read_child_record(
+            "synthetic", open_record=acquire, read_record=read, ops=Ops()
+        )
+
+    if mode in ("absent", "success"):
+        observation = invoke()
+        assert observation.availability == (
+            "absent" if mode == "absent" else "available"
+        )
+    else:
+        expected = (
+            PermissionError
+            if mode == "open-denied"
+            else type(primary)
+            if mode in ("read", "read-enoent", "both", "interrupt")
+            else type(close)
+        )
+        with pytest.raises(expected) as caught:
+            invoke()
+        if mode != "open-denied":
+            assert caught.value is (
+                primary
+                if mode in ("read", "read-enoent", "both", "interrupt")
+                else close
+            )
+        if mode == "both":
+            assert close in getattr(primary, "_transaction_secondary", ())
+    assert attempts == ([] if mode in ("absent", "open-denied") else [123456])
+    for owner in owners:
+        owner.close()
+        owner.close()
+    assert len(attempts) == len(owners)
+    # Independent record reads remain independently releasable after a fault.
+    other = read_child_record(
+        "sibling",
+        open_record=lambda *a: 654321,
+        read_record=lambda *a: b"",
+        ops=SimpleNamespace(close=lambda fd: attempts.append(fd)),
+    )
+    assert other.availability == "available"
+    assert attempts[-1] == 654321
+
+
 def test_request_is_journaled_before_acquisition(tmp_path):
     """Parent admission is observable even when no child can write a record."""
     support_path = Path(__file__).with_name("dispatch_deadline_support.py")

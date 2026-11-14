@@ -67,9 +67,14 @@ in either mode. Run from the repository root against one unchanged candidate:
 | 8 | Phase 2 configuration | 2 |
 | 9 | Standalone scaffold regression registered under Phase 2 | 1 |
 | 10 | Phase 9 MCP transport and server (both registered modules) | 2 |
+| 11 | Phase 10 integrated acceptance and portability | 2 |
 
-For Phase-9 validation, run all ten specialised commands, including every
-earlier phase suite. Thus results, snapshot and launcher can initially run alongside the
+Validation runs every registered specialised command required by the delivered
+phase, including each earlier phase suite. Phase-10 validation runs every
+registered specialised command in the table above — currently eleven.
+The historical Phase-9 validation set contains ten commands (through queue
+priority 10), without a dependency on the later Phase-10 suite.
+Thus results, snapshot and launcher can initially run alongside the
 gate: specialised allocation 1 + 1 + 6, plus the gate's separate 8. The limit
 of 16 is a count of top-level xdist workers, **not** a limit on all OS processes:
 pytest controllers, check tools and test-owned child processes are additional.
@@ -341,6 +346,17 @@ positive timeout and local settlement; logical helpers cannot establish either
 for an actual child. Missing child records do not become acceptable merely
 because the logical policy tests pass.
 
+The real-child `test_dev_survivor_removal_order` also isolates admission time
+with `ManualClock` on `footman.container` only. Preparation receives a positive
+10-second allowance; copy admission explicitly spends 9.6 logical seconds, so
+exec receives 0.4 seconds against a two-second stub delay. A deliberate
+0.5-second preparation pause exceeds the old aggregate budget and guards against
+scheduler-dependent early exhaustion. Child deadlines and cleanup remain real;
+all seven child records, exec timeout, exact-ID removal/confirmation and snapshot
+deletion remain mandatory. This is removal-order coverage, not evidence for a
+10-second aggregate wall-time deadline; the independent real-process deadline
+scenario below retains that responsibility. No production budget is changed.
+
 ### Settlement, records and expected failures
 
 `DockerSequence.assert_owners_settled()` checks local cleanup completion only
@@ -576,6 +592,133 @@ See [Test-bootstrap stderr provenance](#test-bootstrap-stderr-provenance) for
 the reserved stderr namespace these tests use and the diagnostic collision
 guard they prove.
 
+## Phase 10 integrated acceptance and portability suite
+
+Register and run the Docker-free acceptance module with this exact command:
+
+```sh
+.venv/bin/python -m pytest tests/test_dispatch_acceptance.py -n 2 --dist worksteal --tb=short -q
+```
+
+Prerequisites are the Phase-9 tools and pinned SDK/dependencies, including uv,
+Python 3.14+, Git, GNU cp and package-index access for provisioning. Missing
+prerequisites fail nonzero, never skip or xfail. This module belongs to unscoped
+development collection; it is not real-Docker host acceptance.
+
+The checkout integration leg uses the development same-child bootstrap and
+checked src/footman expectations, real staged Git fixtures, literal Docker CLI
+stub calls and retained manifests. Later fixture index/workdir edits are
+explicitly recorded separately from dispatcher mutation. Setting
+`FOOTMAN_ACCEPTANCE_CONTROL` to `tree`, `argv`, `path` or `status` before the
+same command deliberately supplies a wrong expectation and must fail; it changes
+neither production code nor the developer repository.
+
+The portability fixture is pytest-integrated: a module fixture builds with
+bare uv build from a matching-input disposable root, binds its successful wheel
+output and SHA-256, provisions a fresh external venv and installs that exact
+wheel noneditably. Each participating worksteal
+worker owns its own build/venv/scratch paths and reuses only its own successful
+setup. The module fixture delegates to a lazy worker-session resource so leaving
+and re-entering the module cannot trigger a second build/venv. The no-obtain
+branch is directly tested by
+`test_worker_scope_without_obtain_acquires_and_finishes_nothing` on normal,
+operation-failure and interruption exits: zero factory/preparation/completion
+calls, repeat cleanup and closed-scope rejection. A two-module probe interleaves
+all eight collected cases under worksteal and records exactly one setup/completion
+per participating worker, with distinct roots and once-only failure-aware cleanup.
+That probe has no idle worker and makes no empirical idle-worker-count claim;
+not acquiring for non-participants follows structurally from the lazy scope and
+the directly executed no-obtain branch tests. Scripted attribution artifacts never feed installation. The relocated
+SDK helper, copied transport/bootstrap and Docker-stub closure must use that
+venv, clean environments and wheel-authoritative expected origins. The fresh-venv helper alone collects service stderr, confirms its attestation
+and writes/releases/reads back complete provenance evidence. The orchestrator
+consumes bounded ordinary JSON, never helper stderr as service attestation.
+Helper post-import attribution is separate from service pre-dispatch checks;
+neither is a universal pre-import guarantee. Lifecycle accounting and
+helper-loss reconciliation separately establish service-incarnation absence
+and stub-descendant/resource reconciliation. The orchestrator owns only the
+helper, never the helper's service owner: absence observation does not grant
+signal/reap authority or permission to renew an allowance. This is a structural
+ownership guarantee, not an instrumented zero-attempt counter. After abrupt
+helper loss, service exit/reap status is unavailable, not an observed null status.
+The real observation carriers are `service_incarnation_absent`,
+`helper_cleanup_complete`, the retained service journal, and (for cooperative
+interruption) `helper-service-cleanup.json`. Live/unknown/observer-failure and
+unsettled-resource controls must remain unsuccessful with retained scratch.
+Request/lifecycle files record the original deadline and settlement binding;
+configured 10/2-second action bounds and 60/5-second lifetime/settlement bounds
+are inputs, not hardcoded observation fields asserted against themselves.
+The relocated helper reports the actual environment mapping it passed to the
+service as a bounded view: PATH, the actual PYTHONNOUSERSITE value, key count,
+key-set digest, filtered-prefix key names and counts. Values of unrelated
+variables are not dumped. The poison-environment leg leaves PYTHONPATH,
+PYTHONHOME, PYTHONUSERBASE and PYTEST/FOOTMAN_RELOCATED canaries in the helper
+launch environment; only this leg uses helper `-E` so invalid PYTHONHOME cannot
+break interpreter startup before the filter runs. The helper reports seeing
+those incoming key names and must remove them from the service environment,
+retaining only PYTHONNOUSERSITE=1 among PYTHON* keys. Actual service provenance
+must still match the fresh wheel. This exercises the helper's filter, not the
+orchestrator cleaner. `test_acceptance_clean_environment_removes_import_redirection`
+separately tests the Phase-10 cleaner against ambient and explicit-extra poison,
+including PYTHONSAFEPATH/STARTUP/INSPECT, unknown PYTHON* and FOOTMAN_BOOTSTRAP_*,
+without mutating the parent environment. Result metadata remains subject to the
+existing 65536-byte bound; key-set metadata is not OS-child self-attestation.
+
+The checkout integration test alone does not establish wheel portability. Phase-11 host tooling is not a prerequisite or a
+substitute. Only fixture-owned disposable build outputs may be created; existing
+candidate dist artifacts must remain untouched. Validation also requires every
+earlier registered suite, the unscoped gate and build/help/exact-wheel smoke.
+
+The copied closure is the Phase-9 normal support list plus
+`tests/mcp_relocated_client.py`, `tests/relocated_docker_child.py`,
+`tests/docker_cli_stub.py` and `tests/dispatcher_harness.py`. The relocated
+loaders explicitly resolve the recorded tests package; the service bootstrap
+never adds that copy root to sys.path. Declared support and uv.lock identities
+are rechecked at completion. The annotated TOML's command and launch argv are
+preserved literally; only disposable host paths/output organization and the
+10/2-second action bounds are substituted. The service has an independently
+bound original 60-second lifetime and five-second settlement allowance.
+
+Fixed bootstrap-only publication-loss gates exercise interruption before the
+journal, before provenance and after provenance. They use one serial borrowed
+stdin reader before any SDK reader exists, within the original deadline; no
+inherited stream is adopted or closed. Gate PID/incarnation records are test
+accounting, not provenance evidence or a public service capability. A missing
+journal remains an unsuccessful launch observation; a recorded gate identity
+can independently reconcile that negative fixture through read-only absence
+observation, never signal/reap authority. Unresolved identities/resources retain
+scratch and fail closed. Reconciliation binds each distinct full launch ID to
+exactly one literal `rm -f <id>`, one complete canonical recorded-ID listing argv
+and one retained result manifest with that same container_id. Equal counts or
+successful stub statuses alone cannot prove this: the relocated stub derives
+expected_argv from its received argv. Multiplicity-aware argv/manifest matching
+rejects wrong targets, duplicate cleanup, mismatched filters, extra arguments,
+duplicate launch identities and mismatched/duplicate manifest identities even
+when all counts/statuses/EOF and snapshot-absence checks remain valid.
+`test_reconciliation_requires_exact_recorded_id_cleanup_and_manifest` exercises
+these count-preserving controls with real retained fixture files; the wrong-ID,
+duplicate-cleanup and mismatched-filter controls also run in optimized subprocess
+probes. They prove recorded fixture identity accounting, not real Docker removal.
+Helpers alive during interruption retain their sole
+process owner and original cleanup budget. The loss collector protects that
+owner immediately after launch, before constructing or starting its thread.
+Shutdown and collector joining are independent cleanup actions; ordinary cleanup
+errors cannot replace an active operation failure or interruption. A failed or
+interrupted start after handoff still joins the actual started thread. If start
+has not published a joinable identity, the failed observation retains the same
+owner/thread rather than claiming settlement or retrying startup. Constructor,
+start/pre-post-handoff, body, shutdown, join, incomplete-owner and live-collector
+branches have once-only/precedence tests, including real-child settlement and
+repeat cleanup.
+
+`tests/acceptance_build_support.py::build_and_bind_wheel` remains independently
+callable for later host-helper attribution parity; production code does not
+import it. Both existing build implementations retain a nonzero build's status
+and streams if the subsequent input check fails, with separately retained
+post-check diagnostics. A post-check interruption retains its authority and
+chains the earlier build failure. These combined-failure controls run in both
+registered MCP and acceptance suites.
+
 ## Test-bootstrap stderr provenance
 
 This is test infrastructure, not a production MCP feature and not a requirement
@@ -696,7 +839,16 @@ interruption and repeat-cleanup cases.
 
 In verification helpers and pytest plugins, use explicit
 `raise AssertionError(...)` for checks that must remain active under `python -O`;
-bare `assert` statements are removed by optimization. In tests themselves, use
+bare `assert` statements are removed by optimization. Phase-10 portability,
+attribution and shared build-failure verification use explicit checks, with an
+AST regression against reintroducing optimizable assertion statements.
+`test_verification_helpers_reject_invalid_evidence_under_optimization` launches
+actual `python -O` children, requires optimization enabled and tests valid
+controls before rejecting bad attribution, changed build identity, unresolved
+worker resources, journal/gate token mismatch, missing removal/failed stub
+records, oversized results, incomplete cleanup and reserved helper output.
+`tests/acceptance_verification_probe.py` is development-only probe code, not a
+relocated/host support dependency or wheel-provenance proof. In tests themselves, use
 ordinary `assert` statements to retain pytest assertion introspection.
 
 ## Verification guard suites

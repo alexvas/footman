@@ -159,6 +159,37 @@ def install_test_faults():
         setattr(results.Manifest, name, publish)
 
 
+def publication_gate(p, lifecycle, value, stage, borrowed):
+    """Fixed test-only loss barrier; runs before any SDK stdin reader exists."""
+    if os.environ.get("FOOTMAN_BOOTSTRAP_TEST_GATE") != stage:
+        return
+    import anyio
+
+    record = {
+        "pid": os.getpid(),
+        "incarnation": p.read(Path(f"/proc/{os.getpid()}/stat"))
+        .rsplit(b")", 1)[1]
+        .split()[19]
+        .decode(),
+        "instance_token": value["instance_token"],
+        "stage": stage,
+    }
+    p.write(
+        Path(value["scratch_root"]) / ("bootstrap-gate-" + stage + ".json"),
+        p.canonical(record),
+    )
+    reader = (
+        borrowed
+        if isinstance(borrowed, lifecycle.DeadlineReader)
+        else lifecycle.DeadlineReader(borrowed, value["service_deadline_monotonic"])
+    )
+    # This serial, borrowed reader is joined before any possible dispatch; no
+    # competing stdin reader, descriptor adoption or fresh budget is introduced.
+    line = anyio.run(anyio.to_thread.run_sync, reader.readline)
+    p.require(not line, "test loss gate received an unexpected protocol frame")
+    raise RuntimeError("test publication gate stopped before dispatch: " + stage)
+
+
 def main():
     p = support("mcp_provenance")
     parser = argparse.ArgumentParser(allow_abbrev=False)
@@ -217,16 +248,29 @@ def main():
         lifecycle = support("mcp_lifecycle")
         if os.environ.get("FOOTMAN_BOOTSTRAP_TEST_FAULT") == "journal":
             install_test_faults()
+        if os.environ.get("FOOTMAN_BOOTSTRAP_TEST_GATE") == "before-journal":
+            value = lifecycle.validate_input(
+                args.lifecycle, forbidden=[args.expected_origin, service[1]]
+            )
+            publication_gate(p, lifecycle, value, "before-journal", sys.stdin.buffer)
         journal = lifecycle.start(
             args.lifecycle, forbidden=[args.expected_origin, service[1]]
         )
         sys.stdin = lifecycle.borrowed_input(sys.stdin, journal)
     primary = None
     try:
+        if journal is not None:
+            publication_gate(
+                p, lifecycle, journal.value, "before-provenance", sys.stdin.buffer
+            )
         entries = p.verify(manifest)
         if os.environ.get("FOOTMAN_BOOTSTRAP_TEST_FAULT") != "journal":
             install_test_faults()
         p.emit(entries, sys.stderr.buffer)
+        if journal is not None:
+            publication_gate(
+                p, lifecycle, journal.value, "after-provenance", sys.stdin.buffer
+            )
         if os.environ.get("FOOTMAN_BOOTSTRAP_TEST_FAULT") == "after-attestation":
             raise RuntimeError("injected failure after complete attestation")
         sys.argv = [args.entrypoint or "footman", *service]

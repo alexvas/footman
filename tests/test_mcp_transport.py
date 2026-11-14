@@ -20,6 +20,32 @@ def support(name):
     return importlib.import_module(f"tests.{name}")
 
 
+@pytest.mark.parametrize(
+    "fault",
+    ["nonzero-build", "successful-build", "post-interruption", "collection-failure"],
+)
+def test_phase9_build_failure_precedes_postcheck_failure(tmp_path, fault):
+    from tests import build_failure_support as faults
+    from tests import mcp_wheel_support as wheel
+
+    faults.exercise(
+        ROOT,
+        tmp_path,
+        wheel,
+        lambda root, evidence: wheel.build_and_install_contract_wheel(
+            root, evidence_directory=evidence, timeout_seconds=30, attribution_only=True
+        ),
+        fault,
+    )
+
+
+def test_phase9_build_binding_is_defensively_immutable(tmp_path):
+    from tests.build_observation_values import check_binding_values
+    from tests.mcp_wheel_support import BuildObservation
+
+    check_binding_values(BuildObservation, tmp_path)
+
+
 def test_registered_suite():
     command = ".venv/bin/python -m pytest tests/test_mcp_transport.py tests/test_mcp_server.py -n 2 --dist worksteal --tb=short -q"
     assert command in read_bytes(ROOT / "docs/testing.md").decode()

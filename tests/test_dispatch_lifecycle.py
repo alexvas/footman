@@ -5,6 +5,7 @@ import threading
 
 import pytest
 
+from tests.clock_support import ManualClock, module_clock
 from tests.dispatch_support import api, removal, run_case
 from tests.dispatcher_harness import read_bytes, write_bytes
 from tests.launcher_case_support import ID, config, source, steps
@@ -107,12 +108,41 @@ def test_supervisor_cleanup_interruption_retains_state_and_continuation(
 def test_dev_survivor_removal_order(tmp_path, source):
     script = [*steps(source), *removal()]
     script[4]["delay"] = 2
-    run, sequence = run_case(
-        tmp_path,
-        source,
-        script=script,
-        cfg=config(timeout_seconds=0.4, cleanup_grace_seconds=2),
-    )
+    # This is a real exec-timeout/removal-order test, not an aggregate
+    # startup-deadline test. Four Python stub startups must not compete with
+    # exec for 0.4 seconds of scheduler time. Only container admission time is
+    # logical; child timers, cleanup and watchdogs remain real.
+    import footman.container as container
+
+    clock = ManualClock()
+    directory = tmp_path / "stub"
+    directory.mkdir()
+    sequence = DockerSequence(directory, script)
+
+    def launch(argv, **kwargs):
+        if list(argv) == script[0]["argv"]:
+            # Regression: preparation alone exceeds the former whole-run
+            # budget, without spending logical policy time.
+            threading.Event().wait(0.5)
+        if list(argv) == script[3]["argv"]:
+            clock.advance(9.6, label="copy admission before exec")
+        return sequence.launch(argv, **kwargs)
+
+    with module_clock(container, clock):
+        run = api().RunSupervisor(
+            config(timeout_seconds=10, cleanup_grace_seconds=2), source, launch=launch
+        )
+        run.execute(lambda *_: None, lambda *_: None)
+    assert [options["deadline_seconds"] for _, options in sequence.parameters[:4]] == [
+        10,
+        10,
+        10,
+        10,
+    ]
+    assert sequence.parameters[4][1]["deadline_seconds"] == pytest.approx(0.4)
+    assert [(entry.seconds, entry.label) for entry in clock.journal()] == [
+        (9.6, "copy admission before exec")
+    ]
     assert run.execution.command_result is not None
     assert run.execution.command_result.timed_out
     assert run.failure is not None

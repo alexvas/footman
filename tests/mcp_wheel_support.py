@@ -20,6 +20,7 @@ from footman.filesystem.descriptors import DirectoryDescriptor, OwnedDescriptor
 from footman.filesystem.operations import PosixDescriptorOps
 from footman.process import OwnedProcess, ProcessStream, StreamOutcome
 from tests import mcp_provenance as p
+from tests.build_observation_values import freeze
 
 ROOTS = ("src/", "pyproject.toml", "README.md")
 WHEEL_ONLY_SUPPORT_FILES = ("tests/mcp_wheel_client.py",)
@@ -256,6 +257,10 @@ class BuildObservation:
     setup_operations: tuple = ()
     support_inventory: tuple = ()
     dependency_identity: str | None = None
+
+    def __post_init__(self):
+        for name in ("build_input_identity", "inventory", "command"):
+            object.__setattr__(self, name, freeze(getattr(self, name)))
 
 
 def reuse_for_test(base, destination, *, mutable=False, private_support=False):
@@ -580,14 +585,28 @@ def _build_and_install_contract_wheel(
         )
     except BaseException as error:
         primary = error
+    else:
+        observation.update(attempted=True, pre_identity=before, post_identity=None)
+        if observation["status"] != 0:
+            primary = BuildFailure("build exited unsuccessfully", observation)
     after = None
     try:
         after, _ = inventory(root)
     except BaseException as error:
-        if primary is None or not isinstance(error, Exception):
+        if primary is None:
+            error.observation = dict(
+                observation, attempted=True, pre_identity=before, post_identity=None
+            )
             raise
+        if not isinstance(error, Exception):
+            raise error from primary
+        if isinstance(primary, BuildFailure):
+            primary.post_check_error = error
         primary.add_note("post-build input verification also failed: " + str(error))
     if primary is not None:
+        retained = getattr(primary, "observation", None)
+        if retained is not None:
+            retained.update(attempted=True, pre_identity=before, post_identity=after)
         raise primary
     p.require(observation is not None, "missing attempted-build observation")
     observation.update(attempted=True, pre_identity=before, post_identity=after)

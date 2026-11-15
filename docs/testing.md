@@ -71,6 +71,21 @@ in either mode. Run from the repository root against one unchanged candidate:
 | 12 | Phase 11 Docker-free host-runner contracts (`tests/test_host_acceptance_contracts.py`) | 2 |
 | 13 | Standalone Linux proc-observer regression (`tests/test_proc_observer.py`) | 2 |
 
+**Phase-11 real-base serialization exception.** The registered Phase-11 command
+and the unscoped gate both collect
+`test_orchestrator_unpatched_default_direct_and_loaded_legs_reconcile_exact_runs`.
+That contract uses the same literal results base across pytest sessions, so these
+invocations must not overlap. Run the gate through full process/resource
+settlement before starting the registered Phase-11 command (queue priority 12),
+even with at least 32 available CPUs. Other invocations collecting that contract
+and operator host runs must also have exclusive access to the real base during
+this leg. Do not infer isolation from distinct run IDs: another session's
+resources are deliberately unattributed to this session's ledger. If exclusive
+scheduling cannot otherwise be assured, use the sequential fallback for the
+whole verification schedule. This rule changes neither registered commands nor
+worker counts; it adds no filter, skip, locking CLI option or results override.
+Unknown concurrent changes still fail verification without deletion.
+
 Validation runs every registered specialised command required by the delivered
 phase, including each earlier phase suite. Phase-11 registration established
 twelve commands; the separately registered observer repair adds priority 13,
@@ -955,6 +970,10 @@ Register the Docker-free runner/build/inventory contracts before Phase-11 RED:
 
 Prerequisites are the development environment above, Git, PATH-resolved
 `python3.14` and `uv`; no real Docker executable, socket or daemon is used.
+Apply the **Phase-11 real-base serialization exception** above: do not overlap
+this registered command with the unscoped gate or another collector of its
+shared-base contract. Wait for complete settlement, or use the sequential
+fallback, without changing either command's worker count.
 The tests belong to the unscoped development collection. They cover bootstrap
 interfaces/tools/foundation isolation, exact wrapper-selected roots and relocation,
 source versus README-inclusive build identity, public build attribution/collisions,
@@ -1062,15 +1081,118 @@ prepared root by copied script location, with recorded synthetic HEAD, full
 inventory, source/build-input identities and candidate-dist preservation. A
 loaded-module probe patches only `_RESULTS_BASE` and `_execute_prepared_leg`;
 it adds no production option/environment channel, never loads the future real
-runner and never runs runner CLI main. All results-base operations in these
-core contracts use exclusively fixture-owned external bases, not the production
-results base. The missing-interpreter check separately executes the exact
+runner and never runs runner CLI main. Patched-base core contracts use
+fixture-owned external bases; the separate unpatched contract below retains
+the production literal. The missing-interpreter check separately executes the exact
 shebang through `/usr/bin/env` from unrelated cwd and must fail with status 127
 before script execution. The script-authored missing-uv prerequisite instead
 requires a preserved nonzero status, a uv diagnostic and no image inspection,
 build or prepared-leg execution; it does not prescribe a numeric exit code.
-Actual default-base/direct-executable success contracts
-are separate work; these loaded-module tests do not substitute for them.
+Separate RED contracts now pin unpatched default-base/direct-executable
+behavior; loaded-module seam tests do not substitute for those contracts.
+These bodies still stop at the missing-orchestrator assertion, before touching
+the real base, and are not passing default-path execution evidence.
+
+`tests/host_results_support.py` supplies test-only no-follow results inventories
+(including caches and dangling links), explicit successful-reservation claims,
+external evidence preservation and once-only confined cleanup. Loaded-module
+probes persist successful immediate-child mkdir operations and their device/inode
+identities to exclusive receipt files outside results cleanup targets, before
+returning from the instrumented operation. Claims verify those receipt identities
+inside the ledger's directory capability; neither a directory diff nor report.json
+establishes ownership. Receipts survive lost/malformed stdout and completion
+profile errors. The direct-executable leg runs the real shebang-selected Python
+in a fresh external `venv --without-pip`, without installed Footman or inherited
+PYTHONPATH. Normal interpreter `.pth` processing installs a stdlib-only mkdir
+observer: no launcher, runpy, sys.path injection, test-support imports or Footman
+preload supplies the orchestrator's bootstrap. Script argv, script-directory
+search path and normal `__main__` execution remain interpreter-controlled. The
+observer can write receipts through foundation capabilities only after the
+script has itself loaded them; it never imports them on the script's behalf.
+Earlier mkdirs remain unowned. Paired direct controls prove that importing
+Footman without the script's own validated source bootstrap fails with the real
+ModuleNotFoundError and is rejected by the direct contract's success check,
+while a self-bootstrapped script imports from its prepared source and reserves
+an attributable run. Separate early-mkdir and per-owner fault controls cover
+missing authority, operation/close failure, interruption and repeated release.
+This remains observation-instrumented Docker-free testing, not real-host proof.
+Orchestrator source, constant and CLI remain unchanged. Both observers delegate
+to the real mkdir first; failed exclusive mkdir emits no receipt. A failed
+receipt write leaves unknown resources unowned, never inferred as owned from
+newness.
+
+The accounting fixture registers all ledgers (including explicit real-base
+ledgers) before invocation. Execution, observation parsing and accounting remain
+within that guaranteed fixture scope; accounting also runs in finally scopes
+around execution even when core.invoke fails before returning observations.
+Teardown attempts every independent reconciliation and reports unresolved cleanup.
+Per-receipt failures do not prevent accounting for independent valid receipts;
+unknown resources block deletion. Cleanup receives the preserved snapshot as a
+mandatory allowlist, verifies copied bytes against its digests, preflights each
+opened subtree and checks membership plus entry identity/mode/content/link target
+before deletion. Fresh enumeration never grants deletion authority: concurrent
+additions remain untouched, changed entries fail cleanup and repeat finish
+rethrows the latched failure without retry. Deterministic post-copy, post-preflight
+and pre-leaf controls include independent sibling cleanup and close failures.
+These checks are not an atomic filesystem transaction against changes after the
+last verification. Active failures/interruption retain precedence
+over ordinary accounting errors, with cleanup failures surfaced separately.
+Unknown changes, inaccessible inventories,
+reservation losers and pre-existing operator runs grant no deletion authority.
+Local fault controls exercise operation-plus-close, sole-close, interruption,
+repeat and independent cleanup; deliberate cleanup failures retain evidence
+before explicit fixture reconciliation. The unpatched contract uses the literal
+shared base and obeys the real-base serialization exception in the scheduling
+section: its gate and registered Phase-11 invocations must not overlap. Its direct
+legs use an explicit PATH containing only fixture tools and approved isolated
+bootstrap tools, not inherited PATH. Per-leg control records require the fixture
+Docker image-inspection executable and exactly one controlled build (no calls
+for unknown options); complete synthetic negative/normal case IDs, raw statuses
+and counts are checked. These are prepared-root doubles, not real Docker proof
+or a sandbox against arbitrary absolute executable paths. Test evidence remains
+outside its exact deletion targets; operator evidence remains unowned and
+retained for exact-path handoff.
+
+Results inventories anchor recursive directory, regular-file and link reads to
+open directory descriptors; leaf links use `readlink(..., dir_fd=...)` and are
+never followed. The ledger records the results base's device/inode alongside its
+initial inventory and checks that identity at snapshots, claims and cleanup
+reopenings, as well as before/after removals. Base pathname binding is verified
+by securely walking its parent without following ancestor links, then using a
+no-follow child stat; matching leaf identity through a replacement ancestor
+symlink is not accepted. Parent-check stat failures/interruption and close
+failures follow sole-owner release and repeat-cleanup rules.
+Replacing even an empty base, or
+moving unchanged children into a replacement base, fails without claiming or
+deleting the replacement's resources. Identity failure is terminal for ledger
+cleanup; repeated cleanup reports the same failure without retrying releases.
+The deliberate missing-base fixture starts its ledger only from the recorded
+successful exclusive base-creation receipt, rather than rebinding a ledger for
+a removed base. That receipt supplies the immutable base identity and proves an
+initially empty base; each later run still needs its own successful reservation
+claim, and any unclaimed descendant prevents cleanup.
+
+`tests.host_results_support.read_accepted_report(path)` reads only the supplied
+file through the existing sole-owner reader and validates a local completion
+envelope: schema, final/success state, run-directory identity and absolute
+repository-root attribution. It is shared with the unpatched positive contract,
+not an acceptance function defined inside its own test. Local controls accept
+the supplied record's distinct run/root identity even with a newer valid,
+unrelated record present, and reject partial, incomplete, missing or inaccessible
+supplied evidence without falling back. They test this shared helper only, not
+the full independent candidate/provenance/resource verification required at
+operator resumption or actual host-to-container mount access. The separate
+orchestrator readback-denial probe remains an implementation-dependent RED
+contract. No separate operator mount-confirmation declaration is required. Finalization/readback and
+unsafe/unwritable/collision-base contracts remain RED until the orchestrator
+is implemented. If the results base is absent, the orchestrator must create
+it automatically through secure directory capabilities, then reserve a fresh
+run directory. A file or symlink in its place is not a reusable base; denied
+creation fails before Docker/build execution and grants no ownership. The
+missing-base RED contract records successful base/run mkdir receipts and
+preserves inventories and results before exact test-owned cleanup. Its separate
+inert-marker readiness case exercises that driver without pretending the
+orchestrator is delivered. No operator mkdir step or path override is required.
 
 The core boundary receives one typed dataclass with `wheel`, `source_identity`
 (the controlled manifest path), `image`, `evidence`, `workspace`, `profile`,

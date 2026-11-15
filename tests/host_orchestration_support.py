@@ -13,7 +13,11 @@ import shlex
 import shutil
 import sys
 import uuid
+from contextlib import contextmanager
+from pathlib import Path
 
+from footman.filesystem.cleanup import CleanupFailures
+from footman.filesystem.descriptors import DirectoryDescriptor
 from tests import host_acceptance_contract_support as h
 from tests import host_expectation_support as expectations
 from tests import mcp_attribution_support as attribution
@@ -24,6 +28,231 @@ from tests import mcp_wheel_support as wheel
 IMAGE = "sha256:" + "a" * 64
 TAG = "footman-sandbox:latest"
 CASES = ("staged_bytes", "argv", "command_status", "cleanup")
+
+
+@contextmanager
+def accounting_scope(account):
+    """Always account durable receipts, preserving an active failure."""
+    primary = None
+    try:
+        yield
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        failures = CleanupFailures(primary)
+        failures.run(account, ordinary=(Exception,))
+        selected = failures.complete()
+        if selected is not None and selected is not primary:
+            raise selected
+
+
+def new_reservation_journal(prepared, directory):
+    directory.mkdir()
+    prepared.setdefault("reservation_journals", []).append(directory)
+    return directory
+
+
+def reservation_receipts(prepared, start=0):
+    receipts = []
+    for directory in prepared.get("reservation_journals", [])[start:]:
+        for name in h.root_names(directory):
+            value = p.load(directory / name)
+            h.check(
+                value.get("operation") == "exclusive-mkdir-success",
+                "invalid reservation journal",
+            )
+            h.check(
+                all(type(value.get(key)) is int for key in ("device", "inode")),
+                "invalid receipt identity",
+            )
+            receipts.append(value)
+    return receipts
+
+
+def account_reservations(prepared, ledger, start=0):
+    failures = CleanupFailures(None)
+
+    def consume(path):
+        receipt = p.load(path)
+        h.check(
+            receipt.get("operation") == "exclusive-mkdir-success",
+            "invalid reservation journal",
+        )
+        if Path(receipt["path"]) == ledger.base:
+            h.check(
+                (receipt["device"], receipt["inode"]) == ledger.base_identity,
+                "created base receipt changed",
+            )
+        else:
+            ledger.claim_receipt(receipt)
+
+    for directory in prepared.get("reservation_journals", [])[start:]:
+        for name in h.root_names(directory):
+            failures.run(
+                lambda path=directory / name: consume(path), ordinary=(Exception,)
+            )
+    selected = failures.complete()
+    if selected is not None:
+        raise selected
+
+
+def reconcile_reservations(prepared, ledger, start=0):
+    if ledger.reconciliation_failure is not None:
+        raise ledger.reconciliation_failure
+    failures = CleanupFailures(None)
+    if not ledger.attempted:
+        failures.run(
+            lambda: account_reservations(prepared, ledger, start), ordinary=(Exception,)
+        )
+    failures.run(ledger.finish, ordinary=(Exception,))
+    selected = failures.complete()
+    if selected is not None:
+        ledger.reconciliation_failure = selected
+        raise selected
+
+
+# Loaded by a normal, isolated interpreter's .pth processing. No checkout
+# import roots, test modules or Footman imports are supplied by this observer.
+# Only after the script has itself imported the foundation may we borrow its
+# already loaded capability classes to own receipt-writing descriptors.
+DIRECT_RECORDER = """import json
+import os
+from pathlib import Path
+import stat
+import sys
+import uuid
+
+
+def install(base, journal):
+    base = Path(base)
+    journal = Path(journal)
+    mkdir = os.mkdir
+
+    def recorded(path, mode=0o777, *, dir_fd=None):
+        result = mkdir(path, mode, dir_fd=dir_fd)
+        descriptors = sys.modules.get("footman.filesystem.descriptors")
+        operations = sys.modules.get("footman.filesystem.operations")
+        if descriptors is None or operations is None:
+            # Observation must not establish the script's missing bootstrap.
+            # Such a path remains unknown and cannot be automatically deleted.
+            return result
+        if dir_fd is None:
+            absolute = Path(os.path.abspath(path))
+        else:
+            absolute = Path(os.readlink(f"/proc/self/fd/{dir_fd}")) / path
+        if absolute != base and absolute.parent != base:
+            return result
+        ops = operations.PosixDescriptorOps()
+        with descriptors.DirectoryDescriptor.open_secure_path(ops, absolute.parent) as parent:
+            info = parent.stat_child(absolute.name, follow_symlinks=False)
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("reserved directory changed type")
+            data = json.dumps({"operation": "exclusive-mkdir-success",
+                "path": str(absolute), "device": info.st_dev, "inode": info.st_ino},
+                sort_keys=True, separators=(",", ":")).encode()
+            with descriptors.DirectoryDescriptor.open_secure_path(ops, journal) as output:
+                name = output.child_basename(uuid.uuid4().hex + ".json")
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                label = "direct reservation receipt"
+                fd = os.open(name, flags, 0o600, dir_fd=output.fd)
+                with descriptors.OwnedDescriptor(ops, fd, label=label) as owner:
+                    remaining = memoryview(data)
+                    while remaining:
+                        count = os.write(owner.fd, remaining)
+                        if count <= 0:
+                            raise OSError("receipt write made no progress")
+                        remaining = remaining[count:]
+                    os.fsync(owner.fd)
+                os.fsync(output.fd)
+        return result
+
+    os.mkdir = recorded
+"""
+
+
+def prepare_direct_recorder(prepared, evidence, environment):
+    """Observe genuine shebang execution without supplying bootstrap authority."""
+    journal = new_reservation_journal(prepared, evidence / "reservations")
+    interpreter = evidence / "observer-python"
+    original_path = prepared.setdefault("_direct_tool_path", environment["PATH"])
+    python = shutil.which("python3.14", path=original_path)
+    h.check(python is not None, "isolated Python prerequisite missing")
+    setup = wheel.command(
+        [python, "-I", "-m", "venv", "--without-pip", interpreter],
+        cwd=prepared["foreign"],
+        env=environment,
+        timeout_seconds=30,
+    )
+    p.write(evidence / "interpreter-setup.json", p.canonical(h.operation_record(setup)))
+    h.check(setup["status"] == 0, "isolated observer interpreter setup failed")
+    site = interpreter / "lib/python3.14/site-packages"
+    # site can process a venv's .pth files twice. Install in the module body,
+    # not in the .pth statement: ordinary import caching makes this once-only.
+    module = (
+        DIRECT_RECORDER + f"\ninstall({str(prepared['base'])!r}, {str(journal)!r})\n"
+    )
+    p.write(site / "_reservation_observer.py", module.encode())
+    p.write(site / "reservation-observer.pth", b"import _reservation_observer\n")
+    environment["PATH"] = str(interpreter / "bin") + os.pathsep + original_path
+
+
+def require_direct_success(value):
+    h.check(value["status"] == 0, f"direct executable failed: {value['stderr']!r}")
+
+
+def prepare_default_results_base(base):
+    """Shared driver setup; local readiness calls do not redirect production."""
+    with DirectoryDescriptor.open_secure_path(p.OPS, base.parent) as parent:
+        try:
+            parent.stat_child(base.name)
+        except FileNotFoundError:
+            with parent.create_directory(base.name, mode=0o700) as created_base:
+                info = os.fstat(created_base.fd)
+                return info.st_dev, info.st_ino
+    return None
+
+
+def isolated_environment(prepared, tmp):
+    """Explicit approved tools only; no ambient Docker/PATH fallback."""
+    bootstrap = h.isolated_path(tmp, uv=False)
+    return wheel.clean_environment(
+        {"PATH": str(prepared["tools"]) + os.pathsep + str(bootstrap)}
+    )
+
+
+def check_synthetic_leg_report(report):
+    """Core-double evidence only, never acceptance of actual host results."""
+    h.check(report.get("state") == "final", "synthetic report is not final")
+    h.check(report.get("success") is True, "synthetic report is not successful")
+    h.check(report["first_unexpected_status"] is None, "unexpected synthetic failure")
+    legs = report.get("legs")
+    h.check(isinstance(legs, list) and len(legs) == 5, "incomplete synthetic leg set")
+    for index, (leg, case) in enumerate(zip(legs, (*CASES, None), strict=True)):
+        h.check(isinstance(leg, dict), "invalid synthetic leg")
+        h.check(leg["case_id"] == case, "wrong synthetic case order")
+        status = leg["pytest_status"]
+        h.check(
+            type(status) is int and status == (0 if case is None else 1),
+            "wrong raw synthetic pytest status",
+        )
+        counts = leg["counts"]
+        expected = {
+            "collected": 2 if case is None else 1,
+            "passed": 2 if case is None else 0,
+            "failed": 0 if case is None else 1,
+            "skipped": 0,
+            "xfailed": 0,
+            "xpassed": 0,
+        }
+        h.check(
+            isinstance(counts, dict)
+            and counts == expected
+            and all(type(count) is int for count in counts.values()),
+            f"wrong synthetic counts for leg {index}",
+        )
+        if case is not None:
+            h.check(leg["detected"] is True, "synthetic mismatch was not detected")
 
 
 def snapshot_candidate():
@@ -261,6 +490,29 @@ from types import SimpleNamespace
 root = Path(ROOT)
 launch_requests = []
 exec_requests = []
+reservations = []
+base_creations = []
+support_path = list(sys.path)
+sys.path[:0] = [str(root), str(root / "src")]
+from tests.host_orchestration_tool import install_reservation_recorder
+install_reservation_recorder(BASE, RECEIPTS)
+sys.path[:] = support_path
+original_mkdir = os.mkdir
+
+def tracked_mkdir(path, mode=0o777, *, dir_fd=None):
+    result = original_mkdir(path, mode, dir_fd=dir_fd)
+    parent = Path(os.readlink('/proc/self/fd/' + str(dir_fd))) if dir_fd is not None else Path.cwd()
+    absolute = Path(path) if Path(path).is_absolute() else parent / path
+    if absolute == Path(BASE) or absolute.parent == Path(BASE):
+        info = absolute.lstat()
+        receipt = {'path': str(absolute), 'device': info.st_dev, 'inode': info.st_ino}
+        if absolute == Path(BASE):
+            base_creations.append(receipt)
+        else:
+            reservations.append(receipt)
+    return result
+
+os.mkdir = tracked_mkdir
 
 def audit(event, arguments):
     if event == "os.system":
@@ -291,7 +543,8 @@ if PRELOAD:
 spec.loader.exec_module(module)
 if sys.path != before_path:
     raise RuntimeError("orchestrator acquired bootstrap authority at import time")
-module._RESULTS_BASE = Path(BASE)
+if PATCH_BASE:
+    module._RESULTS_BASE = Path(BASE)
 legs = []
 
 def execute(leg):
@@ -366,6 +619,7 @@ def execute(leg):
 
 if SUBSTITUTE:
     module._execute_prepared_leg = execute
+exec(PROBE_SETUP)
 before_cwd = os.getcwd()
 before_env = dict(os.environ)
 status = None
@@ -382,12 +636,22 @@ finally:
                    "environment_restored": dict(os.environ) == before_env,
                    "bootstrap_import_root": str(getattr(module, "bootstrap_import_root", "")),
                    "launch_requests": launch_requests, "exec_requests": exec_requests,
+                   "exclusive_reservations": reservations,
+                   "exclusive_base_creations": base_creations,
                    "simulation": True}
     print("CORE_PROBE " + json.dumps(observation, sort_keys=True))
 if caught is not None:
     raise caught
 raise SystemExit(status)
 """
+
+
+def results_base_inventory(base):
+    try:
+        base.lstat()
+    except FileNotFoundError:
+        return {"kind": "missing"}
+    return h.inventory(base.parent, (base.name,))[1]
 
 
 def invoke(
@@ -398,6 +662,8 @@ def invoke(
     preload=False,
     substitute=True,
     argv=None,
+    patch_base=True,
+    probe_setup="",
 ):
     substitutions = {
         "ROOT": str(prepared["root"]),
@@ -409,7 +675,13 @@ def invoke(
         "PRELOAD": preload,
         "SUBSTITUTE": substitute,
         "ARGV": [TAG] if argv is None else argv,
+        "PATCH_BASE": patch_base,
+        "PROBE_SETUP": probe_setup,
     }
+    diagnostic = prepared["diagnostics"] / uuid.uuid4().hex
+    diagnostic.mkdir(mode=0o700)
+    journal = new_reservation_journal(prepared, diagnostic / "reservations")
+    substitutions["RECEIPTS"] = str(journal)
     program = (
         "\n".join(f"{name} = {value!r}" for name, value in substitutions.items())
         + "\n"
@@ -420,8 +692,6 @@ def invoke(
     )
     if environment:
         env.update(environment)
-    diagnostic = prepared["diagnostics"] / uuid.uuid4().hex
-    diagnostic.mkdir(mode=0o700)
     prepared["invocations"].append(str(diagnostic))
     p.write(
         diagnostic / "profile.json",
@@ -438,7 +708,7 @@ def invoke(
             }
         ),
     )
-    before = h.inventory(prepared["base"], (".",))[1]
+    before = results_base_inventory(prepared["base"])
     try:
         result = wheel.command(
             [sys.executable, "-P", "-c", program],
@@ -474,18 +744,11 @@ def invoke(
         p.load(prepared["control"].parent / "calls" / name)
         for name in h.root_names(prepared["control"].parent / "calls")
     ]
-    after = h.inventory(prepared["base"], (".",))[1]
-    names = h.root_names(prepared["base"])
-    p.write(
-        diagnostic / "results-inventory.json",
-        p.canonical(
-            {
-                "before": before,
-                "after": after,
-                "owned_run_paths": [str(prepared["base"] / name) for name in names],
-                "retained": "pytest-owned temporary evidence, no operator runs or real results base touched",
-            }
-        ),
+    after = results_base_inventory(prepared["base"])
+    names = (
+        h.root_names(prepared["base"])
+        if prepared["base"].is_dir() and not prepared["base"].is_symlink()
+        else []
     )
     records = [
         line.removeprefix(b"CORE_PROBE ")
@@ -497,4 +760,19 @@ def invoke(
         "orchestrator probe did not report a complete observation: " + repr(result),
     )
     observed = json.loads(records[0])
+    p.write(
+        diagnostic / "results-inventory.json",
+        p.canonical(
+            {
+                "before": before,
+                "after": after,
+                "exclusive_reservations": observed["exclusive_reservations"],
+                "exclusive_base_creations": observed["exclusive_base_creations"],
+                "owned_run_paths": [
+                    item["path"] for item in observed["exclusive_reservations"]
+                ],
+                "retained": "test evidence preserved outside run cleanup targets; operator runs remain unowned",
+            }
+        ),
+    )
     return result, observed, calls, names

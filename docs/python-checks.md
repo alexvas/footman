@@ -172,8 +172,11 @@ When validation also requires specialised phase suites, use the
 on machines with at least 32 available logical CPUs (respecting affinity and CPU
 quotas), the gate's eight workers run alongside a separate eight-worker budget
 for the exact registered specialised commands. Below that capacity, or when it
-cannot be established, run gate then specialised commands sequentially. Neither
-mode narrows this gate or replaces any required command, status or cleanup check.
+cannot be established, run gate then specialised commands sequentially. The
+linked Phase-11 real-base serialization exception also applies at higher CPU
+capacity: its registered command must wait for the unscoped gate to settle,
+because both collect the same shared-base contract. Neither mode narrows this
+gate or replaces any required command, worker count, status or cleanup check.
 
 ### Environmental prerequisites instead of skips
 

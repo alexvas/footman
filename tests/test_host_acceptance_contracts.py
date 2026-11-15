@@ -31,6 +31,26 @@ def test_host_registration_preserves_documented_development_commands(relative):
     assert_documented_suite(p.read(h.ROOT / relative).decode())
 
 
+def test_phase11_real_base_serialization_is_explicit_without_changing_commands():
+    text = p.read(h.ROOT / "docs/testing.md").decode()
+    scheduling = text.split("## Working schedule: gate plus specialised suites", 1)[
+        1
+    ].split("## Current development prerequisites", 1)[0]
+    phase = text.split("## Phase 11 host-runner RED contracts", 1)[1]
+    assert "Phase-11 real-base serialization exception" in scheduling
+    assert "invocations must not overlap" in scheduling
+    assert "settlement before starting the registered Phase-11 command" in scheduling
+    assert "even with at least 32 available CPUs" in scheduling
+    assert "sequential fallback" in scheduling
+    assert (
+        "neither registered commands nor" in scheduling
+        and "worker counts" in scheduling
+    )
+    assert "Phase-11 real-base serialization exception" in phase
+    assert "do not overlap" in phase
+    assert_documented_suite(text)
+
+
 def test_host_interfaces_are_registered_before_red():
     text = p.read(h.ROOT / "docs/testing.md").decode()
     assert "scripts/build-acceptance-wheel --manifest <build-manifest>" in text
@@ -3319,10 +3339,14 @@ def test_orchestration_core_tool_fixture_is_executable_without_future_interfaces
         inspect_status=status,
         build_status=status,
     )
-    environment = wheel.clean_environment()
+    environment = core.isolated_environment(prepared, tmp_path)
+    assert environment["PATH"].split(os.pathsep) == [
+        str(prepared["tools"]),
+        str(tmp_path / "bootstrap-tools"),
+    ]
     commands = [
         [
-            prepared["tools"] / "docker",
+            "docker",
             "image",
             "inspect",
             "--format",
@@ -3355,6 +3379,9 @@ def test_orchestration_core_tool_fixture_is_executable_without_future_interfaces
         for name in h.root_names(prepared["control"].parent / "calls")
     ]
     assert sorted(item["mode"] for item in calls) == ["build", "docker"]
+    assert all(
+        item["resolved_docker"] == str(prepared["tools"] / "docker") for item in calls
+    )
     assert all(item["simulation"] for item in calls)
     assert all(
         item["support_origin"] == str(prepared["root"] / "tests/mcp_provenance.py")
@@ -3921,3 +3948,2452 @@ def test_orchestrator_exact_shebang_refuses_missing_path_interpreter_before_scri
     assert b"python3.14" in result["stderr"] and result["stderr"]
     assert h.root_names(prepared["control"].parent / "calls") == []
     assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]
+
+
+# Task 11.3: local simulations, not host-to-container mount proof.
+@pytest.fixture(autouse=True)
+def _account_for_orchestrator_results(tmp_path, monkeypatch):
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    invoke = core.invoke
+    ledgers = {}
+    managed = []
+
+    def register(prepared, ledger):
+        for entry in managed:
+            if entry["ledger"] is ledger and ledger is not None:
+                return entry
+        entry = {
+            "prepared": prepared,
+            "ledger": ledger,
+            "start": len(prepared.get("reservation_journals", [])),
+            "before": core.results_base_inventory(prepared["base"])
+            if ledger is None
+            else None,
+        }
+        managed.append(entry)  # Guaranteed teardown is registered before launch.
+        return entry
+
+    def account(entry):
+        prepared = entry["prepared"]
+        ledger = entry["ledger"]
+        if ledger is None:
+            receipts = core.reservation_receipts(prepared, entry["start"])
+            creations = [
+                item for item in receipts if Path(item["path"]) == prepared["base"]
+            ]
+            if not creations:
+                assert (
+                    core.results_base_inventory(prepared["base"]) == entry["before"]
+                ), "unresolved base creation without receipt"
+                return
+            assert len(creations) == 1
+            ledger = results.ResultsLedger(
+                prepared["base"],
+                prepared["_missing_base_evidence"],
+                created_base_receipt=creations[0],
+            )
+            entry["ledger"] = ledger
+            prepared["_results_ledger"] = ledger
+        if not ledger.attempted:
+            core.account_reservations(prepared, ledger, entry["start"])
+
+    def accounted(prepared, **kwargs):
+        base = prepared["base"]
+        if prepared.get("_missing_base_evidence") is not None:
+            entry = register(prepared, prepared.get("_results_ledger"))
+        elif prepared.get("_results_ledger") is not None or (
+            base.is_dir() and not base.is_symlink()
+        ):
+            ledger = prepared.get("_results_ledger") or ledgers.get(base)
+            if ledger is None:
+                evidence = tmp_path / ("results-accounting-" + str(len(ledgers)))
+                evidence.mkdir()
+                ledger = results.ResultsLedger(base, evidence)
+                ledgers[base] = ledger
+            prepared["_results_ledger"] = ledger
+            entry = register(prepared, ledger)
+        else:
+            before = core.results_base_inventory(base)
+            with core.accounting_scope(
+                lambda: h.check(
+                    core.results_base_inventory(base) == before,
+                    "unresolved refused-base resources",
+                )
+            ):
+                return invoke(prepared, **kwargs)
+        with core.accounting_scope(lambda: account(entry)):
+            return invoke(prepared, **kwargs)
+
+    monkeypatch.setattr(core, "invoke", accounted)
+    yield register
+    from footman.filesystem.cleanup import CleanupFailures
+
+    failures = CleanupFailures(None)
+    for entry in managed:
+        if entry["ledger"] is None:
+            failures.run(lambda e=entry: account(e), ordinary=(Exception,))
+        if entry["ledger"] is not None:
+            failures.run(
+                lambda e=entry: core.reconcile_reservations(
+                    e["prepared"], e["ledger"], e["start"]
+                ),
+                ordinary=(Exception,),
+            )
+    failure = failures.complete()
+    if failure is not None:
+        raise failure
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["missing", "existing"])
+def test_default_results_base_setup_readiness_reaches_fixture_orchestrator(
+    tmp_path, existing
+):
+    import stat
+
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    prepared = core.prepare(
+        tmp_path,
+        fixture_source=b"""_RESULTS_BASE = None
+def main(argv):
+    (_RESULTS_BASE / "setup-ready").mkdir()
+    return 0
+""",
+    )
+    base = prepared["base"]
+    if existing:
+        p.write(base / "operator-marker", b"unchanged existing base")
+    else:
+        with results.DirectoryDescriptor.open_secure_path(p.OPS, base.parent) as parent:
+            parent.remove_child_directory(base.name)
+    before = results.inventory(base) if existing else None
+    created = core.prepare_default_results_base(
+        base
+    )  # Same call as literal-base driver.
+    info = base.stat()
+    assert created == (None if existing else (info.st_dev, info.st_ino))
+    if not existing:
+        assert stat.S_IMODE(info.st_mode) == 0o700
+    value, observed, _, _ = core.invoke(prepared)
+    assert value["status"] == observed["call_status"] == 0
+    assert (base / "setup-ready").is_dir(), "setup must reach the fixture orchestrator"
+    prepared["_results_ledger"].finish()
+    assert results.inventory(base) == (before if existing else [])
+
+
+@pytest.mark.parametrize("operation", [None, "ordinary", "interrupt"])
+@pytest.mark.parametrize("close_target", ["parent", "child"])
+def test_default_results_base_setup_owner_failure_and_repeat_matrix(
+    tmp_path, monkeypatch, operation, close_target
+):
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    base = tmp_path / "absent-base"
+    opening = results.DirectoryDescriptor.open_secure_path
+    creating = results.DirectoryDescriptor.create_directory
+    closing = p.OPS.close
+    stating = os.fstat
+    owners = {}
+    live = {}
+    released = []
+    child_fd = None
+    primary = (
+        KeyboardInterrupt("setup interrupted")
+        if operation == "interrupt"
+        else OSError("setup observation failed")
+    )
+    close_failure = OSError("setup owner close failed")
+
+    def watch(kind, owner):
+        owners[kind] = owner
+        live[owner.fd] = kind
+        return owner
+
+    def open_parent(ops, path, **kwargs):
+        return watch("parent", opening(ops, path, **kwargs))
+
+    def create(parent, name, *, mode):
+        nonlocal child_fd
+        owner = watch("child", creating(parent, name, mode=mode))
+        child_fd = owner.fd
+        return owner
+
+    def fstat(fd):
+        if operation is not None and fd == child_fd:
+            raise primary
+        return stating(fd)
+
+    def close(fd):
+        closing(fd)
+        kind = live.pop(fd, None)
+        if kind is not None:
+            released.append(kind)
+            if kind == close_target:
+                raise close_failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(results.DirectoryDescriptor, "open_secure_path", open_parent)
+        patch.setattr(results.DirectoryDescriptor, "create_directory", create)
+        patch.setattr(type(p.OPS), "close", lambda self, fd: close(fd))
+        patch.setattr(os, "fstat", fstat)
+        with pytest.raises(BaseException) as caught:
+            core.prepare_default_results_base(base)
+        assert caught.value is (primary if operation else close_failure)
+        assert released == ["child", "parent"]
+        assert all(owner.released for owner in owners.values())
+        for owner in owners.values():
+            owner.close()
+        assert released == ["child", "parent"], "repeat release must not close again"
+    assert base.is_dir(), "setup failure does not grant a new cleanup claim"
+
+
+def test_orchestrator_unpatched_default_direct_and_loaded_legs_reconcile_exact_runs(
+    tmp_path,
+    _account_for_orchestrator_results,
+):
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    # Missing implementation fails here, before any real-base operation. Only
+    # prepared copies ever run; Docker is the recorded CLI double throughout.
+    prepared = core.prepare(tmp_path)
+    direct_environment = core.isolated_environment(prepared, tmp_path)
+    direct_environment.update(
+        FOOTMAN_HOST_RESULTS_DIR=str(tmp_path / "redirect"),
+        RESULTS_DIR=str(tmp_path / "redirect"),
+    )
+    base = results.DEFAULT_BASE
+    reconciliation_entries = []
+    made_base = core.prepare_default_results_base(base)
+    try:
+        for mode in ("loaded", "direct", "unknown-option"):
+            evidence = tmp_path / ("default-" + mode)
+            evidence.mkdir()
+            ledger = results.ResultsLedger(base, evidence)
+            prepared["_results_ledger"] = ledger
+            prepared["base"] = base  # Driver attribution, NOT a production override.
+            entry = _account_for_orchestrator_results(prepared, ledger)
+            reconciliation_entries.append(entry)
+            if mode == "loaded":
+                value, observed, _, names = core.invoke(prepared, patch_base=False)
+            else:
+                if mode == "direct":
+                    # Disposable sibling runner boundary only; the orchestrator
+                    # source/constant stays byte-identical to the candidate.
+                    runner = prepared["root"] / "scripts/run_host_acceptance.py"
+                    h.replace(
+                        runner,
+                        b"""from types import SimpleNamespace
+from pathlib import Path
+
+def _execute_prepared_host_leg(leg):
+    case = leg.case_id
+    diagnostics = {"staged_bytes": "staged bytes mismatch", "argv": "configured argv mismatch", "command_status": "command status mismatch", "cleanup": "container cleanup mismatch"}
+    return SimpleNamespace(pytest_status=1 if case else 0,
+        stdout=(("FIXTURE_BASELINE_VERIFIED\\n" + diagnostics[case] + "\\n") if case else "normal suite passed\\n").encode(),
+        stderr=b"synthetic boundary diagnostic\\x00\\xff",
+        counts={"collected":1 if case else 2,"passed":0 if case else 2,"failed":1 if case else 0,"skipped":0,"xfailed":0,"xpassed":0},
+        failure_kind="assertion" if case else None, cleanup_complete=True, evidence_complete=True)
+""",
+                    )
+                    prepared["profile"]["source_identity"] = h.inventory(
+                        prepared["root"]
+                    )[0]
+                    control = p.load(prepared["control"])
+                    (
+                        control["manifest"]["source_identity"],
+                        control["manifest"]["source_inventory"],
+                    ) = h.inventory(prepared["root"])
+                    h.replace(prepared["control"], p.canonical(control))
+                    # Fresh scripted build outputs; only this prepared root's
+                    # exact attributed prior artifacts, never candidate dist.
+                    for name in (
+                        "footman-0.1.0.tar.gz",
+                        "footman-0.1.0-py3-none-any.whl",
+                    ):
+                        (prepared["root"] / "dist" / name).unlink()
+                argv = (
+                    [core.TAG]
+                    if mode == "direct"
+                    else [core.TAG, "--results-dir", str(tmp_path / "redirect")]
+                )
+                calls_directory = prepared["control"].parent / "calls"
+                calls_before = set(h.root_names(calls_directory))
+                with core.accounting_scope(
+                    lambda current=ledger, start=entry["start"]: (
+                        core.account_reservations(prepared, current, start)
+                    )
+                ):
+                    core.prepare_direct_recorder(prepared, evidence, direct_environment)
+                    value = wheel.command(
+                        [prepared["root"] / "scripts/verify_host_acceptance.py", *argv],
+                        cwd=prepared["foreign"],
+                        env=direct_environment,
+                        timeout_seconds=90,
+                    )
+                p.write(
+                    evidence / "operation.json",
+                    p.canonical(
+                        {
+                            **h.operation_record(value),
+                            "PATH": direct_environment["PATH"],
+                        }
+                    ),
+                )
+                calls = [
+                    p.load(calls_directory / name)
+                    for name in sorted(
+                        set(h.root_names(calls_directory)) - calls_before
+                    )
+                ]
+                p.write(evidence / "control-calls.json", p.canonical(calls))
+                names = h.root_names(base)
+            try:
+                before_names = {entry["path"].split("/")[0] for entry in ledger.before}
+                created = set(names) - before_names
+                assert len(created) == (0 if mode == "unknown-option" else 1)
+                for name in created:
+                    run = base / name
+                    report = results.read_accepted_report(run / "report.json")
+                    assert report["repository_root"] == str(prepared["root"])
+                    assert report["run_id"] == name
+                    assert str(run).encode() in value["stdout"]
+                    assert run.name in ledger.claims, (
+                        "new directory/report is not a reservation receipt"
+                    )
+                    core.check_synthetic_leg_report(report)
+                    if mode == "direct":
+                        assert sorted(item["mode"] for item in calls) == [
+                            "build",
+                            "docker",
+                        ]
+                        inspect = next(
+                            item for item in calls if item["mode"] == "docker"
+                        )
+                        build = next(item for item in calls if item["mode"] == "build")
+                        assert inspect["argv"] == [
+                            "image",
+                            "inspect",
+                            "--format",
+                            "{{.Id}}",
+                            core.TAG,
+                        ]
+                        assert inspect["resolved_docker"] == str(
+                            prepared["tools"] / "docker"
+                        )
+                        assert build["resolved_docker"] == inspect["resolved_docker"]
+                        assert (
+                            len(build["argv"]) == 2 and build["argv"][0] == "--manifest"
+                        )
+                        manifest_path = Path(build["argv"][1])
+                        assert (
+                            manifest_path.is_absolute()
+                            and manifest_path.is_relative_to(run)
+                        )
+                        assert (
+                            p.load(manifest_path)["wheel_path"]
+                            == p.load(prepared["control"])["manifest"]["wheel_path"]
+                        )
+                        assert all(item["simulation"] for item in calls)
+                        assert all(
+                            item["support_origin"]
+                            == str(prepared["root"] / "tests/mcp_provenance.py")
+                            for item in calls
+                        )
+                        inspects = [
+                            command
+                            for command in report["commands"]
+                            if Path(command["argv"][0]).name == "docker"
+                        ]
+                        builds = [
+                            command
+                            for command in report["commands"]
+                            if Path(command["argv"][0]).name == "build-acceptance-wheel"
+                        ]
+                        assert len(inspects) == len(builds) == 1
+                        assert inspects[0]["argv"][1:] == inspect["argv"]
+                        assert builds[0]["argv"] == [
+                            str(prepared["root"] / "scripts/build-acceptance-wheel"),
+                            *build["argv"],
+                        ]
+                        assert inspects[0]["status"] == builds[0]["status"] == 0
+                        assert (
+                            p.read(inspects[0]["stdout_path"])
+                            == (core.IMAGE + "\n").encode()
+                        )
+                        assert (
+                            p.read(inspects[0]["stderr_path"])
+                            == b"inspection diagnostic\x00\xff\n"
+                        )
+                if mode != "unknown-option":
+                    core.require_direct_success(value)
+                else:
+                    assert value["status"] != 0, value
+                if mode == "unknown-option":
+                    assert calls == [], (
+                        "invalid options must precede Docker/build execution"
+                    )
+                if mode == "loaded":
+                    assert observed["call_status"] == 0
+                    assert [leg["case_id"] for leg in observed["legs"]] == [
+                        *core.CASES,
+                        None,
+                    ]
+                assert not (tmp_path / "redirect").exists()
+                assert p.read(
+                    prepared["root"] / "scripts/verify_host_acceptance.py"
+                ) == p.read(h.required_surface("verify_host_acceptance.py"))
+            finally:
+                import sys
+
+                from footman.filesystem.cleanup import CleanupFailures
+
+                primary = sys.exc_info()[1]
+                failures = CleanupFailures(primary)
+                failures.run(
+                    lambda current=ledger, start=entry["start"]: (
+                        core.reconcile_reservations(prepared, current, start)
+                    ),
+                    ordinary=(Exception,),
+                )
+                selected = failures.complete()
+                if selected is not None and selected is not primary:
+                    raise selected
+            assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]
+    finally:
+        import sys
+
+        from footman.filesystem.cleanup import CleanupFailures
+
+        primary = sys.exc_info()[1]
+        failures = CleanupFailures(primary)
+        for pending in reconciliation_entries:
+            failures.run(
+                lambda e=pending: core.reconcile_reservations(
+                    prepared, e["ledger"], e["start"]
+                ),
+                ordinary=(Exception,),
+            )
+        if made_base:
+            # rmdir only, after reconciliation: unknown residue explicitly fails.
+            def remove_base():
+                with DirectoryDescriptor.open_secure_path(p.OPS, base.parent) as parent:
+                    info = parent.stat_child(base.name, follow_symlinks=False)
+                    assert (info.st_dev, info.st_ino) == made_base, (
+                        "created results base was replaced"
+                    )
+                    parent.remove_child_directory(base.name)
+
+            failures.run(remove_base, ordinary=(Exception,))
+        selected = failures.complete()
+        if selected is not None and selected is not primary:
+            raise selected
+
+
+def test_results_inventory_includes_caches_and_dangling_links_without_following(
+    tmp_path,
+):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "__pycache__").mkdir()
+    p.write(base / "__pycache__/partial", b"partial\x00\xff")
+    (base / "outside").symlink_to(tmp_path / "absent", target_is_directory=True)
+    observed = results.inventory(base)
+    assert [entry["path"] for entry in observed] == [
+        "__pycache__",
+        "__pycache__/partial",
+        "outside",
+    ]
+    assert observed[-1]["kind"] == "link"
+    assert not (tmp_path / "absent").exists()
+
+
+@pytest.mark.parametrize("fault", ["collision", "publish", "readback"])
+def test_orchestrator_results_reservation_and_finalization_faults_fail_closed(
+    tmp_path, fault
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    sentinel = prepared["base"] / "operator-retained"
+    sentinel.mkdir()
+    p.write(sentinel / "report.json", b"operator retained bytes")
+    setup = """
+original_mkdir_for_fault = os.mkdir
+original_replace = os.replace
+original_read = os.read
+publications = []
+def candidate_path(path, fd=None):
+    parent = Path(os.readlink('/proc/self/fd/' + str(fd))) if fd is not None else Path.cwd()
+    return Path(path) if Path(path).is_absolute() else parent / path
+def collision(path, *args, **kwargs):
+    if candidate_path(path, kwargs.get('dir_fd')).parent == Path(BASE):
+        raise FileExistsError('SIMULATED_RESERVATION_COLLISION')
+    return original_mkdir_for_fault(path, *args, **kwargs)
+def publication(src, dst, *args, **kwargs):
+    target = candidate_path(dst, kwargs.get('dst_dir_fd'))
+    if target.name == 'report.json' and target.is_relative_to(Path(BASE)):
+        publications.append(str(target))
+        if len(publications) > 1:
+            raise OSError('SIMULATED_FINAL_PUBLICATION_FAILURE')
+    return original_replace(src, dst, *args, **kwargs)
+def denied_read(fd, count):
+    path = Path(os.readlink('/proc/self/fd/' + str(fd)))
+    if path.name == 'report.json' and path.is_relative_to(Path(BASE)) and path.parent.name != 'operator-retained':
+        raise PermissionError('SIMULATED_REPORT_READBACK_DENIED')
+    return original_read(fd, count)
+"""
+    setup += {
+        "collision": "\nos.mkdir = collision\n",
+        "publish": "\nos.replace = publication\n",
+        "readback": "\nos.read = denied_read\n",
+    }[fault]
+    value, observed, calls, names = core.invoke(prepared, probe_setup=setup)
+    assert value["status"] != 0, value
+    assert p.read(sentinel / "report.json") == b"operator retained bytes"
+    assert "operator-retained" in names
+    if fault == "collision":
+        assert observed["exclusive_reservations"] == []
+        assert observed["legs"] == [] and calls == []
+    else:
+        assert observed["exclusive_reservations"], (
+            "publication fault follows acquisition"
+        )
+    # A visible final report alone is never accepted over the raw unsuccessful
+    # invocation, including post-publication readback/permission failures.
+    assert value["stdout"] is not None and value["stderr"] is not None
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "partial",
+        "schema",
+        "incomplete",
+        "permission",
+        "missing",
+        "success",
+        "run-id",
+        "root",
+    ],
+)
+def test_manual_handoff_reads_only_supplied_path_and_rejects_unreadable_or_partial_local_evidence(
+    tmp_path, monkeypatch, fault
+):
+    from tests import host_results_support as results
+
+    # Tests the shared local reader, not delivered host inspection or mount
+    # access. No separate mount-confirmation input is needed for this reader.
+    supplied = tmp_path / "operator-supplied"
+    newer = tmp_path / "newer-unrelated"
+    supplied.mkdir()
+    newer.mkdir()
+    good = {
+        "schema_version": 1,
+        "state": "final",
+        "success": True,
+        "run_id": supplied.name,
+        "repository_root": str(tmp_path / "candidate-supplied"),
+    }
+    unrelated = {
+        **good,
+        "run_id": newer.name,
+        "repository_root": str(tmp_path / "candidate-other"),
+    }
+    p.write(newer / "report.json", p.canonical(unrelated))
+    bad = dict(good)
+    if fault == "schema":
+        bad["schema_version"] = True
+    elif fault == "incomplete":
+        bad["state"] = "incomplete"
+    elif fault == "success":
+        bad["success"] = False
+    elif fault == "run-id":
+        bad["run_id"] = newer.name
+    elif fault == "root":
+        bad["repository_root"] = "relative-root"
+    path = supplied / "report.json"
+    if fault != "missing":
+        p.write(path, b"{" if fault == "partial" else p.canonical(bad))
+    os.utime(supplied, (100, 100))
+    os.utime(newer, (200, 200))
+    if fault == "permission":
+        read = p.read
+
+        def deny(target, **kwargs):
+            if Path(target) == path:
+                raise PermissionError("simulated shared-file access failure")
+            return read(target, **kwargs)
+
+        monkeypatch.setattr(p, "read", deny)
+
+    assert results.read_accepted_report(newer / "report.json") == unrelated
+    if fault is None:
+        accepted = results.read_accepted_report(path)
+        assert accepted == good
+        assert accepted["run_id"] == supplied.name != unrelated["run_id"]
+        assert (
+            accepted["repository_root"]
+            == good["repository_root"]
+            != unrelated["repository_root"]
+        )
+    else:
+        with pytest.raises((AssertionError, ValueError, OSError)):
+            results.read_accepted_report(path)
+    assert p.load(newer / "report.json") == unrelated
+    assert supplied.is_dir() and newer.is_dir(), (
+        "simulated operator evidence remains retained"
+    )
+
+
+@pytest.mark.parametrize("phase", ["valid", "invalid", "read-error", "interrupt"])
+@pytest.mark.parametrize("close_fault", [False, True])
+def test_shared_report_reader_preserves_operation_and_close_authority_and_releases_once(
+    tmp_path, monkeypatch, phase, close_fault
+):
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from tests import host_results_support as results
+
+    run = tmp_path / "supplied-run"
+    run.mkdir()
+    path = run / "report.json"
+    value = {
+        "schema_version": 1,
+        "state": "incomplete" if phase == "invalid" else "final",
+        "success": True,
+        "run_id": run.name,
+        "repository_root": str(tmp_path / "candidate"),
+    }
+    p.write(path, p.canonical(value))
+    original_ops = p.OPS
+    original_read = os.read
+    opening = DirectoryDescriptor.open_secure_path
+    descriptor = p.OwnedDescriptor
+    active = False
+    owners = []
+    closed = []
+    primary = (
+        KeyboardInterrupt("reader interrupted")
+        if phase == "interrupt"
+        else OSError("reader failed")
+    )
+
+    class FaultOps(type(original_ops)):
+        def close(self, fd):
+            original_ops.close(fd)
+            if active:
+                failure = OSError(f"reader close failed: {fd}")
+                closed.append((fd, failure))
+                if close_fault:
+                    raise failure
+
+    class TrackedDescriptor(descriptor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            owners.append(self)
+
+    def acquire(*args, **kwargs):
+        nonlocal active
+        owner = opening(*args, **kwargs)
+        owners.append(owner)
+        active = True  # Ancestor traversal remains fault-free fixture setup.
+        return owner
+
+    def read(fd, count):
+        if phase in {"read-error", "interrupt"}:
+            raise primary
+        return original_read(fd, count)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(p, "OPS", FaultOps())
+        patch.setattr(p, "OwnedDescriptor", TrackedDescriptor)
+        patch.setattr(DirectoryDescriptor, "open_secure_path", acquire)
+        patch.setattr(os, "read", read)
+        if phase == "valid" and not close_fault:
+            assert results.read_accepted_report(path) == value
+        else:
+            with pytest.raises(BaseException) as caught:
+                results.read_accepted_report(path)
+            if phase in {"read-error", "interrupt"}:
+                assert caught.value is primary
+            elif phase == "invalid":
+                assert isinstance(caught.value, AssertionError)
+                assert "not final" in str(caught.value)
+            else:
+                assert caught.value is closed[0][1]
+        assert len(owners) == len(closed) == 2, (
+            "file and directory are independent owners"
+        )
+        assert len({fd for fd, _ in closed}) == 2
+        assert all(owner.released for owner in owners)
+        for owner in owners:
+            owner.close()
+        assert len(closed) == 2, "repeat cleanup must not retry either close"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "empty",
+        "missing-normal",
+        "duplicate",
+        "order",
+        "status",
+        "counts",
+        "bool-count",
+        "not-detected",
+        "unsuccessful",
+    ],
+)
+def test_synthetic_direct_report_rule_rejects_zero_or_incomplete_execution(fault):
+    from tests import host_orchestration_support as core
+
+    report = {
+        "state": "final",
+        "success": True,
+        "first_unexpected_status": None,
+        "legs": [],
+    }
+    for case in ("staged_bytes", "argv", "command_status", "cleanup", None):
+        report["legs"].append(
+            {
+                "case_id": case,
+                "pytest_status": 0 if case is None else 1,
+                "detected": case is not None,
+                "counts": {
+                    "collected": 2 if case is None else 1,
+                    "passed": 2 if case is None else 0,
+                    "failed": 0 if case is None else 1,
+                    "skipped": 0,
+                    "xfailed": 0,
+                    "xpassed": 0,
+                },
+            }
+        )
+    core.check_synthetic_leg_report(report)
+    if fault == "empty":
+        report["legs"] = []
+    elif fault == "missing-normal":
+        report["legs"].pop()
+    elif fault == "duplicate":
+        report["legs"][-1] = report["legs"][0]
+    elif fault == "order":
+        report["legs"].reverse()
+    elif fault == "status":
+        report["legs"][0]["pytest_status"] = 0
+    elif fault == "counts":
+        report["legs"][-1]["counts"]["collected"] = 0
+    elif fault == "bool-count":
+        report["legs"][0]["counts"]["collected"] = True
+    elif fault == "not-detected":
+        report["legs"][0]["detected"] = False
+    elif fault == "unsuccessful":
+        report["success"] = False
+    if fault is not None:
+        with pytest.raises(AssertionError):
+            core.check_synthetic_leg_report(report)
+
+
+@pytest.mark.parametrize("kind", ["link", "file"])
+def test_results_inventory_nested_ancestor_replacement_never_redirects_leaf_read(
+    tmp_path, monkeypatch, kind
+):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    nested = base / "nested"
+    nested.mkdir(parents=True)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    if kind == "link":
+        (nested / "leaf").symlink_to("original-target")
+        (foreign / "leaf").symlink_to("foreign-target")
+    else:
+        p.write(nested / "leaf", b"original bytes")
+        p.write(foreign / "leaf", b"foreign bytes")
+    parked = tmp_path / "parked"
+    reading_link = os.readlink
+    reading_file = results._read_file
+    calls = []
+
+    def replace():
+        nested.rename(parked)
+        nested.symlink_to(foreign, target_is_directory=True)
+
+    def readlink(name, *, dir_fd=None):
+        if name == "leaf":
+            replace()
+            calls.append(dir_fd)
+        return reading_link(name, dir_fd=dir_fd)
+
+    def read_file(directory, name, expected):
+        replace()
+        calls.append(directory.fd)
+        return reading_file(directory, name, expected)
+
+    with monkeypatch.context() as patch:
+        if kind == "link":
+            patch.setattr(os, "readlink", readlink)
+        else:
+            patch.setattr(results, "_read_file", read_file)
+        observed = results.inventory(base)
+    leaf = next(entry for entry in observed if entry["path"] == "nested/leaf")
+    assert len(calls) == 1 and calls[0] is not None
+    if kind == "link":
+        assert leaf["target"] == "original-target"
+    else:
+        import hashlib
+
+        assert leaf["sha256"] == hashlib.sha256(b"original bytes").hexdigest()
+    assert nested.is_symlink() and parked.is_dir() and foreign.is_dir()
+
+
+@pytest.mark.parametrize("contents", ["empty", "unowned", "claimed"])
+def test_results_ledger_rejects_replaced_base_even_when_descendant_inventory_matches(
+    tmp_path, contents
+):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    if contents == "unowned":
+        p.write(base / "operator", b"retained")
+    ledger = results.ResultsLedger(base, evidence)
+    if contents == "claimed":
+        (base / "owned").mkdir()
+        p.write(base / "owned/output", b"retained")
+        ledger.claim(base / "owned", reservation_succeeded=True)
+    before_replacement = results.inventory(base)
+    parked = tmp_path / "old-base"
+    base.rename(parked)
+    base.mkdir()
+    for child in parked.iterdir():
+        child.rename(base / child.name)
+    assert results.inventory(base) == before_replacement
+    assert (base.stat().st_dev, base.stat().st_ino) != ledger.base_identity
+    assert p.load(evidence / "base-identity.json")["identity"] == list(
+        ledger.base_identity
+    )
+    with pytest.raises(AssertionError, match="base identity changed") as caught:
+        ledger.finish()
+    with pytest.raises(AssertionError) as repeated:
+        ledger.finish()
+    assert caught.value is repeated.value
+    assert results.inventory(base) == before_replacement
+    assert not (evidence / "retained").exists()
+    assert not (evidence / "reconciled.json").exists()
+
+
+@pytest.mark.parametrize("boundary", ["claim", "cleanup-open", "final-snapshot"])
+def test_results_ledger_checks_base_identity_on_subsequent_reopenings(
+    tmp_path, monkeypatch, boundary
+):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence)
+    (base / "owned").mkdir()
+    p.write(base / "owned/output", b"retained")
+    if boundary != "claim":
+        ledger.claim(base / "owned", reservation_succeeded=True)
+    opening = results.DirectoryDescriptor.open_secure_path
+    parked = tmp_path / "old-base"
+    acquisitions = []
+
+    def acquire(ops, path, **kwargs):
+        if Path(path) == base:
+            acquisitions.append(Path(path))
+            # finish: initial snapshot, then cleanup open, then final snapshot.
+            trigger = {"claim": 1, "cleanup-open": 2, "final-snapshot": 3}[boundary]
+            if len(acquisitions) == trigger:
+                base.rename(parked)
+                base.mkdir()
+                for child in parked.iterdir():
+                    child.rename(base / child.name)
+        return opening(ops, path, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(results.DirectoryDescriptor, "open_secure_path", acquire)
+        with pytest.raises(AssertionError, match="base identity changed"):
+            if boundary == "claim":
+                ledger.claim(base / "owned", reservation_succeeded=True)
+            else:
+                ledger.finish()
+    assert not (evidence / "reconciled.json").exists()
+    if boundary == "claim":
+        assert ledger.claims == {}
+        assert p.read(base / "owned/output") == b"retained"
+    elif boundary == "cleanup-open":
+        assert p.read(base / "owned/output") == b"retained"
+        assert p.read(evidence / "retained/owned/output") == b"retained"
+    else:
+        assert not (base / "owned").exists()
+        assert p.read(evidence / "retained/owned/output") == b"retained"
+
+
+@pytest.mark.parametrize("boundary", ["inventory", "claim", "finish"])
+def test_results_base_check_rejects_ancestor_symlink_back_to_original_inode(
+    tmp_path, monkeypatch, boundary
+):
+    from footman.filesystem.descriptors import DescriptorError
+    from tests import host_results_support as results
+
+    ancestor = tmp_path / "ancestor"
+    base = ancestor / "base"
+    base.mkdir(parents=True)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence)
+    (base / "owned").mkdir()
+    p.write(base / "owned/output", b"retain original bytes")
+    if boundary == "finish":
+        ledger.claim(base / "owned", reservation_succeeded=True)
+    moved = tmp_path / "moved-ancestor"
+    opening = results.DirectoryDescriptor.open_secure_path
+    owners = []
+
+    def acquire(ops, path, **kwargs):
+        owner = opening(ops, path, **kwargs)
+        if Path(path) == base:
+            owners.append(owner)
+            ancestor.rename(moved)
+            ancestor.symlink_to(moved, target_is_directory=True)
+        return owner
+
+    with monkeypatch.context() as patch:
+        patch.setattr(results.DirectoryDescriptor, "open_secure_path", acquire)
+        with pytest.raises((OSError, DescriptorError)) as caught:
+            if boundary == "inventory":
+                results.inventory(base)
+            elif boundary == "claim":
+                ledger.claim(base / "owned", reservation_succeeded=True)
+            else:
+                ledger.finish()
+        if boundary == "finish":
+            with pytest.raises(BaseException) as repeated:
+                ledger.finish()
+            assert repeated.value is caught.value
+    assert len(owners) == 1 and owners[0].released
+    owners[0].close()
+    # Deliberately demonstrate why the old pathname lstat check missed this:
+    # its leaf identity is unchanged despite the forbidden ancestor traversal.
+    info = base.lstat()
+    assert (info.st_dev, info.st_ino) == ledger.base_identity
+    assert p.read(moved / "base/owned/output") == b"retain original bytes"
+    assert not (evidence / "reconciled.json").exists()
+    assert not (evidence / "retained").exists()
+    if boundary == "claim":
+        assert ledger.claims == {}
+
+
+@pytest.mark.parametrize("operation", [None, "stat", "interrupt", "identity"])
+@pytest.mark.parametrize("close_fault", [False, True])
+def test_results_base_parent_check_release_matrix(
+    tmp_path, monkeypatch, operation, close_fault
+):
+    from types import SimpleNamespace
+
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    opening = results.DirectoryDescriptor.open_secure_path
+    closing = p.OPS.close
+    stating = results.DirectoryDescriptor.stat_child
+    owners = []
+    targets = set()
+    closed = []
+    calls = []
+    primary = (
+        KeyboardInterrupt("parent stat interrupted")
+        if operation == "interrupt"
+        else OSError("parent stat failed")
+    )
+    close_failure = OSError("parent close failed")
+
+    def close(fd):
+        closing(fd)
+        if fd in targets:
+            targets.remove(fd)
+            closed.append(fd)
+            if close_fault:
+                raise close_failure
+
+    def acquire(ops, path, **kwargs):
+        owner = opening(ops, path, **kwargs)
+        assert Path(path) == base.parent
+        owners.append(owner)
+        targets.add(owner.fd)
+        patch.setattr(type(p.OPS), "close", lambda self, fd: close(fd))
+        return owner
+
+    def stat_child(owner, name, *, follow_symlinks=False):
+        calls.append((owner, name, follow_symlinks))
+        if operation in {"stat", "interrupt"}:
+            raise primary
+        info = stating(owner, name, follow_symlinks=follow_symlinks)
+        if operation == "identity":
+            return SimpleNamespace(
+                st_dev=info.st_dev, st_ino=info.st_ino + 1, st_mode=info.st_mode
+            )
+        return info
+
+    with opening(p.OPS, base) as base_owner:
+        expected = results._identity(os.fstat(base_owner.fd))
+        with monkeypatch.context() as patch:
+            patch.setattr(results.DirectoryDescriptor, "open_secure_path", acquire)
+            patch.setattr(results.DirectoryDescriptor, "stat_child", stat_child)
+            if operation is None and not close_fault:
+                results._check_base(base_owner, base, expected)
+            else:
+                with pytest.raises(BaseException) as caught:
+                    results._check_base(base_owner, base, expected)
+                if operation in {"stat", "interrupt"}:
+                    assert caught.value is primary
+                elif operation == "identity":
+                    assert isinstance(caught.value, AssertionError)
+                    assert "base identity changed" in str(caught.value)
+                else:
+                    assert caught.value is close_failure
+            assert len(owners) == len(closed) == 1
+            assert calls == [(owners[0], base.name, False)]
+            assert owners[0].released
+            owners[0].close()
+            assert len(closed) == 1
+            assert not base_owner.released
+            assert results._identity(os.fstat(base_owner.fd)) == expected
+    assert base_owner.released
+
+
+@pytest.mark.parametrize("reader", ["inventory", "cleanup-leaf"])
+@pytest.mark.parametrize("close_fault", [False, True])
+@pytest.mark.parametrize("operation", [None, "read", "interrupt", "identity"])
+def test_descriptor_relative_inventory_file_release_matrix(
+    tmp_path, monkeypatch, close_fault, operation, reader
+):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    p.write(base / "leaf", b"original bytes")
+    entry = results.inventory(base)[0]
+
+    def inspect():
+        if reader == "inventory":
+            return results.inventory(base)[0]
+        with results.DirectoryDescriptor.open_secure_path(p.OPS, base) as parent:
+            results._verify_preserved_leaf(parent, "leaf", entry)
+        return entry
+
+    original_ops = p.OPS
+    descriptor = results.OwnedDescriptor
+    opening = results.DirectoryDescriptor.open_secure_path
+    reading = os.read
+    owners = []
+    closed = []
+    targets = set()
+    primary = (
+        KeyboardInterrupt("file read interrupted")
+        if operation == "interrupt"
+        else OSError("file read failed")
+    )
+
+    class FaultOps(type(original_ops)):
+        def close(self, fd):
+            original_ops.close(fd)
+            if fd in targets:
+                targets.remove(fd)
+                error = OSError(f"inventory close failed: {fd}")
+                closed.append((fd, error))
+                if close_fault:
+                    raise error
+
+    class TrackedDescriptor(descriptor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            owners.append(self)
+            targets.add(self.fd)
+
+    def acquire(ops, path, **kwargs):
+        owner = opening(ops, path, **kwargs)
+        if Path(path) == base:
+            owners.append(owner)
+            targets.add(owner.fd)
+        return owner
+
+    def read(fd, count):
+        if operation in {"read", "interrupt"}:
+            raise primary
+        return reading(fd, count)
+
+    checking = results._identity
+
+    def identity(info):
+        value = checking(info)
+        if operation == "identity" and len(owners) == 2:
+            return value[0], value[1] + 1
+        return value
+
+    with monkeypatch.context() as patch:
+        patch.setattr(p, "OPS", FaultOps())
+        patch.setattr(results, "OwnedDescriptor", TrackedDescriptor)
+        patch.setattr(results.DirectoryDescriptor, "open_secure_path", acquire)
+        patch.setattr(os, "read", read)
+        patch.setattr(results, "_identity", identity)
+        if operation is None and not close_fault:
+            assert inspect()["kind"] == "file"
+        else:
+            with pytest.raises(BaseException) as caught:
+                inspect()
+            if operation in {"read", "interrupt"}:
+                assert caught.value is primary
+            elif operation == "identity":
+                assert isinstance(caught.value, AssertionError)
+                assert "file identity changed" in str(caught.value)
+            else:
+                assert caught.value is closed[0][1]
+        assert len(owners) == len(closed) == 2
+        assert len({fd for fd, _ in closed}) == 2
+        assert all(owner.released for owner in owners)
+        for owner in owners:
+            owner.close()
+        assert len(closed) == 2
+
+
+@pytest.mark.parametrize("boundary", ["snapshot", "claim", "finish"])
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("close_fault", [False, True])
+def test_results_base_check_failure_preserves_primary_and_releases_once(
+    tmp_path, monkeypatch, boundary, interrupted, close_fault
+):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence)
+    (base / "owned").mkdir()
+    opening = results.DirectoryDescriptor.open_secure_path
+    closing = p.OPS.close
+    primary = (
+        KeyboardInterrupt("base check interrupted")
+        if interrupted
+        else AssertionError("results base identity changed")
+    )
+    owners = []
+    closed = []
+
+    def close(fd):
+        closing(fd)
+        closed.append(fd)
+        if close_fault:
+            raise OSError("base check close failed")
+
+    def acquire(*args, **kwargs):
+        owner = opening(*args, **kwargs)
+        owners.append(owner)
+        patch.setattr(type(p.OPS), "close", lambda self, fd: close(fd))
+        return owner
+
+    def check(*args):
+        raise primary
+
+    with monkeypatch.context() as patch:
+        patch.setattr(results.DirectoryDescriptor, "open_secure_path", acquire)
+        patch.setattr(results, "_check_base", check)
+        with pytest.raises(BaseException) as caught:
+            if boundary == "snapshot":
+                results.inventory(base)
+            elif boundary == "claim":
+                ledger.claim(base / "owned", reservation_succeeded=True)
+            else:
+                ledger.finish()
+        assert caught.value is primary
+        assert len(owners) == len(closed) == 1 and owners[0].released
+        owners[0].close()
+        if boundary == "finish":
+            with pytest.raises(BaseException) as repeated:
+                ledger.finish()
+            assert repeated.value is primary
+        assert len(closed) == 1
+    assert ledger.claims == {} and (base / "owned").is_dir()
+    assert not (evidence / "reconciled.json").exists()
+
+
+@pytest.mark.parametrize(
+    "case", ["empty", "claimed", "unknown", "path", "identity", "boolean"]
+)
+def test_created_base_receipt_binds_identity_without_implicitly_claiming_descendants(
+    tmp_path, case
+):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()  # Independently successful exclusive creation, before children.
+    info = base.stat()
+    receipt = {"path": str(base), "device": info.st_dev, "inode": info.st_ino}
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    if case in {"claimed", "unknown"}:
+        (base / "run").mkdir()
+        p.write(base / "run/output", b"retained")
+    if case == "path":
+        receipt["path"] = str(tmp_path / "other")
+    elif case == "identity":
+        receipt["inode"] += 1
+    elif case == "boolean":
+        receipt["inode"] = True
+    if case in {"path", "identity", "boolean"}:
+        with pytest.raises(AssertionError):
+            results.ResultsLedger(base, evidence, created_base_receipt=receipt)
+        assert not (evidence / "reconciled.json").exists()
+        return
+    ledger = results.ResultsLedger(base, evidence, created_base_receipt=receipt)
+    assert ledger.before == [] and ledger.base_identity == (info.st_dev, info.st_ino)
+    if case == "unknown":
+        with pytest.raises(AssertionError, match="unknown or changed") as caught:
+            ledger.finish()
+        with pytest.raises(AssertionError) as repeated:
+            ledger.finish()
+        assert repeated.value is caught.value
+        assert p.read(base / "run/output") == b"retained"
+    else:
+        if case == "claimed":
+            ledger.claim(base / "run", reservation_succeeded=True)
+        ledger.finish()
+        ledger.finish()
+        assert results.inventory(base) == []
+        if case == "claimed":
+            assert p.read(evidence / "retained/run/output") == b"retained"
+
+
+@pytest.mark.parametrize("fault", ["interrupt", "observation", "completion"])
+def test_loaded_invocation_failure_accounts_durable_reservations_without_observation(
+    tmp_path, monkeypatch, fault
+):
+    from tests import host_orchestration_support as core
+
+    source = b"""from pathlib import Path
+_RESULTS_BASE = None
+def main(argv):
+    (_RESULTS_BASE / "exclusive-run").mkdir()
+    return 0
+"""
+    prepared = core.prepare(tmp_path, fixture_source=source)
+    command = wheel.command
+    writing = p.write
+    primary = (
+        KeyboardInterrupt("after child reservation")
+        if fault == "interrupt"
+        else OSError("completion failed")
+    )
+
+    def execute(argv, **kwargs):
+        value = command(argv, **kwargs)
+        if "-c" in argv and "root = Path(ROOT)" in str(argv):
+            if fault == "interrupt":
+                raise primary
+            if fault == "observation":
+                value = {**value, "stdout": b"lost observation\n"}
+        return value
+
+    def write(path, data):
+        if fault == "completion" and Path(path).name == "completion-profile.json":
+            raise primary
+        return writing(path, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(wheel, "command", execute)
+        patch.setattr(p, "write", write)
+        with pytest.raises(BaseException) as caught:
+            core.invoke(prepared)
+    if fault != "observation":
+        assert caught.value is primary
+    else:
+        assert isinstance(caught.value, AssertionError)
+        assert "complete observation" in str(caught.value)
+    ledger = prepared["_results_ledger"]
+    receipts = core.reservation_receipts(prepared)
+    assert len(receipts) == 1
+    receipt = receipts[0]
+    assert ledger.claims["exclusive-run"] == (receipt["device"], receipt["inode"])
+    core.reconcile_reservations(prepared, ledger)
+    core.reconcile_reservations(prepared, ledger)
+    assert not (prepared["base"] / "exclusive-run").exists()
+    assert p.load(ledger.evidence / "reconciled.json")["complete"] is True
+
+
+@pytest.mark.parametrize("fault", ["child-status", "observation", "interrupt"])
+def test_direct_execution_failure_and_parsing_are_inside_receipt_reconciliation_scope(
+    tmp_path, monkeypatch, fault, _account_for_orchestrator_results
+):
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    base = tmp_path / "fixture-results"
+    source = (
+        f"""#!/usr/bin/env python3.14
+from pathlib import Path
+import sys
+root = Path(__file__).resolve().parents[1]
+assert (root / "src/footman/filesystem/descriptors.py").is_file()
+sys.path.insert(0, str(root / "src"))
+from footman.filesystem.descriptors import DirectoryDescriptor
+from footman.filesystem.operations import PosixDescriptorOps
+(Path({str(base)!r}) / "exclusive-run").mkdir()
+print("not-json")
+raise SystemExit({19 if fault == "child-status" else 0})
+"""
+    ).encode()
+    prepared = core.prepare(tmp_path, fixture_source=source)
+    environment = core.isolated_environment(prepared, tmp_path)
+    evidence = tmp_path / "direct-failure-evidence"
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence)
+    entry = _account_for_orchestrator_results(prepared, ledger)
+    command = wheel.command
+    primary = (
+        KeyboardInterrupt("direct parent interrupted")
+        if fault == "interrupt"
+        else OSError("direct status failure")
+    )
+
+    def execute(*args, **kwargs):
+        value = command(*args, **kwargs)
+        if (
+            fault == "interrupt"
+            and Path(args[0][0]).name == "verify_host_acceptance.py"
+        ):
+            raise primary
+        return value
+
+    with monkeypatch.context() as patch:
+        patch.setattr(wheel, "command", execute)
+        with pytest.raises(BaseException) as caught:
+            with core.accounting_scope(
+                lambda: core.reconcile_reservations(prepared, ledger, entry["start"])
+            ):
+                with core.accounting_scope(
+                    lambda: core.account_reservations(prepared, ledger, entry["start"])
+                ):
+                    core.prepare_direct_recorder(prepared, evidence, environment)
+                    value = wheel.command(
+                        [prepared["root"] / "scripts/verify_host_acceptance.py"],
+                        cwd=prepared["foreign"],
+                        env=environment,
+                        timeout_seconds=30,
+                    )
+                if fault == "child-status":
+                    assert value["status"] == 19
+                    raise primary
+                json.loads(value["stdout"])
+    if fault != "observation":
+        assert caught.value is primary
+    else:
+        assert isinstance(caught.value, ValueError)
+    receipts = core.reservation_receipts(prepared, entry["start"])
+    assert len(receipts) == 1 and receipts[0]["operation"] == "exclusive-mkdir-success"
+    assert ledger.claims["exclusive-run"] == (
+        receipts[0]["device"],
+        receipts[0]["inode"],
+    )
+    assert not (base / "exclusive-run").exists()
+    assert p.load(evidence / "reconciled.json")["complete"] is True
+
+
+@pytest.mark.parametrize("validated_bootstrap", [False, True])
+def test_direct_observation_does_not_supply_orchestrator_bootstrap(
+    tmp_path, validated_bootstrap, _account_for_orchestrator_results
+):
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    base = tmp_path / "fixture-results"
+    source = (
+        f"""#!/usr/bin/env python3.14
+from pathlib import Path
+import sys
+root = Path(__file__).resolve().parents[1]
+assert sys.path[0] == str(root / "scripts"), sys.path
+assert str(root) not in sys.path and str(root / "src") not in sys.path
+assert not any(name == "footman" or name.startswith("footman.") for name in sys.modules)
+assert sys.orig_argv[1] == str(Path(__file__)), sys.orig_argv
+if {validated_bootstrap!r}:
+    def bootstrap():
+        source = root / "src"
+        assert source.is_dir() and not source.is_symlink()
+        for relative in ("footman/__init__.py", "footman/process.py", "footman/filesystem/descriptors.py", "footman/filesystem/operations.py"):
+            path = source / relative
+            assert path.is_file() and not path.is_symlink()
+        sys.path.insert(0, str(source))
+        from footman.filesystem.descriptors import DirectoryDescriptor
+        from footman.filesystem.operations import PosixDescriptorOps
+    bootstrap()
+import footman.process
+assert Path(footman.process.__file__).resolve() == root / "src/footman/process.py"
+(Path({str(base)!r}) / "exclusive-run").mkdir()
+print("own-bootstrap-established")
+"""
+    ).encode()
+    prepared = core.prepare(tmp_path, fixture_source=source)
+    environment = core.isolated_environment(prepared, tmp_path)
+    evidence = tmp_path / "bootstrap-observation"
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence)
+    entry = _account_for_orchestrator_results(prepared, ledger)
+    with core.accounting_scope(
+        lambda: core.reconcile_reservations(prepared, ledger, entry["start"])
+    ):
+        with core.accounting_scope(
+            lambda: core.account_reservations(prepared, ledger, entry["start"])
+        ):
+            core.prepare_direct_recorder(prepared, evidence, environment)
+            value = wheel.command(
+                [prepared["root"] / "scripts/verify_host_acceptance.py"],
+                cwd=prepared["foreign"],
+                env=environment,
+                timeout_seconds=30,
+            )
+        p.write(evidence / "operation.json", p.canonical(h.operation_record(value)))
+        assert "PYTHONPATH" not in environment
+        if validated_bootstrap:
+            core.require_direct_success(value)
+            assert value["stdout"] == b"own-bootstrap-established\n"
+            assert len(core.reservation_receipts(prepared)) == len(ledger.claims) == 1
+        else:
+            assert value["status"] != 0
+            assert b"ModuleNotFoundError: No module named 'footman'" in value["stderr"]
+            with pytest.raises(AssertionError, match="ModuleNotFoundError"):
+                core.require_direct_success(
+                    value
+                )  # Same acceptance check as the direct contract.
+            assert core.reservation_receipts(prepared) == [] and ledger.claims == {}
+    assert p.load(evidence / "reconciled.json")["complete"] is True
+
+
+def test_direct_observer_leaves_early_mkdir_unknown_without_importing_foundation(
+    tmp_path, monkeypatch
+):
+    import sys
+
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    journal = tmp_path / "journal"
+    prepared = {"base": base}
+    core.new_reservation_journal(prepared, journal)
+    ledger = results.ResultsLedger(base, evidence)
+    before_path = list(sys.path)
+    namespace = {}
+    exec(compile(core.DIRECT_RECORDER, "direct-observer.py", "exec"), namespace)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "mkdir", os.mkdir)
+        patch.delitem(sys.modules, "footman.filesystem.descriptors")
+        patch.delitem(sys.modules, "footman.filesystem.operations")
+        namespace["install"](base, journal)
+        (base / "unknown").mkdir()
+        assert "footman.filesystem.descriptors" not in sys.modules
+        assert "footman.filesystem.operations" not in sys.modules
+        assert sys.path == before_path
+    assert core.reservation_receipts(prepared) == []
+    with pytest.raises(AssertionError, match="unknown or changed"):
+        core.reconcile_reservations(prepared, ledger)
+    assert (base / "unknown").is_dir()
+
+
+@pytest.mark.parametrize("progress", [0, 3])
+def test_direct_observer_short_write_progress_or_explicit_failure(
+    tmp_path, monkeypatch, progress
+):
+    from tests import host_orchestration_support as core
+
+    base, evidence, ledger = _results_fixture(tmp_path)
+    prepared = {"base": base}
+    core.new_reservation_journal(prepared, tmp_path / "journal")
+    writing = os.write
+    calls = []
+    namespace = {}
+    exec(compile(core.DIRECT_RECORDER, "direct-observer.py", "exec"), namespace)
+
+    def write(fd, data):
+        calls.append(len(data))
+        return writing(fd, data[:progress]) if progress else 0
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "mkdir", os.mkdir)
+        patch.setattr(os, "write", write)
+        namespace["install"](base, prepared["reservation_journals"][0])
+        if progress:
+            (base / "owned").mkdir()
+        else:
+            with pytest.raises(OSError, match="made no progress"):
+                (base / "owned").mkdir()
+    if progress:
+        assert len(calls) > 1 and all(
+            a - b == progress for a, b in zip(calls, calls[1:], strict=False)
+        )
+        core.reconcile_reservations(prepared, ledger)
+        core.reconcile_reservations(prepared, ledger)
+        assert not (base / "owned").exists()
+    else:
+        assert len(calls) == 1
+        with pytest.raises(ValueError):
+            core.reconcile_reservations(prepared, ledger)
+        assert (base / "owned").is_dir() and not ledger.claims
+    assert (
+        p.read(base / "operator-retained/report.json")
+        == b"operator evidence must survive"
+    )
+
+
+def test_direct_observer_concurrent_exclusive_reservation_losers_have_no_receipts(
+    tmp_path, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tests import host_orchestration_support as core
+
+    base, evidence, ledger = _results_fixture(tmp_path)
+    prepared = {"base": base}
+    core.new_reservation_journal(prepared, tmp_path / "journal")
+    namespace = {}
+    exec(compile(core.DIRECT_RECORDER, "direct-observer.py", "exec"), namespace)
+
+    def reserve(_):
+        try:
+            (base / "owned").mkdir()
+        except FileExistsError:
+            return False
+        return True
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "mkdir", os.mkdir)
+        namespace["install"](base, prepared["reservation_journals"][0])
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            outcomes = list(workers.map(reserve, range(4)))
+    assert outcomes.count(True) == 1 and outcomes.count(False) == 3
+    assert len(core.reservation_receipts(prepared)) == 1
+    core.reconcile_reservations(prepared, ledger)
+    assert not (base / "owned").exists()
+    assert (
+        p.read(base / "operator-retained/report.json")
+        == b"operator evidence must survive"
+    )
+
+
+@pytest.mark.parametrize("fault", ["unknown", "malformed", "replacement", "collision"])
+def test_unresolved_reservations_fail_without_deleting_unknown_resources_and_do_not_retry(
+    tmp_path, monkeypatch, fault
+):
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+    from tests.host_orchestration_tool import install_reservation_recorder
+
+    base = tmp_path / "base"
+    base.mkdir()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence)
+    journal = tmp_path / "journal"
+    prepared = {"base": base}
+    core.new_reservation_journal(prepared, journal)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "mkdir", os.mkdir)
+        install_reservation_recorder(base, journal)
+        (base / "owned").mkdir()
+        if fault == "collision":
+            with pytest.raises(FileExistsError):
+                (base / "owned").mkdir()
+    assert len(core.reservation_receipts(prepared)) == 1, (
+        "reservation loser must emit no receipt"
+    )
+    if fault in {"unknown", "collision"}:
+        (base / "unknown").mkdir()
+        p.write(
+            base / "unknown/report.json",
+            p.canonical({"state": "final", "success": True, "run_id": "unknown"}),
+        )
+    elif fault == "malformed":
+        p.write(journal / "000-invalid.json", b"{")
+        (base / "unknown").mkdir()
+    else:
+        (base / "owned").rename(tmp_path / "original-owned")
+        (base / "owned").mkdir()
+    before = results.inventory(base)
+    with pytest.raises((AssertionError, ValueError)) as caught:
+        core.reconcile_reservations(prepared, ledger)
+    assert ledger.attempted
+    assert results.inventory(base) == before
+    if fault != "replacement":
+        assert "owned" in ledger.claims, (
+            "a malformed sibling receipt must not hide valid acquisitions"
+        )
+    else:
+        assert ledger.claims == {}
+    with pytest.raises(BaseException) as repeated:
+        core.reconcile_reservations(prepared, ledger)
+    assert repeated.value is caught.value
+    assert results.inventory(base) == before
+    assert not (evidence / "reconciled.json").exists()
+
+
+@pytest.mark.parametrize(
+    "recorder", ["loaded-base", "direct-base", "direct-journal", "direct-file"]
+)
+@pytest.mark.parametrize("operation", [None, "write", "interrupt"])
+@pytest.mark.parametrize("close_fault", [False, True])
+def test_reservation_recorder_preserves_failures_and_releases_parent_exactly_once(
+    tmp_path, monkeypatch, operation, close_fault, recorder
+):
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+    from tests.host_orchestration_tool import install_reservation_recorder
+
+    base = tmp_path / "base"
+    base.mkdir()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence)
+    journal = tmp_path / "journal"
+    prepared = {"base": base}
+    core.new_reservation_journal(prepared, journal)
+    opening = results.DirectoryDescriptor.open_secure_path
+    constructing = results.OwnedDescriptor.__init__
+    closing = p.OPS.close
+    writing = os.write
+    owners = []
+    live = {}
+    targets = set()
+    closed = []
+    primary = (
+        KeyboardInterrupt("receipt write interrupted")
+        if operation == "interrupt"
+        else OSError("receipt write failed")
+    )
+    close_failure = OSError("recorder parent close failed")
+
+    def watch(owner, kind):
+        owners.append(owner)
+        live[owner.fd] = owner
+        if recorder.endswith(kind):
+            targets.add(owner.fd)
+
+    def close(fd):
+        closing(fd)
+        if fd in live:
+            closed.append(live.pop(fd))
+        if fd in targets:
+            targets.remove(fd)
+            if close_fault:
+                raise close_failure
+
+    def acquire(ops, path, **kwargs):
+        owner = opening(ops, path, **kwargs)
+        if Path(path) in (base, journal):
+            watch(owner, "base" if Path(path) == base else "journal")
+        return owner
+
+    def construct(owner, ops, fd, **kwargs):
+        constructing(owner, ops, fd, **kwargs)
+        if kwargs.get("label") in {
+            "MCP exclusive evidence",
+            "direct reservation receipt",
+        }:
+            watch(owner, "file")
+
+    def write(fd, data):
+        if operation is not None:
+            raise primary
+        return writing(fd, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "mkdir", os.mkdir)
+        patch.setattr(type(p.OPS), "close", lambda self, fd: close(fd))
+        patch.setattr(results.DirectoryDescriptor, "open_secure_path", acquire)
+        patch.setattr(results.OwnedDescriptor, "__init__", construct)
+        patch.setattr(os, "write", write)
+        if recorder.startswith("direct"):
+            namespace = {}
+            exec(compile(core.DIRECT_RECORDER, "direct-observer.py", "exec"), namespace)
+            namespace["install"](base, journal)
+        else:
+            install_reservation_recorder(base, journal)
+        if operation is None and not close_fault:
+            (base / "owned").mkdir()
+        else:
+            with pytest.raises(BaseException) as caught:
+                (base / "owned").mkdir()
+            assert caught.value is (primary if operation else close_failure)
+        assert len(owners) == len(closed) == 3, (
+            "all independent receipt owners must release"
+        )
+        assert all(owner.released for owner in owners)
+        assert {id(owner) for owner in closed} == {id(owner) for owner in owners}
+        for owner in owners:
+            owner.close()
+        assert len(closed) == 3
+    if operation is None:
+        core.reconcile_reservations(prepared, ledger)
+        assert not (base / "owned").exists()
+    else:
+        with pytest.raises((AssertionError, ValueError)):
+            core.reconcile_reservations(prepared, ledger)
+        assert ledger.attempted and ledger.claims == {}
+        assert (base / "owned").is_dir()
+
+
+def _results_fixture(tmp_path):
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    old = base / "operator-retained"
+    old.mkdir()
+    p.write(old / "report.json", b"operator evidence must survive")
+    return base, evidence, results.ResultsLedger(base, evidence)
+
+
+def test_results_ledger_preserves_binary_evidence_and_operator_runs_and_repeats(
+    tmp_path,
+):
+    from tests import host_results_support as results
+
+    base, evidence, ledger = _results_fixture(tmp_path)
+    run = base / "exclusive-test-run"
+    run.mkdir()
+    p.write(run / "stdout", b"complete\x00\xff")
+    (run / "link").symlink_to(base / "operator-retained")
+    ledger.claim(run, reservation_succeeded=True)
+    ledger.finish()
+    assert not run.exists()
+    assert (
+        p.read(evidence / "retained/exclusive-test-run/stdout") == b"complete\x00\xff"
+    )
+    assert results.inventory(base) == ledger.before
+    assert p.load(evidence / "reconciled.json")["complete"] is True
+    ledger.finish()
+    assert results.inventory(base) == ledger.before
+
+
+@pytest.mark.parametrize("fault", ["loser", "existing", "unknown", "mutation"])
+def test_results_ledger_never_adopts_collisions_or_deletes_unknown_resources(
+    tmp_path, fault
+):
+    from tests import host_results_support as results
+
+    base, _, ledger = _results_fixture(tmp_path)
+    old = base / "operator-retained"
+    if fault in {"loser", "existing"}:
+        with pytest.raises(AssertionError, match="ownership|unowned"):
+            ledger.claim(old, reservation_succeeded=fault == "existing")
+    else:
+        if fault == "unknown":
+            (base / "concurrent-unattributed").mkdir()
+        else:
+            p.write(old / "unknown", b"concurrent mutation")
+        with pytest.raises(AssertionError, match="unknown or changed") as first:
+            ledger.finish()
+        with pytest.raises(AssertionError) as repeated:
+            ledger.finish()
+        assert repeated.value is first.value
+    assert old.is_dir()
+    assert p.read(old / "report.json") == b"operator evidence must survive"
+    assert ledger.claims == {}
+    assert results.inventory(base)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [OSError("inventory failure"), KeyboardInterrupt("inventory interrupted")],
+)
+def test_results_inventory_error_preserves_identity_and_releases_once(
+    tmp_path, monkeypatch, failure
+):
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    owners = []
+    original = DirectoryDescriptor.list_names
+
+    def fail(owner):
+        owners.append(owner)
+        raise failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(DirectoryDescriptor, "list_names", fail)
+        with pytest.raises(BaseException) as caught:
+            results.inventory(base)
+    assert caught.value is failure and len(owners) == 1
+    assert owners[0].released
+    owners[0].close()
+    assert original is DirectoryDescriptor.list_names
+
+
+@pytest.mark.parametrize(
+    "primary", [None, OSError("operation"), KeyboardInterrupt("interrupted")]
+)
+def test_results_inventory_operation_plus_close_and_sole_close_matrix(
+    tmp_path, monkeypatch, primary
+):
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from tests import host_results_support as results
+
+    base = tmp_path / "base"
+    base.mkdir()
+    failure = OSError("sole directory close")
+    close = p.OPS.close
+    owners = []
+    closed = []
+
+    def names(owner):
+        owners.append(owner)
+        if primary is not None:
+            raise primary
+        return ()
+
+    targets = set()
+
+    def fail_close(fd):
+        close(fd)
+        if fd in targets:
+            targets.remove(fd)
+            closed.append(fd)
+            raise failure
+
+    # Fault only the inventory owner's release. Secure-parent identity checks
+    # have independent traversal/close behavior, covered separately below.
+    opening = DirectoryDescriptor.open_secure_path
+
+    def acquire(ops, path, **kwargs):
+        owner = opening(ops, path, **kwargs)
+        if Path(path) == base:
+            targets.add(owner.fd)
+            patch.setattr(type(p.OPS), "close", lambda self, fd: fail_close(fd))
+        return owner
+
+    with monkeypatch.context() as patch:
+        patch.setattr(DirectoryDescriptor, "open_secure_path", acquire)
+        patch.setattr(DirectoryDescriptor, "list_names", names)
+        with pytest.raises(BaseException) as caught:
+            results.inventory(base)
+        owners[0].close()
+    assert caught.value is (primary if primary is not None else failure)
+    assert len(closed) == 1 and owners[0].released
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_results_cleanup_failure_attempts_independent_claims_without_retry(
+    tmp_path, monkeypatch, interrupted
+):
+    from tests import host_results_support as results
+
+    base, evidence, ledger = _results_fixture(tmp_path)
+    for name in ("first", "second"):
+        run = base / name
+        run.mkdir()
+        p.write(run / "partial", b"retained before deletion")
+        ledger.claim(run, reservation_succeeded=True)
+    remove = results._remove
+    calls = []
+    failure = (
+        KeyboardInterrupt("cleanup interruption")
+        if interrupted
+        else OSError("cleanup denied")
+    )
+
+    def fail(parent, name, identity, preserved):
+        calls.append(name)
+        if name == "first":
+            raise failure
+        return remove(parent, name, identity, preserved)
+
+    monkeypatch.setattr(results, "_remove", fail)
+    with pytest.raises(BaseException) as caught:
+        ledger.finish()
+    with pytest.raises(BaseException) as repeated:
+        ledger.finish()
+    assert caught.value is repeated.value is failure
+    assert calls == ["first", "second"]
+    assert (base / "first").is_dir() and not (base / "second").exists()
+    assert p.read(evidence / "retained/first/partial") == b"retained before deletion"
+    assert not (evidence / "reconciled.json").exists()
+    # Explicit fixture reconciliation after fault restoration; not ledger retry.
+    monkeypatch.setattr(results, "_remove", remove)
+    with results.DirectoryDescriptor.open_secure_path(p.OPS, base) as parent:
+        remove(
+            parent,
+            "first",
+            ledger.claims["first"],
+            results._preserved_subtree(ledger.after, "first"),
+        )
+    assert results.inventory(base) == ledger.before
+
+
+@pytest.mark.parametrize("timing", ["before-read", "after-read"])
+def test_results_evidence_copy_change_cannot_authorize_cleanup(
+    tmp_path, monkeypatch, timing
+):
+    base, evidence, ledger = _results_fixture(tmp_path)
+    run = base / "owned"
+    run.mkdir()
+    output = run / "output"
+    p.write(output, b"snapshot bytes")
+    ledger.claim(run, reservation_succeeded=True)
+    reading = p.read
+    changed = False
+
+    def read(path, **kwargs):
+        nonlocal changed
+        if Path(path) == output and ledger.after is not None and not changed:
+            changed = True
+            if timing == "before-read":
+                h.replace(output, b"concurrent bytes")
+            data = reading(path, **kwargs)
+            if timing == "after-read":
+                h.replace(output, b"concurrent bytes")
+            return data
+        return reading(path, **kwargs)
+
+    monkeypatch.setattr(p, "read", read)
+    with pytest.raises(AssertionError, match="results changed.*preservation") as caught:
+        ledger.finish()
+    assert changed and reading(output) == b"concurrent bytes"
+    if timing == "after-read":
+        assert reading(evidence / "retained/owned/output") == b"snapshot bytes"
+    else:
+        assert not (evidence / "retained/owned/output").exists()
+    with pytest.raises(AssertionError) as repeated:
+        ledger.finish()
+    assert repeated.value is caught.value
+    assert reading(output) == b"concurrent bytes"
+    assert not (evidence / "reconciled.json").exists()
+
+
+@pytest.mark.parametrize("stage", ["preserved", "preflight", "leaf"])
+@pytest.mark.parametrize(
+    "mutation", ["addition", "bytes", "replacement", "mode", "link-target"]
+)
+@pytest.mark.parametrize("close_fault", [False, True])
+def test_results_cleanup_preserved_allowlist_rejects_concurrent_changes_without_retry(
+    tmp_path, monkeypatch, stage, mutation, close_fault
+):
+    from tests import host_results_support as results
+
+    base, evidence, ledger = _results_fixture(tmp_path)
+    run = base / "owned"
+    nested = run / "nested"
+    nested.mkdir(parents=True)
+    p.write(nested / "known-file", b"preserved original")
+    (nested / "known-link").symlink_to("original-target")
+    sibling = base / "sibling"
+    sibling.mkdir()
+    p.write(sibling / "output", b"independent preserved output")
+    ledger.claim(run, reservation_succeeded=True)
+    ledger.claim(sibling, reservation_succeeded=True)
+    run_identity = results._identity(run.stat())
+    nested_identity = results._identity(nested.stat())
+    removing = results._remove
+    inventory = results._inventory
+    verifying = results._verify_preserved_leaf
+    opening = results.DirectoryDescriptor.open_directory
+    closing = p.OPS.close
+    changed = False
+    active = False
+    observed = None
+    watched_fd = None
+    released = []
+    owners = []
+    calls = []
+    close_failure = OSError("changed run close failed")
+
+    def mutate():
+        nonlocal changed, observed
+        assert not changed
+        changed = True
+        assert (
+            p.read(evidence / "retained/owned/nested/known-file")
+            == b"preserved original"
+        )
+        if mutation == "addition":
+            p.write(nested / "unknown-file", b"unpreserved bytes")
+            (nested / "unknown-directory").mkdir()
+            p.write(nested / "unknown-directory/payload", b"unpreserved nested bytes")
+            (nested / "unknown-link").symlink_to("unpreserved-target")
+        elif mutation == "bytes":
+            original = (nested / "known-file").stat().st_ino
+            h.replace(nested / "known-file", b"changed after preservation")
+            assert (nested / "known-file").stat().st_ino == original
+        elif mutation == "replacement":
+            (nested / "known-file").rename(tmp_path / "parked-file")
+            p.write(nested / "known-file", b"preserved original")
+        elif mutation == "mode":
+            (nested / "known-file").chmod(0o640)
+        else:
+            (nested / "known-link").unlink()
+            (nested / "known-link").symlink_to("changed-target")
+        observed = results.inventory(nested)
+
+    def inspect(owner):
+        value = inventory(owner)
+        if (
+            active
+            and not changed
+            and stage == "preflight"
+            and results._identity(os.fstat(owner.fd)) == run_identity
+        ):
+            mutate()  # After successful preflight read, before removal uses it.
+        return value
+
+    def verify(owner, name, entry):
+        trigger = "known-link" if mutation == "link-target" else "known-file"
+        if (
+            active
+            and not changed
+            and stage == "leaf"
+            and name == trigger
+            and results._identity(os.fstat(owner.fd)) == nested_identity
+        ):
+            mutate()  # After directory preflight/listing, before leaf verification.
+        return verifying(owner, name, entry)
+
+    def open_child(parent, name, **kwargs):
+        nonlocal watched_fd
+        owner = opening(parent, name, **kwargs)
+        if (
+            active
+            and name == run.name
+            and results._identity(os.fstat(owner.fd)) == run_identity
+        ):
+            watched_fd = owner.fd
+            owners.append(owner)
+        return owner
+
+    def close(fd):
+        nonlocal watched_fd
+        closing(fd)
+        if fd == watched_fd:
+            watched_fd = None
+            released.append(fd)
+            if close_fault:
+                raise close_failure
+
+    def remove(parent, name, identity, preserved):
+        nonlocal active
+        calls.append(name)
+        was_active = active
+        active = True
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(results, "_inventory", inspect)
+                patch.setattr(results, "_verify_preserved_leaf", verify)
+                patch.setattr(results.DirectoryDescriptor, "open_directory", open_child)
+                patch.setattr(type(p.OPS), "close", lambda self, fd: close(fd))
+                if name == run.name and not changed and stage == "preserved":
+                    mutate()  # Exact post-snapshot, post-evidence-copy boundary.
+                return removing(parent, name, identity, preserved)
+        finally:
+            active = was_active
+
+    monkeypatch.setattr(results, "_remove", remove)
+    with pytest.raises(
+        AssertionError, match="results.*(preservation|descendants)"
+    ) as caught:
+        ledger.finish()
+    assert changed and ledger.attempted and ledger.failure is caught.value
+    assert caught.value is not close_failure
+    assert len(owners) == len(released) == 1 and owners[0].released
+    assert not sibling.exists(), "independent claimed run still reconciles"
+    current = results.inventory(nested)
+    if mutation == "addition" and stage == "leaf":
+        # Known, preserved entries may already have been removed; no newly
+        # discovered resource is ever added to the deletion allowlist.
+        assert [item for item in current if item["path"].startswith("unknown")] == [
+            item for item in observed if item["path"].startswith("unknown")
+        ]
+    else:
+        assert current == observed
+    assert (
+        p.read(evidence / "retained/owned/nested/known-file") == b"preserved original"
+    )
+    assert (
+        p.read(evidence / "retained/sibling/output") == b"independent preserved output"
+    )
+    assert (
+        p.read(base / "operator-retained/report.json")
+        == b"operator evidence must survive"
+    )
+    previous_calls = list(calls)
+    with pytest.raises(AssertionError) as repeated:
+        ledger.finish()
+    assert repeated.value is caught.value and calls == previous_calls
+    owners[0].close()
+    assert len(released) == 1 and results.inventory(nested) == current
+    assert not (evidence / "reconciled.json").exists()
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["run", "descendant"])
+@pytest.mark.parametrize("close_fault", [False, True])
+def test_results_removal_rejects_replacement_open_before_traversal_and_never_retries(
+    tmp_path, monkeypatch, nested, close_fault
+):
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from tests import host_results_support as results
+
+    base, evidence, ledger = _results_fixture(tmp_path)
+    run = base / "owned"
+    run.mkdir()
+    target = run / "nested" if nested else run
+    if nested:
+        target.mkdir()
+    p.write(target / "original", b"owned bytes")
+    ledger.claim(run, reservation_succeeded=True)
+    parked = tmp_path / "parked-owned"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    p.write(outside / "sentinel", b"never follow replacement links")
+    expected_parent = results._identity(target.parent.stat())
+    opening = DirectoryDescriptor.open_directory
+    listing = DirectoryDescriptor.list_names
+    closing = p.OPS.close
+    removing = results._remove
+    swapped = False
+    replacement_before = None
+    opened = []
+    releases = []
+    traversals = []
+    calls = []
+    watched_fd = None
+    close_failure = OSError("replacement descriptor close failed")
+
+    def open_child(parent, name, **kwargs):
+        nonlocal swapped, replacement_before, watched_fd
+        if (
+            not swapped
+            and calls[-1] == target.name  # Actual removal, not read-only preflight.
+            and name == target.name
+            and results._identity(os.fstat(parent.fd)) == expected_parent
+        ):
+            # _remove has already passed stat_child. Replace just before its
+            # open, returning a perfectly valid capability for an unknown inode.
+            swapped = True
+            target.rename(parked)
+            target.mkdir()
+            (target / "unknown-directory").mkdir()
+            p.write(target / "unknown-directory/payload", b"unknown nested bytes")
+            p.write(target / "unknown-file", b"unknown bytes")
+            (target / "unknown-link").symlink_to(outside, target_is_directory=True)
+            replacement_before = results.inventory(target)
+            owner = opening(parent, name, **kwargs)
+            opened.append(owner)
+            watched_fd = owner.fd
+            return owner
+        return opening(parent, name, **kwargs)
+
+    def list_names(owner):
+        if any(owner is child for child in opened):
+            traversals.append(owner)
+        return listing(owner)
+
+    def close(fd):
+        nonlocal watched_fd
+        closing(fd)
+        if fd == watched_fd:
+            watched_fd = None
+            releases.append(fd)
+            if close_fault:
+                raise close_failure
+
+    def remove(parent, name, identity, preserved):
+        calls.append(name)
+        with monkeypatch.context() as patch:
+            patch.setattr(DirectoryDescriptor, "open_directory", open_child)
+            patch.setattr(DirectoryDescriptor, "list_names", list_names)
+            patch.setattr(type(p.OPS), "close", lambda self, fd: close(fd))
+            return removing(parent, name, identity, preserved)
+
+    monkeypatch.setattr(results, "_remove", remove)
+    with pytest.raises(AssertionError, match="owned run identity changed") as caught:
+        ledger.finish()
+    assert swapped and ledger.attempted
+    assert len(opened) == len(releases) == 1 and opened[0].released
+    assert traversals == [], "do not even list the unclaimed opened inode"
+    assert results.inventory(target) == replacement_before
+    assert p.read(parked / "original") == b"owned bytes"
+    assert p.read(outside / "sentinel") == b"never follow replacement links"
+    assert (
+        p.read(base / "operator-retained/report.json")
+        == b"operator evidence must survive"
+    )
+    if close_fault:
+        assert caught.value is not close_failure  # Identity failure stays primary.
+    previous_calls = list(calls)
+    with pytest.raises(AssertionError) as repeated:
+        ledger.finish()
+    assert repeated.value is caught.value
+    assert calls == previous_calls and len(releases) == 1
+    opened[0].close()
+    assert len(releases) == 1
+    assert results.inventory(target) == replacement_before
+    assert not (evidence / "reconciled.json").exists()
+
+
+@pytest.mark.parametrize("operation", [None, "ordinary", "interrupt"])
+def test_results_removal_sole_close_operation_plus_close_and_repeat_matrix(
+    tmp_path, monkeypatch, operation
+):
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from tests import host_results_support as results
+
+    base, evidence, ledger = _results_fixture(tmp_path)
+    run = base / "owned"
+    run.mkdir()
+    p.write(run / "output", b"complete original bytes")
+    ledger.claim(run, reservation_succeeded=True)
+    closing = DirectoryDescriptor.close
+    unlinking = DirectoryDescriptor.unlink_child
+    removing = results._remove
+    close_failure = OSError("removal close failure")
+    primary = (
+        KeyboardInterrupt("removal interrupted")
+        if operation == "interrupt"
+        else OSError("removal denied")
+        if operation
+        else None
+    )
+    released = []
+
+    def close(owner):
+        path = (
+            Path(os.readlink("/proc/self/fd/" + str(owner.fd)))
+            if not owner.released
+            else None
+        )
+        closing(owner)
+        if path == run:
+            released.append(owner)
+            raise close_failure
+
+    def unlink(owner, name):
+        if (
+            primary is not None
+            and Path(os.readlink("/proc/self/fd/" + str(owner.fd))) == run
+        ):
+            raise primary
+        return unlinking(owner, name)
+
+    def remove(parent, name, identity, preserved):
+        # Activate only after inventory/evidence preservation, at the actual
+        # cleanup acquisition. Earlier reads keep their ordinary owner behavior.
+        with monkeypatch.context() as patch:
+            patch.setattr(DirectoryDescriptor, "close", close)
+            patch.setattr(DirectoryDescriptor, "unlink_child", unlink)
+            return removing(parent, name, identity, preserved)
+
+    monkeypatch.setattr(results, "_remove", remove)
+    with pytest.raises(BaseException) as caught:
+        ledger.finish()
+    assert caught.value is (primary if primary is not None else close_failure)
+    with pytest.raises(BaseException) as repeated:
+        ledger.finish()
+    assert repeated.value is caught.value
+    assert len(released) == 1 and released[0].released
+    released[0].close()
+    assert len(released) == 1
+    assert p.read(evidence / "retained/owned/output") == b"complete original bytes"
+    assert run.is_dir() and not (evidence / "reconciled.json").exists()
+    # Deliberate fault fixture is reconciled explicitly, never by retrying the
+    # failed ledger continuation or granting ownership to a collision path.
+    remaining = results.inventory(base)
+    assert all(entry in ledger.after for entry in remaining), "no new cleanup authority"
+    with DirectoryDescriptor.open_secure_path(p.OPS, base) as parent:
+        removing(
+            parent,
+            run.name,
+            ledger.claims[run.name],
+            results._preserved_subtree(remaining, run.name),
+        )
+    assert results.inventory(base) == ledger.before
+
+
+@pytest.mark.parametrize(
+    "readiness", [False, True], ids=["orchestrator-red", "probe-readiness"]
+)
+def test_missing_results_base_is_created_automatically_with_exclusive_receipt(
+    tmp_path, readiness
+):
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from tests import host_orchestration_support as core
+
+    # The marker exercises only the driver/receipt/cleanup fixture, not the
+    # missing production behavior. Candidate source is never rewritten.
+    source = (
+        b"""#!/usr/bin/env python3.14
+_RESULTS_BASE = None
+
+def main(argv):
+    _RESULTS_BASE.mkdir(mode=0o700)
+    return 0
+"""
+        if readiness
+        else None
+    )
+    prepared = core.prepare(tmp_path, fixture_source=source)
+    base = prepared["base"]
+    evidence = tmp_path / "missing-base-evidence"
+    evidence.mkdir()
+    base.rmdir()  # Deliberate fixture precondition: parent exists, base absent.
+    prepared["_missing_base_evidence"] = evidence
+    p.write(
+        evidence / "missing-precondition.json",
+        p.canonical(core.results_base_inventory(base)),
+    )
+    value, observed, _, names = core.invoke(prepared)
+    ledger = prepared["_results_ledger"]
+    receipts = observed["exclusive_base_creations"]
+    # Record successful base acquisition before checking the orchestration
+    # outcome. No receipt means no authority to delete any observed new base.
+    assert len(receipts) == 1, value
+    receipt = receipts[0]
+    assert receipt["path"] == str(base)
+    info = base.lstat()
+    identity = (receipt["device"], receipt["inode"])
+    assert (info.st_dev, info.st_ino) == identity
+    try:
+        assert base.is_dir() and not base.is_symlink()
+        assert value["status"] == observed["call_status"] == 0, value
+        assert observed["error"] is None
+        assert len(names) == (0 if readiness else 1)
+        if not readiness:
+            _, report = core_report(prepared, names)
+            assert report["state"] == "final" and report["success"] is True
+            assert [leg["case_id"] for leg in observed["legs"]] == [*core.CASES, None]
+    finally:
+        ledger.finish()
+        # Empty-base cleanup uses the exact successful mkdir receipt as well;
+        # it is neither diff-based adoption nor recursive deletion of leftovers.
+        with DirectoryDescriptor.open_secure_path(p.OPS, base.parent) as parent:
+            info = parent.stat_child(base.name)
+            assert (info.st_dev, info.st_ino) == identity
+            parent.remove_child_directory(base.name)
+    assert not base.exists()
+    assert p.load(evidence / "missing-precondition.json") == {"kind": "missing"}
+    assert p.load(evidence / "reconciled.json")["complete"] is True
+
+
+@pytest.mark.parametrize("fault", ["file", "symlink", "denied", "missing-denied"])
+def test_orchestrator_results_base_failure_is_not_a_negative_detection(tmp_path, fault):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    base = prepared["base"]
+    setup = ""
+    if fault == "file":
+        base.rmdir()
+        p.write(base, b"unowned file")
+    elif fault == "symlink":
+        base.rmdir()
+        target = tmp_path / "outside-base"
+        target.mkdir()
+        base.symlink_to(target, target_is_directory=True)
+    else:
+        if fault == "missing-denied":
+            base.rmdir()
+        # Deterministic EACCES even under root; this is a local simulation.
+        setup = """
+original_mkdir = os.mkdir
+def denied(path, *args, **kwargs):
+    if str(path).startswith(BASE) or (kwargs.get("dir_fd") is not None and os.readlink("/proc/self/fd/" + str(kwargs["dir_fd"])) == BASE):
+        raise PermissionError("SIMULATED_RESULTS_EACCES")
+    return original_mkdir(path, *args, **kwargs)
+os.mkdir = denied
+"""
+    result, observed, calls, _ = core.invoke(prepared, probe_setup=setup)
+    assert result["status"] != 0 and observed["legs"] == []
+    assert calls == [], "base refusal must precede Docker/build acquisition"
+    if fault == "file":
+        assert p.read(base) == b"unowned file"
+    elif fault == "symlink":
+        assert h.root_names(target) == []
+    elif fault == "missing-denied":
+        assert not base.exists()
+        assert observed["exclusive_base_creations"] == []
+        assert observed["exclusive_reservations"] == []
+
+
+def test_orchestrator_results_default_is_a_literal_not_an_external_setting():
+    from tests import host_results_support as results
+
+    source = p.read(h.required_surface("verify_host_acceptance.py"))
+    tree = ast.parse(source)
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_RESULTS_BASE"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1
+    value = assignments[0].value
+    if isinstance(value, ast.Call):
+        assert len(value.args) == 1 and not value.keywords
+        value = value.args[0]
+    assert isinstance(value, ast.Constant) and value.value == str(results.DEFAULT_BASE)
+    writes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.id == "_RESULTS_BASE"
+        and isinstance(node.ctx, ast.Store)
+    ]
+    assert len(writes) == 1, "CLI/env/config must not assign a second results base"
+
+
+@pytest.mark.parametrize("state", ["incomplete", "final"])
+def test_orchestrator_report_has_handoff_identity_counts_warnings_and_resource_state(
+    tmp_path, state
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    outcomes = {"argv": {"raise": "interrupt"}} if state == "incomplete" else None
+    result, observed, _, names = core.invoke(prepared, outcomes=outcomes)
+    run, report = core_report(prepared, names)
+    assert report["state"] == state
+    assert isinstance(report["run_id"], str) and report["run_id"] == run.name
+    assert type(report["local_changes"]) is bool
+    assert isinstance(report["warnings"], list)
+    assert "resource_reconciliation" in report
+    assert "source_inventory" in report and "build_input_inventory" in report
+    assert report["success"] is (state == "final")
+    assert (result["status"] == 0) is (state == "final")
+    assert observed["cwd_restored"] and observed["environment_restored"]
+    for leg in report["legs"]:
+        assert type(leg["pytest_status"]) is int
+        assert isinstance(leg["counts"], dict)
+        assert p.read(leg["stdout_path"]) is not None
+        assert p.read(leg["stderr_path"]) is not None

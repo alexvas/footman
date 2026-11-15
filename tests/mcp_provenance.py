@@ -3,6 +3,7 @@
 SUPPORT_FILES is the declared copy closure; no development protocol peer imports.
 """
 
+import errno
 import hashlib
 import importlib.util
 import json
@@ -48,11 +49,39 @@ def unique(pairs):
 
 
 def read(path, *, transform=lambda data: data):
+    return _read(path, transform=transform, proc_stat=False)
+
+
+def read_proc_stat(pid):
+    """Read a known Linux PID, allowing procfs's changing synthetic owner.
+
+    None means only that opening the stat leaf found no task. Unknown reads,
+    permission errors and release failures still propagate through sole owners.
+    """
+    require(type(pid) is int and pid > 0, "invalid proc PID")
+    return _read(
+        Path("/proc") / str(pid) / "stat", transform=lambda data: data, proc_stat=True
+    )
+
+
+def _read(path, *, transform, proc_stat):
     path = Path(path)
-    with DirectoryDescriptor.open_secure_path(OPS, path.parent) as parent:
+    with DirectoryDescriptor.open_secure_path(
+        OPS, path.parent, require_owner=not proc_stat
+    ) as parent:
         label = "MCP input"
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        fd = os.open(parent.child_basename(path.name), flags, dir_fd=parent.fd)
+        base = parent.child_basename(path.name)
+        try:
+            fd = os.open(base, flags, dir_fd=parent.fd)
+        except OSError as error:
+            if (
+                proc_stat
+                and error.errno in (errno.ENOENT, errno.ESRCH)
+                and error.filename == base
+            ):
+                return None
+            raise
         with OwnedDescriptor(OPS, fd, label=label) as owner:
             require(
                 stat.S_ISREG(os.fstat(owner.fd).st_mode), "input must be a regular file"

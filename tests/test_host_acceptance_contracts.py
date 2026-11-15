@@ -46,12 +46,17 @@ def test_host_interfaces_are_registered_before_red():
     queue = text.split("| Queue priority | Registered suite | Workers |", 1)[1]
     queue = queue.split("\n\n", 1)[0]
     rows = re.findall(r"^\| (\d+) \| (.*?) \| (\d+) \|$", queue, re.MULTILINE)
-    assert [int(priority) for priority, _, _ in rows] == list(range(1, 13))
-    assert rows[-2] == ("11", "Phase 10 integrated acceptance and portability", "2")
-    assert rows[-1] == (
+    assert [int(priority) for priority, _, _ in rows] == list(range(1, 14))
+    assert rows[-3] == ("11", "Phase 10 integrated acceptance and portability", "2")
+    assert rows[-2] == (
         "12",
         "Phase 11 Docker-free host-runner contracts "
         "(`tests/test_host_acceptance_contracts.py`)",
+        "2",
+    )
+    assert rows[-1] == (
+        "13",
+        "Standalone Linux proc-observer regression (`tests/test_proc_observer.py`)",
         "2",
     )
     assert "Historical Phase-10 validation covers eleven commands" in text
@@ -508,6 +513,9 @@ def test_host_runner_rejects_invalid_image_before_install_or_docker(tmp_path, im
         "tests/host_acceptance_assertions.py",
         "tests/host_runner_probe.py",
         "tests/host_install_proxy.py",
+        "tests/host_expectation_support.py",
+        "tests/host_orchestration_support.py",
+        "tests/host_orchestration_tool.py",
     ],
 )
 def test_helper_contract_modules_have_no_optimizable_verification_assertions(relative):
@@ -530,6 +538,7 @@ def simulated_host_run(request, tmp_path_factory):
     world = service.world(h.ROOT, tmp)
     repo = world["repo"]
     tree = repo.git("write-tree").stdout.decode().strip()
+    staged_bytes = repo.git("show", tree + ":payload").stdout
     h.replace(repo.path / "payload", b"later unstaged bytes must not select the tree\n")
     before = repo.identity()
     directory = service.install_docker(world, status=status)
@@ -578,6 +587,8 @@ def simulated_host_run(request, tmp_path_factory):
         "expected_stdout": b"command stdout\x00\xff\n",
         "expected_stderr": b"command stderr\x00\xfe\n",
         "snapshot_present": os.path.lexists(manifest["snapshot"]["path"]),
+        "staged_bytes": staged_bytes,
+        "expected_staged_bytes": staged_bytes.decode("utf-8"),
     }
 
 
@@ -689,7 +700,7 @@ def test_host_assertions_reject_invalid_evidence_under_optimization(
             key: base64.b64encode(data).decode("ascii")
             for key, data in value["streams"].items()
         }
-        for key in ("expected_stdout", "expected_stderr"):
+        for key in ("expected_stdout", "expected_stderr", "staged_bytes"):
             value[key] = base64.b64encode(value[key]).decode("ascii")
         p.write(tmp_path / (name + ".json"), p.canonical(value))
     probe = """
@@ -705,7 +716,7 @@ if Path(assertions.__file__).resolve() != Path(sys.argv[3]).resolve():
 def load(path):
     value = p.load(Path(path))
     value['streams'] = {key: base64.b64decode(data) for key, data in value['streams'].items()}
-    for key in ('expected_stdout', 'expected_stderr'):
+    for key in ('expected_stdout', 'expected_stderr', 'staged_bytes'):
         value[key] = base64.b64decode(value[key])
     return value
 assertions.verify_run(**load(sys.argv[1]))
@@ -2616,3 +2627,1297 @@ def test_generated_operation_record_preserves_binary_streams_and_status():
         "stdout": "AP8=",
         "stderr": "gAo=",
     }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        [],
+        {},
+        {"schema_version": True, "case_id": "cleanup", "expected_override": False},
+        {"schema_version": 2, "case_id": "cleanup", "expected_override": False},
+        {"schema_version": 1, "case_id": [], "expected_override": False},
+        {"schema_version": 1, "case_id": "unknown", "expected_override": False},
+        {"schema_version": 1, "case_id": "cleanup", "expected_override": 0},
+        {"schema_version": 1, "case_id": "command_status", "expected_override": True},
+        {"schema_version": 1, "case_id": "command_status", "expected_override": 1.0},
+        {"schema_version": 1, "case_id": "command_status", "expected_override": "1"},
+        {"schema_version": 1, "case_id": "staged_bytes", "expected_override": []},
+        {"schema_version": 1, "case_id": "staged_bytes", "expected_override": "\ud800"},
+        {"schema_version": 1, "case_id": "argv", "expected_override": []},
+        {"schema_version": 1, "case_id": "argv", "expected_override": [""]},
+        {"schema_version": 1, "case_id": "argv", "expected_override": ["a\x00b"]},
+        {"schema_version": 1, "case_id": "argv", "expected_override": [True]},
+        {"schema_version": 1, "case_id": "argv", "expected_override": "command"},
+        {
+            "schema_version": 1,
+            "case_id": "cleanup",
+            "expected_override": False,
+            "command": ["x"],
+        },
+    ],
+)
+def test_fixture_expectation_schema_rejects_invalid_values_without_acquisition(value):
+    from tests.host_acceptance_assertions import validate_expectation_input
+
+    with pytest.raises(AssertionError):
+        validate_expectation_input(value)
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+def test_fixture_expectation_schema_roundtrip_and_no_observation_mutation(case):
+    from tests.host_acceptance_assertions import (
+        validate_expectation_input,
+        verify_expectation,
+    )
+
+    expected = {
+        "staged_bytes": "staged\n",
+        "argv": ["tool", "two words"],
+        "command_status": -9,
+        "cleanup": True,
+    }[case]
+    value = {"schema_version": 1, "case_id": case, "expected_override": expected}
+    parsed = validate_expectation_input(json.loads(p.canonical(value)))
+    actual = expected.encode() if case == "staged_bytes" else expected
+    verify_expectation(case, actual, parsed["expected_override"])
+    assert value == parsed
+    if case == "argv":
+        parsed["expected_override"].append("only copied expectation")
+        assert value["expected_override"] == ["tool", "two words"]
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+def test_copied_fixture_negative_controls_reach_shared_assertions_with_raw_status(
+    simulated_host_run, tmp_path, case
+):
+    import copy
+
+    from tests import host_expectation_support as fixture
+    from tests.host_acceptance_assertions import EXPECTATION_DIAGNOSTICS
+
+    before = copy.deepcopy(simulated_host_run)
+    overrides = {
+        "staged_bytes": "later unstaged bytes must not select the tree\n",
+        "argv": ["wrong expectation only", "literal ; $value"],
+        "command_status": 99,
+        "cleanup": False,
+    }
+    expectation = {
+        "schema_version": 1,
+        "case_id": case,
+        "expected_override": overrides[case],
+    }
+    workspace, ini, profile = fixture.copied_fixture(
+        tmp_path, simulated_host_run, profile="negative", expectation=expectation
+    )
+    result = fixture.execute_fixture(tmp_path, workspace, ini, profile["suite"])
+    assert result["status"] == 1, result
+    output = result["stdout"] + result["stderr"]
+    assert EXPECTATION_DIAGNOSTICS[case].encode() in output, result
+    assert b"1 failed" in output, result
+    assert b"ERROR collecting" not in output and b"INTERNALERROR" not in output, result
+    assert fixture.BASELINE_MARKER in output.splitlines(), result
+    assert fixture.classify_negative_result(result, case) == {
+        "detected": True,
+        "baseline_verified": True,
+        "failure_kind": "assertion",
+    }
+    assert simulated_host_run == before
+    paths = {entry["path"] for entry in profile["inventory"]}
+    assert fixture.NEGATIVE_SUITE in paths and fixture.NORMAL_SUITE not in paths
+    assert "host_tests/expectation_input.json" in profile["generated_inputs"]
+    assert "tests/host_acceptance_assertions.py" in {
+        entry["path"] for entry in profile["source_support"]
+    }
+    assert "tests/mcp_protocol_child.py" not in paths
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+@pytest.mark.parametrize("fault", ["missing", "invalid"])
+def test_copied_negative_same_field_invalid_observations_are_not_targeted_detections(
+    simulated_host_run, tmp_path, case, fault
+):
+    import copy
+
+    from tests import host_expectation_support as fixture
+    from tests.host_acceptance_assertions import EXPECTATION_DIAGNOSTICS
+
+    before = copy.deepcopy(simulated_host_run)
+    overrides = {
+        "staged_bytes": "wrong bytes",
+        "argv": ["wrong argv"],
+        "command_status": 99,
+        "cleanup": False,
+    }
+    workspace, ini, profile = fixture.copied_fixture(
+        tmp_path,
+        simulated_host_run,
+        profile="negative",
+        expectation={
+            "schema_version": 1,
+            "case_id": case,
+            "expected_override": overrides[case],
+        },
+    )
+    # Corrupt only generated external observation JSON, after byte transport.
+    # In particular None staged bytes must reach verify_run, not b64encode().
+    path = workspace / "host_tests/observations.json"
+    value = p.load(path)
+    container, key = {
+        "staged_bytes": (value, "staged_bytes"),
+        "argv": (value["manifest"], "command_argv"),
+        "command_status": (value["manifest"], "return_code"),
+        "cleanup": (value["manifest"]["cleanup"], "confirmed_absent"),
+    }[case]
+    if fault == "missing":
+        del container[key]
+    else:
+        container[key] = None
+    h.replace(path, p.canonical(value))
+    p.write(
+        tmp_path / "invalid-observation-input.json",
+        p.canonical({"case_id": case, "fault": fault, "generated_observations": value}),
+    )
+    result = fixture.execute_fixture(tmp_path, workspace, ini, profile["suite"])
+    output = result["stdout"] + result["stderr"]
+    assert result["status"] == 1, result
+    assert b"FIXTURE_OBSERVATIONS_ACQUIRED" in output.splitlines(), result
+    assert fixture.BASELINE_MARKER not in output.splitlines(), result
+    assert b"verify_run(**observations)" in output, result
+    if fault == "invalid":
+        assert EXPECTATION_DIAGNOSTICS[case].encode() in output, result
+    classified = fixture.classify_negative_result(result, case)
+    p.write(tmp_path / "classification.json", p.canonical(classified))
+    assert classified == {
+        "detected": False,
+        "baseline_verified": False,
+        "failure_kind": "invalid-observation/setup",
+    }
+    assert simulated_host_run == before
+
+
+@pytest.mark.parametrize("fault", ["both-missing", "both-none"])
+def test_run_baseline_requires_both_staged_byte_arguments(simulated_host_run, fault):
+    import copy
+
+    from tests.host_acceptance_assertions import verify_run
+
+    value = copy.deepcopy(simulated_host_run)
+    verify_run(**value)
+    for key in ("staged_bytes", "expected_staged_bytes"):
+        if fault == "both-missing":
+            del value[key]
+        else:
+            value[key] = None
+    expected_error = TypeError if fault == "both-missing" else AssertionError
+    with pytest.raises(expected_error):
+        verify_run(**value)
+
+
+@pytest.mark.parametrize("profile", ["normal", "negative"])
+@pytest.mark.parametrize("fault", ["both-missing", "both-none"])
+def test_copied_profiles_refuse_missing_or_none_staged_evidence_pair_before_baseline_marker(
+    simulated_host_run, tmp_path, profile, fault
+):
+    from tests import host_expectation_support as fixture
+
+    expectation = (
+        None
+        if profile == "normal"
+        else {
+            "schema_version": 1,
+            "case_id": "staged_bytes",
+            "expected_override": "wrong expectation",
+        }
+    )
+    workspace, ini, record = fixture.copied_fixture(
+        tmp_path,
+        simulated_host_run,
+        profile=profile,
+        expectation=expectation,
+    )
+    path = workspace / "host_tests/observations.json"
+    value = p.load(path)
+    for key in ("staged_bytes", "expected_staged_bytes"):
+        if fault == "both-missing":
+            del value[key]
+        else:
+            value[key] = None
+    h.replace(path, p.canonical(value))
+    p.write(
+        tmp_path / "invalid-observation-input.json",
+        p.canonical(
+            {
+                "case_id": "staged_bytes",
+                "profile": profile,
+                "fault": fault,
+                "generated_observations": value,
+            }
+        ),
+    )
+    result = fixture.execute_fixture(tmp_path, workspace, ini, record["suite"])
+    output = result["stdout"] + result["stderr"]
+    assert result["status"] == 1, result
+    assert b"verify_run(**observations)" in output, result
+    assert b"FIXTURE_OBSERVATIONS_ACQUIRED" in output.splitlines(), result
+    assert fixture.BASELINE_MARKER not in output.splitlines(), result
+    classified = fixture.classify_negative_result(result, "staged_bytes")
+    p.write(tmp_path / "classification.json", p.canonical(classified))
+    assert classified == {
+        "detected": False,
+        "baseline_verified": False,
+        "failure_kind": "invalid-observation/setup",
+    }
+    if fault == "both-missing":
+        assert (
+            b"TypeError" in output and b"required keyword-only arguments" in output
+        ), result
+    else:
+        assert b"staged bytes expectation must be a UTF-8 string" in output, result
+
+
+def _negative_outcome_control(case):
+    from tests import host_expectation_support as fixture
+
+    value = {
+        "schema_version": 1,
+        "collected": 1,
+        "exitstatus": 1,
+        "collection_errors": [],
+        "internal_errors": [],
+        "interrupted": False,
+        "cleanup_complete": True,
+        "reports": [
+            {
+                "nodeid": fixture.NEGATIVE_SUITE + "::test_negative_expectations",
+                "when": when,
+                "outcome": outcome,
+                "wasxfail": False,
+                "message": "AssertionError: " + fixture.EXPECTATION_DIAGNOSTICS[case]
+                if when == "call"
+                else None,
+                "longrepr": "AssertionError: " + fixture.EXPECTATION_DIAGNOSTICS[case]
+                if when == "call"
+                else "",
+            }
+            for when, outcome in (
+                ("setup", "passed"),
+                ("call", "failed"),
+                ("teardown", "passed"),
+            )
+        ],
+    }
+    return fixture, value
+
+
+def _classify_outcome_control(fixture, value, case, *, suffix=b"1 failed\n"):
+    result = {
+        "status": 1,
+        "stdout": fixture.BASELINE_MARKER
+        + b"\n"
+        + fixture.EXPECTATION_DIAGNOSTICS[case].encode()
+        + b"\n"
+        + fixture.OUTCOMES_MARKER
+        + p.canonical(value)
+        + b"\n"
+        + suffix,
+        "stderr": b"",
+    }
+    return fixture.classify_negative_result(result, case)
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+def test_negative_attribution_requires_exact_successful_fixture_cleanup(case):
+    fixture, value = _negative_outcome_control(case)
+    assert _classify_outcome_control(fixture, value, case)["detected"] is True
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "schema-bool",
+        "collected-bool",
+        "extra-collected",
+        "status-bool",
+        "status-zero",
+        "cleanup-false",
+        "cleanup-missing",
+        "cleanup-integer",
+        "interrupted",
+        "collection-error",
+        "internal-error",
+        "missing-teardown",
+        "failed-teardown",
+        "extra-failure",
+        "extra-error",
+        "setup-failure",
+        "skipped",
+        "xfail",
+        "xpass",
+        "wrong-node",
+        "wrong-diagnostic",
+        "non-assertion",
+        "diagnostic-in-traceback-only",
+        "extra-field",
+        "wrong-order",
+    ],
+)
+def test_negative_attribution_rejects_inexact_structured_outcomes(fault):
+    import copy
+
+    case = "staged_bytes"
+    fixture, value = _negative_outcome_control(case)
+    if fault in {"schema-bool", "collected-bool", "status-bool"}:
+        value[
+            {
+                "schema-bool": "schema_version",
+                "collected-bool": "collected",
+                "status-bool": "exitstatus",
+            }[fault]
+        ] = True
+    elif fault == "extra-collected":
+        value["collected"] = 2
+    elif fault == "status-zero":
+        value["exitstatus"] = 0
+    elif fault == "cleanup-missing":
+        del value["cleanup_complete"]
+    elif fault.startswith("cleanup-"):
+        value["cleanup_complete"] = False if fault == "cleanup-false" else 1
+    elif fault == "interrupted":
+        value["interrupted"] = True
+    elif fault in {"collection-error", "internal-error"}:
+        value[
+            {
+                "collection-error": "collection_errors",
+                "internal-error": "internal_errors",
+            }[fault]
+        ] = ["injected failure"]
+    elif fault == "missing-teardown":
+        value["reports"].pop()
+    elif fault in {"extra-failure", "extra-error"}:
+        extra = copy.deepcopy(value["reports"][1 if fault == "extra-failure" else 0])
+        extra["nodeid"] += "_unrelated"
+        extra["outcome"] = "failed"
+        value["reports"].append(extra)
+    elif fault in {"setup-failure", "failed-teardown", "skipped", "xpass", "xfail"}:
+        index = {"setup-failure": 0, "failed-teardown": 2}.get(fault, 1)
+        value["reports"][index]["outcome"] = {
+            "skipped": "skipped",
+            "xfail": "skipped",
+            "xpass": "passed",
+        }.get(fault, "failed")
+        value["reports"][index]["wasxfail"] = fault in {"xfail", "xpass"}
+    elif fault == "wrong-node":
+        value["reports"][1]["nodeid"] += "_unrelated"
+    elif fault in {"wrong-diagnostic", "non-assertion", "diagnostic-in-traceback-only"}:
+        value["reports"][1]["message"] = (
+            "AssertionError: unrelated"
+            if fault == "wrong-diagnostic"
+            else "RuntimeError: " + fixture.EXPECTATION_DIAGNOSTICS[case]
+        )
+        if fault != "diagnostic-in-traceback-only":
+            value["reports"][1]["longrepr"] = value["reports"][1]["message"]
+    elif fault == "extra-field":
+        value["unexpected"] = True
+    else:
+        value["reports"].reverse()
+    classified = _classify_outcome_control(
+        fixture, value, case, suffix=b"1 failed, 1 error\n"
+    )
+    assert classified == {
+        "detected": False,
+        "baseline_verified": True,
+        "failure_kind": "unrelated-failure",
+    }
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "duplicate", "malformed", "duplicate-key"]
+)
+def test_negative_attribution_rejects_missing_or_ambiguous_outcome_records(fault):
+    fixture, value = _negative_outcome_control("staged_bytes")
+    raw = p.canonical(value)
+    if fault == "malformed":
+        raw = b"{"
+    elif fault == "duplicate-key":
+        raw = raw.replace(b'"collected":1', b'"collected":1,"collected":1')
+    record = fixture.OUTCOMES_MARKER + raw + b"\n"
+    result = {
+        "status": 1,
+        "stdout": fixture.BASELINE_MARKER
+        + b"\n"
+        + fixture.EXPECTATION_DIAGNOSTICS["staged_bytes"].encode()
+        + b"\n1 failed, 1 error\nERROR at teardown: cleanup failed\n"
+        + (b"" if fault == "missing" else record * (2 if fault == "duplicate" else 1)),
+        "stderr": b"",
+    }
+    assert fixture.classify_negative_result(result, "staged_bytes") == {
+        "detected": False,
+        "baseline_verified": True,
+        "failure_kind": "unrelated-failure",
+    }
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+@pytest.mark.parametrize(
+    "fault", ["teardown", "additional-failure", "additional-setup-error"]
+)
+def test_copied_negative_assertion_plus_independent_failure_is_not_detection(
+    simulated_host_run, tmp_path, case, fault
+):
+    from tests import host_expectation_support as fixture
+
+    overrides = {
+        "staged_bytes": "wrong",
+        "argv": ["wrong"],
+        "command_status": 99,
+        "cleanup": False,
+    }
+    workspace, ini, profile = fixture.copied_fixture(
+        tmp_path,
+        simulated_host_run,
+        profile="negative",
+        expectation={
+            "schema_version": 1,
+            "case_id": case,
+            "expected_override": overrides[case],
+        },
+    )
+    if fault == "teardown":
+        path = workspace / "host_tests/conftest.py"
+        extra = b'\n@pytest.fixture(autouse=True)\ndef fail_cleanup():\n    yield\n    raise RuntimeError("injected teardown cleanup failure")\n'
+    else:
+        path = workspace / fixture.NEGATIVE_SUITE
+        extra = (
+            b'\nimport pytest\n@pytest.fixture\ndef unrelated_setup():\n    raise RuntimeError("injected setup failure")\ndef test_unrelated_error(unrelated_setup):\n    pass\n'
+            if fault == "additional-setup-error"
+            else b'\ndef test_unrelated_failure():\n    raise AssertionError("injected unrelated failure")\n'
+        )
+    h.replace(path, p.read(path) + extra)
+    result = fixture.execute_fixture(tmp_path, workspace, ini, profile["suite"])
+    assert result["status"] == 1, result
+    output = result["stdout"] + result["stderr"]
+    assert fixture.BASELINE_MARKER in output.splitlines(), result
+    assert fixture.EXPECTATION_DIAGNOSTICS[case].encode() in output, result
+    assert (
+        b"2 failed" if fault == "additional-failure" else b"1 failed, 1 error"
+    ) in output, result
+    # Pytest repeats captured call stdout in this same item's teardown error.
+    # Preserve the existing exact-one-physical-marker rule; do not relax it to
+    # make teardown failures look like valid baselines. Independently prove
+    # that structured outcomes also reject the failure even without that gate.
+    assert output.splitlines().count(fixture.BASELINE_MARKER) == (
+        2 if fault == "teardown" else 1
+    ), result
+    assert (
+        fixture._has_exact_negative_outcomes((result["stdout"], result["stderr"]), case)
+        is False
+    )
+    classified = fixture.classify_negative_result(result, case)
+    p.write(tmp_path / "classification.json", p.canonical(classified))
+    assert classified == {
+        "detected": False,
+        "baseline_verified": fault != "teardown",
+        "failure_kind": "invalid-observation/setup"
+        if fault == "teardown"
+        else "unrelated-failure",
+    }
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+@pytest.mark.parametrize(
+    "marker",
+    [
+        b"",
+        b'    print("FIXTURE_BASELINE_VERIFIED")\n',
+        b"FIXTURE_BASELINE_VERIFIED\nFIXTURE_BASELINE_VERIFIED\n",
+    ],
+)
+def test_negative_attribution_rejects_missing_source_snippet_or_duplicate_baseline_marker(
+    case, marker
+):
+    from tests import host_expectation_support as fixture
+    from tests.host_acceptance_assertions import EXPECTATION_DIAGNOSTICS
+
+    result = {
+        "status": 1,
+        "stdout": marker + EXPECTATION_DIAGNOSTICS[case].encode() + b"\n1 failed\n",
+        "stderr": b"",
+    }
+    assert fixture.classify_negative_result(result, case) == {
+        "detected": False,
+        "baseline_verified": False,
+        "failure_kind": "invalid-observation/setup",
+    }
+
+
+def test_copied_normal_fixture_uses_shared_assertions_without_override_input(
+    simulated_host_run, tmp_path
+):
+    from tests import host_expectation_support as fixture
+
+    workspace, ini, profile = fixture.copied_fixture(
+        tmp_path, simulated_host_run, profile="normal"
+    )
+    result = fixture.execute_fixture(tmp_path, workspace, ini, profile["suite"])
+    assert result["status"] == 0, result
+    assert b"1 passed" in result["stdout"], result
+    paths = {entry["path"] for entry in profile["inventory"]}
+    assert fixture.NORMAL_SUITE in paths
+    assert fixture.NEGATIVE_SUITE not in paths
+    assert "host_tests/expectation_input.json" not in paths
+
+
+@pytest.mark.parametrize("profile", ["normal", "negative"])
+@pytest.mark.parametrize(
+    "fault", ["missing", "malformed", "unknown", "duplicate", "unrelated"]
+)
+def test_copied_fixture_setup_and_unrelated_failures_cannot_count_as_detection(
+    simulated_host_run, tmp_path, profile, fault
+):
+    import copy
+
+    from tests import host_expectation_support as fixture
+
+    observations = copy.deepcopy(simulated_host_run)
+    expectation = {
+        "schema_version": 1,
+        "case_id": "cleanup",
+        "expected_override": False,
+    }
+    raw = None
+    if fault == "missing":
+        expectation = None
+    elif fault == "malformed":
+        raw = b'{"schema_version":true,"case_id":"cleanup","expected_override":false}'
+    elif fault == "unknown":
+        expectation["case_id"] = "command_override"
+    elif fault == "duplicate":
+        raw = b'{"schema_version":1,"case_id":"cleanup","case_id":"cleanup","expected_override":false}'
+    else:
+        observations["streams"]["stdout"] += b"unrelated failure"
+    workspace, ini, record = fixture.copied_fixture(
+        tmp_path, observations, profile=profile, expectation=expectation, raw_input=raw
+    )
+    result = fixture.execute_fixture(tmp_path, workspace, ini, record["suite"])
+    output = result["stdout"] + result["stderr"]
+    if profile == "normal" and fault == "missing":
+        assert result["status"] == 0, result
+    else:
+        assert result["status"] != 0, result
+        assert fixture.classify_negative_result(result, "cleanup")["detected"] is False
+        assert b"AssertionError: container cleanup mismatch" not in output, result
+        if profile == "negative" and fault == "unrelated":
+            assert b"command stdout mismatch" in output, result
+        else:
+            assert b"FIXTURE_OBSERVATIONS_ACQUIRED" not in output, result
+            assert b"INTERNALERROR" in output, result
+
+
+def _assert_no_orchestrator_shell_wrapper(scripts):
+    forbidden = sorted(
+        name
+        for name in h.root_names(scripts)
+        if name in {"verify-host-acceptance", "verify_host_acceptance"}
+        or name.endswith(".sh")
+    )
+    assert not forbidden, f"forbidden host orchestrator wrappers: {forbidden}"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "verify-host-acceptance",
+        "verify_host_acceptance",
+        "verify-host-acceptance.sh",
+        "verify_host_acceptance.sh",
+        "alternate.sh",
+    ],
+)
+def test_single_file_wrapper_guard_rejects_all_forbidden_names(tmp_path, name):
+    p.write(tmp_path / name, b"#!/bin/sh\n")
+    with pytest.raises(AssertionError, match="forbidden host orchestrator wrappers"):
+        _assert_no_orchestrator_shell_wrapper(tmp_path)
+
+
+def test_single_file_wrapper_guard_preserves_required_low_level_wrappers(tmp_path):
+    for name in ("build-acceptance-wheel", "run-host-acceptance"):
+        p.write(tmp_path / name, b"#!/bin/sh\n")
+    _assert_no_orchestrator_shell_wrapper(tmp_path)
+
+
+def test_single_file_host_orchestrator_interface_and_internal_seams_are_declared():
+    path = h.required_surface("verify_host_acceptance.py")
+    data = p.read(path)
+    assert data.splitlines()[0] == b"#!/usr/bin/env python3.14"
+    _assert_no_orchestrator_shell_wrapper(h.ROOT / "scripts")
+    tree = ast.parse(data)
+    definitions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    assert {"main", "_execute_prepared_leg", "_load_host_runner"} <= definitions.keys()
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_RESULTS_BASE"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1
+    assert "/tmp/gorshochek/ephemeral/footman.git/host-acceptance" in ast.unparse(
+        assignments[0].value
+    )
+    source = data.decode()
+    assert "bootstrap_import_root" in source
+    assert "spec_from_file_location" in source and "exec_module" in source
+    assert not any(
+        isinstance(node, ast.ImportFrom) and node.module == "scripts"
+        for node in ast.walk(tree)
+    )
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+def test_copied_negative_profile_accepts_matching_expectation(
+    simulated_host_run, tmp_path, case
+):
+    from tests import host_expectation_support as fixture
+
+    expected = {
+        "staged_bytes": simulated_host_run["expected_staged_bytes"],
+        "argv": simulated_host_run["command_argv"],
+        "command_status": simulated_host_run["status"],
+        "cleanup": True,
+    }[case]
+    workspace, ini, profile = fixture.copied_fixture(
+        tmp_path,
+        simulated_host_run,
+        profile="negative",
+        expectation={
+            "schema_version": 1,
+            "case_id": case,
+            "expected_override": expected,
+        },
+    )
+    result = fixture.execute_fixture(tmp_path, workspace, ini, profile["suite"])
+    assert result["status"] == 0, result
+    assert b"1 passed" in result["stdout"], result
+
+
+@pytest.mark.parametrize("status", [0, 19])
+def test_orchestration_core_tool_fixture_is_executable_without_future_interfaces(
+    tmp_path, status
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(
+        tmp_path,
+        fixture_source=b'#!/usr/bin/env python3.14\n"""Inert readiness marker, not the orchestrator."""\n',
+        inspect_status=status,
+        build_status=status,
+    )
+    environment = wheel.clean_environment()
+    commands = [
+        [
+            prepared["tools"] / "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            core.TAG,
+        ],
+        [
+            prepared["root"] / "scripts/build-acceptance-wheel",
+            "--manifest",
+            tmp_path / "synthetic-manifest.json",
+        ],
+    ]
+    outcomes = []
+    for ordinal, argv in enumerate(commands):
+        outcome = wheel.command(
+            argv, cwd=prepared["foreign"], env=environment, timeout_seconds=30
+        )
+        p.write(
+            tmp_path / f"tool-readiness-{ordinal}.json",
+            p.canonical(h.operation_record(outcome)),
+        )
+        assert outcome["status"] == status, outcome
+        outcomes.append(outcome)
+    assert outcomes[0]["stdout"] == (core.IMAGE + "\n").encode()
+    assert outcomes[0]["stderr"] == b"inspection diagnostic\x00\xff\n"
+    assert outcomes[1]["stdout"] == b"synthetic controlled build\x00\xff\n"
+    assert outcomes[1]["stderr"] == b"synthetic build diagnostic\x80\n"
+    calls = [
+        p.load(prepared["control"].parent / "calls" / name)
+        for name in h.root_names(prepared["control"].parent / "calls")
+    ]
+    assert sorted(item["mode"] for item in calls) == ["build", "docker"]
+    assert all(item["simulation"] for item in calls)
+    assert all(
+        item["support_origin"] == str(prepared["root"] / "tests/mcp_provenance.py")
+        for item in calls
+    )
+    if status == 0:
+        manifest = p.load(tmp_path / "synthetic-manifest.json")
+        assert manifest == p.load(prepared["control"])["manifest"]
+        assert manifest["source_identity"] == h.inventory(prepared["root"])[0]
+        assert manifest["build_input_identity"] == wheel.inventory(prepared["root"])[0]
+        assert p.read(Path(manifest["wheel_path"])) == b"wheel"
+        assert (
+            hashlib_for_contract(p.read(Path(manifest["wheel_path"])))
+            == manifest["wheel_sha256"]
+        )
+    else:
+        assert not (tmp_path / "synthetic-manifest.json").exists()
+    assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]
+    assert h.inventory(prepared["root"])[0] == prepared["profile"]["source_identity"]
+    assert (
+        wheel.inventory(prepared["root"])[0]
+        == prepared["profile"]["build_input_identity"]
+    )
+
+
+def hashlib_for_contract(data):
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def core_report(prepared, names):
+    assert len(names) == 1, "each invocation owns one fresh results directory"
+    run = prepared["base"] / names[0]
+    report = p.load(run / "report.json")
+    assert report["schema_version"] == 1 and type(report["schema_version"]) is int
+    assert report["bootstrap_import_root"] == str(prepared["root"] / "src")
+    assert report["repository_root"] == str(prepared["root"])
+    assert report["source_identity"] == prepared["profile"]["source_identity"]
+    assert report["build_input_identity"] == prepared["profile"]["build_input_identity"]
+    assert report["revision"] == prepared["profile"]["synthetic_revision"]
+    return run, report
+
+
+def test_orchestrator_core_resolves_tag_once_and_hands_exact_build_to_all_profiles(
+    tmp_path,
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    result, observed, calls, names = core.invoke(prepared)
+    assert result["status"] == observed["call_status"] == 0, result
+    assert observed["error"] is None
+    assert observed["cwd_restored"] and observed["environment_restored"]
+    assert [item["case_id"] for item in observed["legs"]] == [*core.CASES, None]
+    assert [item["profile"] for item in observed["legs"]] == ["negative"] * 4 + [
+        "normal"
+    ]
+    inspect = [item for item in calls if item["mode"] == "docker"]
+    builds = [item for item in calls if item["mode"] == "build"]
+    assert len(inspect) == len(builds) == 1
+    assert inspect[0]["argv"] == ["image", "inspect", "--format", "{{.Id}}", core.TAG]
+    assert builds[0]["argv"][0] == "--manifest" and len(builds[0]["argv"]) == 2
+    manifest_path = Path(builds[0]["argv"][1])
+    manifest = p.load(manifest_path)
+    assert all(
+        leg["wheel"] == manifest["wheel_path"]
+        and leg["source_identity"] == str(manifest_path)
+        and leg["image"] == core.IMAGE
+        for leg in observed["legs"]
+    )
+    assert len({leg["workspace"] for leg in observed["legs"]}) == 5
+    assert len({leg["evidence"] for leg in observed["legs"]}) == 5
+    run, report = core_report(prepared, names)
+    assert str(run).encode() in result["stdout"], (
+        "print exact fresh external evidence path"
+    )
+    assert report["state"] == "final" and report["success"] is True
+    assert report["first_unexpected_status"] is None
+    assert [leg["pytest_status"] for leg in report["legs"]] == [1, 1, 1, 1, 0]
+    assert all(leg["detected"] for leg in report["legs"][:4])
+    assert all("runner_process_status" not in leg for leg in report["legs"])
+    from tests.host_acceptance_assertions import EXPECTATION_DIAGNOSTICS
+
+    for case, leg in zip([*core.CASES, None], report["legs"], strict=True):
+        diagnostic = (
+            "normal suite passed" if case is None else EXPECTATION_DIAGNOSTICS[case]
+        )
+        baseline = "" if case is None else "FIXTURE_BASELINE_VERIFIED\n"
+        assert p.read(leg["stdout_path"]) == (baseline + diagnostic + "\n").encode()
+        if case is not None:
+            assert leg["baseline_verified"] is True
+        assert p.read(leg["stderr_path"]) == b"synthetic boundary diagnostic\x00\xff"
+    recorded_builds = [
+        command
+        for command in report["commands"]
+        if "build-acceptance-wheel" in str(command["argv"][0])
+    ]
+    recorded_inspects = [
+        command
+        for command in report["commands"]
+        if Path(command["argv"][0]).name == "docker"
+    ]
+    assert len(recorded_builds) == len(recorded_inspects) == 1
+    assert recorded_inspects[0]["argv"][1:] == inspect[0]["argv"]
+    assert p.read(recorded_inspects[0]["stdout_path"]) == (core.IMAGE + "\n").encode()
+    assert (
+        p.read(recorded_inspects[0]["stderr_path"])
+        == b"inspection diagnostic\x00\xff\n"
+    )
+    assert (
+        p.read(recorded_builds[0]["stdout_path"])
+        == b"synthetic controlled build\x00\xff\n"
+    )
+    assert (
+        p.read(recorded_builds[0]["stderr_path"]) == b"synthetic build diagnostic\x80\n"
+    )
+    assert (
+        p.read(prepared["root"] / "dist/unrelated-stale.whl")
+        == b"never select this wheel"
+    )
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+def test_orchestrator_core_matching_diagnostic_without_verified_baseline_is_invalid_observation(
+    tmp_path, case
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    # Keep assertion kind, raw status, failed count and exact target diagnostic
+    # identical to a valid negative leg; remove only baseline confirmation.
+    result, observed, _, names = core.invoke(
+        prepared, outcomes={case: {"baseline_verified": False}}
+    )
+    assert result["status"] == observed["call_status"] == 1, result
+    _, report = core_report(prepared, names)
+    assert report["success"] is False and report["first_unexpected_status"] == 1
+    assert [leg["case_id"] for leg in observed["legs"]] == [*core.CASES, None]
+    leg = report["legs"][core.CASES.index(case)]
+    assert leg["pytest_status"] == 1 and leg["detected"] is False
+    assert leg["baseline_verified"] is False
+    assert leg["failure_kind"] == "invalid-observation/setup"
+    assert leg["counts"]["collected"] == leg["counts"]["failed"] == 1
+    from tests.host_acceptance_assertions import EXPECTATION_DIAGNOSTICS
+
+    assert p.read(leg["stdout_path"]) == (EXPECTATION_DIAGNOSTICS[case] + "\n").encode()
+    assert b"FIXTURE_BASELINE_VERIFIED" not in p.read(leg["stdout_path"]).splitlines()
+
+
+@pytest.mark.parametrize(
+    "chosen,expected_status",
+    [
+        ({"status": 17, "failure_kind": "prerequisite"}, 17),
+        ({"diagnostic": "unrelated assertion mismatch"}, 1),
+        ({"failure_kind": "setup"}, 1),
+        (
+            {
+                "counts": {
+                    "collected": 1,
+                    "passed": 0,
+                    "failed": 0,
+                    "skipped": 1,
+                    "xfailed": 0,
+                    "xpassed": 0,
+                }
+            },
+            1,
+        ),
+        ({"cleanup_complete": False}, 1),
+        ({"evidence_complete": False}, 1),
+        (
+            {
+                "status": 5,
+                "counts": {
+                    "collected": 0,
+                    "passed": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "xfailed": 0,
+                    "xpassed": 0,
+                },
+            },
+            5,
+        ),
+        (
+            {
+                "status": 0,
+                "counts": {
+                    "collected": 1,
+                    "passed": 1,
+                    "failed": 0,
+                    "skipped": 0,
+                    "xfailed": 0,
+                    "xpassed": 0,
+                },
+            },
+            1,
+        ),
+    ],
+)
+def test_orchestrator_core_does_not_count_prerequisite_unrelated_or_unsettled_leg_as_detection(
+    tmp_path, chosen, expected_status
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    result, observed, _, names = core.invoke(
+        prepared, outcomes={"argv": chosen, "normal": {"status": 23}}
+    )
+    assert result["status"] == observed["call_status"] == expected_status, result
+    assert observed["cwd_restored"] and observed["environment_restored"]
+    assert [leg["case_id"] for leg in observed["legs"]] == [*core.CASES, None], (
+        "attempt other independent valid legs"
+    )
+    _, report = core_report(prepared, names)
+    assert (
+        report["success"] is False
+        and report["first_unexpected_status"] == expected_status
+    )
+    assert report["legs"][1]["detected"] is False
+    assert report["legs"][1]["pytest_status"] == chosen.get("status", 1)
+    assert report["legs"][-1]["pytest_status"] == 23
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["cleanup_complete", "evidence_complete", "skipped", "xfailed", "xpassed", "zero"],
+)
+def test_orchestrator_core_requires_normal_suite_policy_evidence_and_reconciliation(
+    tmp_path, fault
+):
+    from tests import host_orchestration_support as core
+
+    chosen = {fault: False}
+    if fault in {"skipped", "xfailed", "xpassed", "zero"}:
+        chosen = {
+            "counts": {
+                "collected": 0 if fault == "zero" else 2,
+                "passed": 0 if fault == "zero" else 1,
+                "failed": 0,
+                "skipped": int(fault == "skipped"),
+                "xfailed": int(fault == "xfailed"),
+                "xpassed": int(fault == "xpassed"),
+            }
+        }
+    prepared = core.prepare(tmp_path)
+    result, observed, _, names = core.invoke(prepared, outcomes={"normal": chosen})
+    assert result["status"] != 0 and observed["call_status"] != 0, result
+    _, report = core_report(prepared, names)
+    assert report["success"] is False
+    assert all(leg["detected"] for leg in report["legs"][:4])
+    assert report["legs"][-1]["pytest_status"] == 0, (
+        "preserve raw status despite aggregate failure"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,output",
+    [
+        (17, None),
+        (0, b"tag:latest\n"),
+        (0, b""),
+        (0, ("sha256:" + "a" * 64 + "\nextra\n").encode()),
+    ],
+)
+def test_orchestrator_core_inspection_failure_blocks_build_and_every_leg(
+    tmp_path, status, output
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path, inspect_status=status, inspect_output=output)
+    result, observed, calls, names = core.invoke(prepared)
+    assert result["status"] != 0 and not observed["legs"], result
+    if status:
+        assert result["status"] == status
+    assert [item["mode"] for item in calls] == ["docker"]
+    _, report = core_report(prepared, names)
+    assert report["success"] is False
+
+
+@pytest.mark.parametrize(
+    "fault", ["status", "swapped_wheel", "missing_wheel", "stale_source"]
+)
+def test_orchestrator_core_failed_or_invalid_controlled_build_never_feeds_legs(
+    tmp_path, fault
+):
+    from tests import host_orchestration_support as core
+
+    options = (
+        {"build_status": 29}
+        if fault == "status"
+        else {"swapped_wheel": True}
+        if fault == "swapped_wheel"
+        else {"manifest_fault": fault}
+    )
+    prepared = core.prepare(tmp_path, **options)
+    result, observed, calls, names = core.invoke(prepared)
+    assert result["status"] != 0 and observed["legs"] == [], result
+    if fault == "status":
+        assert result["status"] == 29
+    assert sorted(item["mode"] for item in calls) == ["build", "docker"]
+    _, report = core_report(prepared, names)
+    assert report["success"] is False
+
+
+@pytest.mark.parametrize("failure", ["interrupt", "exception"])
+def test_orchestrator_core_preserves_interruption_and_attempts_report_finalization(
+    tmp_path, failure
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    result, observed, _, names = core.invoke(
+        prepared, outcomes={"argv": {"raise": failure}}
+    )
+    assert result["status"] != 0, result
+    assert observed["cwd_restored"] and observed["environment_restored"]
+    run, report = core_report(prepared, names)
+    assert report["success"] is False
+    if failure == "interrupt":
+        assert observed["error"]["type"] == "KeyboardInterrupt", (
+            "do not translate interruption to ordinary failure"
+        )
+        assert report["state"] == "incomplete"
+    assert (run / "report.json").is_file()
+
+
+def test_orchestrator_core_probe_driver_is_executable_without_future_implementation(
+    tmp_path,
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(
+        tmp_path,
+        fixture_source=b"#!/usr/bin/env python3.14\n_RESULTS_BASE = None\ndef main(argv):\n    return 0\n",
+    )
+    result, observed, calls, names = core.invoke(prepared)
+    assert result["status"] == observed["call_status"] == 0, result
+    assert observed["error"] is None and observed["legs"] == []
+    assert observed["cwd_restored"] and observed["environment_restored"]
+    assert calls == [] and names == [], (
+        "inert readiness marker must perform no orchestration"
+    )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "os.execv(sys.executable, [sys.executable, '-c', 'raise SystemExit(99)'])",
+        "os.system('exit 99')",
+    ],
+)
+def test_orchestrator_probe_refuses_self_reexec_and_shell_before_os_execution(
+    tmp_path, call
+):
+    from tests import host_orchestration_support as core
+
+    source = (
+        "#!/usr/bin/env python3.14\nimport os\nimport sys\n_RESULTS_BASE = None\ndef main(argv):\n    "
+        + call
+        + "\n"
+    ).encode()
+    prepared = core.prepare(tmp_path, fixture_source=source)
+    result, observed, calls, names = core.invoke(prepared)
+    assert result["status"] == 1, result
+    assert observed["error"]["type"] == "RuntimeError"
+    assert "forbidden" in observed["error"]["message"]
+    assert calls == [] and names == [] and observed["legs"] == []
+
+
+def test_orchestrator_prepared_leg_probe_exercises_typed_profiles_without_future_code(
+    tmp_path,
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path, fixture_source=core.READINESS_SOURCE.encode())
+    result, observed, calls, names = core.invoke(prepared)
+    assert result["status"] == observed["call_status"] == 0, result
+    assert observed["error"] is None, observed
+    assert observed["cwd_restored"] and observed["environment_restored"]
+    assert [leg["case_id"] for leg in observed["legs"]] == ["cleanup", None]
+    assert observed["legs"][0]["expectation"] == {
+        "schema_version": 1,
+        "case_id": "cleanup",
+        "expected_override": False,
+    }
+    assert observed["legs"][1]["expectation"] is None
+    assert calls == [] and sorted(names) == ["cleanup", "normal"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["one", "two"],
+        ["--results-dir", "/unexpected"],
+        ["--image", "a" * 12],
+        ["--case", "argv"],
+        ["--runner", "/unexpected.py"],
+        [""],
+    ],
+)
+def test_orchestrator_core_exposes_only_one_tag_not_path_or_negative_control_options(
+    tmp_path, argv
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    result, observed, calls, names = core.invoke(prepared, argv=argv)
+    assert result["status"] != 0 and not observed["legs"], result
+    assert calls == [] and names == [], "invalid input must precede managed acquisition"
+
+
+def test_orchestrator_core_missing_uv_fails_before_image_or_build_and_is_not_detection(
+    tmp_path,
+):
+    import shutil
+
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    (prepared["tools"] / "uv").unlink()
+    python = shutil.which("python3.14")
+    assert python is not None, "test prerequisite: PATH python3.14"
+    (prepared["tools"] / "python3.14").symlink_to(python)
+    result, observed, calls, _ = core.invoke(
+        prepared,
+        environment={"PATH": str(prepared["tools"]) + os.pathsep + "/usr/bin:/bin"},
+    )
+    assert result["status"] == observed["call_status"] != 0, result
+    assert b"uv" in result["stderr"].lower()
+    assert calls == [] and observed["legs"] == []
+
+
+def test_orchestrator_core_ignores_ambient_import_and_results_override_environment(
+    tmp_path,
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    poison = tmp_path / "poison"
+    (poison / "footman").mkdir(parents=True)
+    p.write(
+        poison / "footman/__init__.py",
+        b'raise RuntimeError("AMBIENT_FOOTMAN_EXECUTED")\n',
+    )
+    unexpected = tmp_path / "unexpected-results"
+    result, observed, _, names = core.invoke(
+        prepared,
+        environment={
+            "PYTHONPATH": str(poison),
+            "FOOTMAN_HOST_RESULTS_DIR": str(unexpected),
+            "FOOTMAN_HOST_CASE": "cleanup",
+        },
+    )
+    assert result["status"] == 0 and observed["call_status"] == 0, result
+    assert b"AMBIENT_FOOTMAN_EXECUTED" not in result["stdout"] + result["stderr"]
+    assert not unexpected.exists()
+    assert [leg["case_id"] for leg in observed["legs"]] == [*core.CASES, None]
+    core_report(prepared, names)
+
+
+def test_orchestrator_core_rejects_preloaded_wrong_root_before_tools_or_leg_execution(
+    tmp_path,
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    result, observed, calls, _ = core.invoke(prepared, preload=True)
+    assert result["status"] != 0 and observed["legs"] == [], result
+    assert calls == [], "preloaded wrong-root foundation must fail before acquisition"
+    assert (
+        "root" in str(observed["error"]).lower() or b"root" in result["stderr"].lower()
+    )
+
+
+def test_orchestrator_core_missing_foundation_has_no_editable_fallback(tmp_path):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    (prepared["root"] / "src/footman/process.py").unlink()
+    # Deliberate corruption after successful complete-profile preparation is
+    # the tested preflight fault, never an incomplete fixture passed as setup.
+    prepared["profile"]["source_identity"] = h.inventory(prepared["root"])[0]
+    prepared["profile"]["build_input_identity"] = wheel.inventory(prepared["root"])[0]
+    result, observed, calls, _ = core.invoke(prepared)
+    assert result["status"] != 0 and observed["legs"] == [], result
+    assert calls == [], "missing checkout foundation must fail before acquisition"
+    assert (
+        b"foundation" in result["stderr"].lower()
+        or "foundation" in str(observed["error"]).lower()
+    )
+
+
+def test_orchestrator_core_wrong_root_runner_is_refused_before_exec_module(tmp_path):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    other = tmp_path / "other/scripts"
+    other.mkdir(parents=True)
+    target = other / "run_host_acceptance.py"
+    p.write(target, b'raise RuntimeError("WRONG_ROOT_RUNNER_EXECUTED")\n')
+    sibling = prepared["root"] / "scripts/run_host_acceptance.py"
+    sibling.unlink()
+    sibling.symlink_to(target)
+    prepared["profile"]["source_identity"] = h.inventory(prepared["root"])[0]
+    result, observed, calls, _ = core.invoke(prepared, substitute=False)
+    assert result["status"] != 0 and observed["legs"] == [], result
+    output = result["stdout"] + result["stderr"]
+    assert b"WRONG_ROOT_RUNNER_EXECUTED" not in output
+    assert calls == [], (
+        "runner-root disagreement must precede build/install/service acquisition"
+    )
+    assert b"root" in output.lower() or b"unsafe" in output.lower()
+
+
+def test_orchestrator_core_repeat_reserves_fresh_evidence_without_reusing_prior_report(
+    tmp_path,
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    first, _, _, names = core.invoke(prepared)
+    assert first["status"] == 0, first
+    first_run, _ = core_report(prepared, names)
+    first_bytes = p.read(first_run / "report.json")
+    artifacts = attribution.dist_identity(prepared["root"])
+    # The synthetic build boundary refuses a repeat; the core must still reserve
+    # fresh evidence and preserve the first observation, not scan/reuse dist.
+    control = p.load(prepared["control"])
+    control["build"]["status"] = 31
+    h.replace(prepared["control"], p.canonical(control))
+    second, observed, _, after = core.invoke(prepared)
+    assert second["status"] == observed["call_status"] == 31, second
+    assert observed["legs"] == [] and set(names) < set(after)
+    assert len(after) == 2
+    assert p.read(first_run / "report.json") == first_bytes
+    assert attribution.dist_identity(prepared["root"]) == artifacts
+    (new_name,) = set(after) - set(names)
+    failed = p.load(prepared["base"] / new_name / "report.json")
+    assert failed["success"] is False and failed["first_unexpected_status"] == 31
+
+
+def test_orchestrator_exact_shebang_refuses_missing_path_interpreter_before_script_execution(
+    tmp_path,
+):
+    from tests import host_orchestration_support as core
+
+    prepared = core.prepare(tmp_path)
+    empty = tmp_path / "no-python"
+    empty.mkdir()
+    result = wheel.command(
+        [prepared["root"] / "scripts/verify_host_acceptance.py", core.TAG],
+        cwd=prepared["foreign"],
+        env=wheel.clean_environment({"PATH": str(empty)}),
+        timeout_seconds=30,
+    )
+    p.write(
+        tmp_path / "missing-interpreter-operation.json",
+        p.canonical(h.operation_record(result)),
+    )
+    assert result["status"] == 127, result
+    assert b"python3.14" in result["stderr"] and result["stderr"]
+    assert h.root_names(prepared["control"].parent / "calls") == []
+    assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]

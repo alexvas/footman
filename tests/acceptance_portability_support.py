@@ -490,19 +490,30 @@ def incarnation(record):
         "unknown service incarnation",
     )
     try:
-        raw = p.read(Path("/proc") / str(record["pid"]) / "stat")
-    except FileNotFoundError as error:
-        if error.filename == "stat":
-            return "absent"
-        raise
+        try:
+            raw = p.read_proc_stat(record["pid"])
+        except BaseException as error:
+            cause = error.__cause__ if isinstance(error, DescriptorError) else error
+            error.add_note(
+                "incarnation observer: "
+                f"pid={record['pid']} expected_starttime_ticks={record['incarnation']} "
+                f"observer_pid={os.getpid()} monotonic_ns={time.monotonic_ns()} "
+                f"operation=read-proc-stat errno={getattr(cause, 'errno', None)} "
+                f"stage={getattr(error, 'stage', None)}"
+            )
+            raise
     except DescriptorError as error:
         # Only ENOENT of the pid directory establishes absence. Other open,
         # permission/read/close failures stay unknown and fail closed.
-        if isinstance(
-            error.__cause__, FileNotFoundError
-        ) and error.__cause__.filename == str(record["pid"]):
+        if (
+            error.stage == "open-descriptor"
+            and isinstance(error.__cause__, FileNotFoundError)
+            and error.__cause__.filename == str(record["pid"])
+        ):
             return "absent"
         raise
+    if raw is None:
+        return "absent"
     fields = raw.rsplit(b")", 1)[1].split()
     p.require(len(fields) > 19, "malformed process identity")
     return (
@@ -640,7 +651,21 @@ def reconcile(case, *, no_launch=False, observed_incarnation=None):
     removes = [item for item in records if item["argv"][:2] == ["rm", "-f"]]
     confirms = [item for item in records if item["argv"][:2] == ["container", "ls"]]
     if not (len(removes) == len(confirms) == len(launches)):
-        raise AssertionError("stub resource not reconciled")
+        raise AssertionError(
+            "stub resource not reconciled: "
+            + p.canonical(
+                {
+                    "counts": {
+                        "launches": len(launches),
+                        "removes": len(removes),
+                        "confirms": len(confirms),
+                    },
+                    "launch_ids": [item.get("container_id") for item in launches],
+                    "observations": records,
+                    "scratch_root": str(case["tmp"]),
+                }
+            ).decode("ascii")
+        )
     if not (all(item["status"] == 0 and item["stdin_eof"] for item in records)):
         raise AssertionError("stub resource observation unsuccessful")
     # The relocated stub's expected_argv is derived from received argv. Its

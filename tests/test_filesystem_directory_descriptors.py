@@ -340,6 +340,80 @@ class SecureWalkTests(unittest.TestCase):
         descriptor.close()
 
 
+class DirectoryOwnerDiagnosticsTests(unittest.TestCase):
+    """Refusal diagnostics use the failing fd snapshot without extra I/O."""
+
+    def test_owner_refusal_metadata_survives_cleanup_without_restat_or_retry(
+        self,
+    ) -> None:
+        for close_fault in (
+            None,
+            OSError(errno.EIO, "close failed"),
+            KeyboardInterrupt(),
+        ):
+            with self.subTest(close_fault=type(close_fault).__name__):
+                ops = _FakeOps()
+                fd = ops._allocate()
+                ops._stats[fd] = os.stat_result(
+                    (stat.S_IFDIR | 0o751, 731, 419, 3, 1234, 5678, 4096, 1, 2, 3),
+                    {
+                        "st_atime_ns": 1000000001,
+                        "st_mtime_ns": 2000000002,
+                        "st_ctime_ns": 3000000003,
+                    },
+                )
+                if close_fault is not None:
+                    ops.close_errors[fd] = close_fault
+                captured = {}
+                real_validate = DirectoryDescriptor._validate
+
+                def validate(
+                    owner, *, require_owner, captured=captured, check=real_validate
+                ):
+                    captured["owner"] = owner
+                    try:
+                        check(owner, require_owner=require_owner)
+                    except UnsafeDescriptorError as refusal:
+                        captured["error"] = refusal
+                        raise
+
+                with (
+                    mock.patch.object(DirectoryDescriptor, "_validate", validate),
+                    mock.patch("os.geteuid", return_value=1000),
+                    mock.patch("os.getegid", return_value=2000),
+                    mock.patch("os.getpid", return_value=4321),
+                    self.assertRaises(
+                        (UnsafeDescriptorError, KeyboardInterrupt)
+                    ) as caught,
+                ):
+                    DirectoryDescriptor.adopt(ops, fd, label="/proc/12345")
+                error = captured["error"]
+                if isinstance(close_fault, KeyboardInterrupt):
+                    self.assertIs(caught.exception, close_fault)
+                else:
+                    self.assertIs(caught.exception, error)
+                self.assertEqual(error.stage, "validate-descriptor")
+                self.assertEqual(
+                    str(error),
+                    "directory capability '/proc/12345' is not owned by the invoking user",
+                )
+                self.assertEqual(
+                    error.__notes__[0],
+                    "directory fstat snapshot: fd=100 uid=1234 gid=5678 "
+                    "effective_uid=1000 effective_gid=2000 observer_pid=4321 "
+                    "mode=0o40751 device=419 inode=731 nlink=3 size=4096 "
+                    "atime_ns=1000000001 mtime_ns=2000000002 ctime_ns=3000000003",
+                )
+                # The note remains a snapshot even if metadata changes after
+                # rejection. Repeated cleanup never retries the ambiguous close.
+                ops._stats[fd] = _dir_stat(uid=1000)
+                captured["owner"].close()
+                captured["owner"].close()
+                self.assertEqual(ops.calls, [("fstat", fd), ("close", fd)])
+                self.assertEqual(ops.open_fds, set())
+                self.assertIn("uid=1234 gid=5678", error.__notes__[0])
+
+
 class SecureWalkHandoffTests(unittest.TestCase):
     """Upstream Jigbox Task 3.3 — a failed parent close never leaks or retries."""
 

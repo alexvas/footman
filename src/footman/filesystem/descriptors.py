@@ -370,11 +370,27 @@ class DirectoryDescriptor(OwnedDescriptor):
                 _STAGE_VALIDATE,
                 f"directory capability {self.label!r} is not a directory",
             )
-        if require_owner and info.st_uid != os.geteuid():
-            raise UnsafeDescriptorError(
-                _STAGE_VALIDATE,
-                f"directory capability {self.label!r} is not owned by the invoking user",
-            )
+        if require_owner:
+            effective_uid = os.geteuid()
+            if info.st_uid != effective_uid:
+                error = UnsafeDescriptorError(
+                    _STAGE_VALIDATE,
+                    f"directory capability {self.label!r} is not owned by the invoking user",
+                )
+                # Diagnose the same opened descriptor and fstat snapshot that
+                # caused refusal, not a later pathname lookup (which may race
+                # disappearance/replacement). No diagnostic I/O or new owner.
+                error.add_note(
+                    "directory fstat snapshot: "
+                    f"fd={self.fd} uid={info.st_uid} gid={info.st_gid} "
+                    f"effective_uid={effective_uid} effective_gid={os.getegid()} "
+                    f"observer_pid={os.getpid()} mode={info.st_mode:#o} "
+                    f"device={info.st_dev} inode={info.st_ino} "
+                    f"nlink={info.st_nlink} size={info.st_size} "
+                    f"atime_ns={info.st_atime_ns} mtime_ns={info.st_mtime_ns} "
+                    f"ctime_ns={info.st_ctime_ns}"
+                )
+                raise error
 
     def child_basename(self, name: str) -> str:
         """Return *name* only when it is one canonical path component."""

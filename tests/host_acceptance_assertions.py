@@ -15,6 +15,77 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+EXPECTATION_CASES = ("staged_bytes", "argv", "command_status", "cleanup")
+EXPECTATION_DIAGNOSTICS = {
+    "staged_bytes": "staged bytes mismatch",
+    "argv": "configured argv mismatch",
+    "command_status": "command status mismatch",
+    "cleanup": "container cleanup mismatch",
+}
+
+
+def validate_expectation_input(value):
+    """Validate fixture-only JSON values without acquiring resources.
+
+    Staged bytes use a UTF-8 string, argv a nonempty string array, command
+    status an integer, and cleanup a boolean confirmed-absence
+    expectation. None of these values selects work or changes observations.
+    Callers must reject unexpected input in normal profiles before calling us.
+    """
+    require(type(value) is dict, "expectation input must be an object")
+    require(
+        set(value) == {"schema_version", "case_id", "expected_override"},
+        "expectation input fields mismatch",
+    )
+    require(
+        type(value["schema_version"]) is int and value["schema_version"] == 1,
+        "unsupported expectation schema",
+    )
+    case = value["case_id"]
+    require(type(case) is str and case in EXPECTATION_CASES, "unknown expectation case")
+    expected = value["expected_override"]
+    if case == "staged_bytes":
+        require(
+            type(expected) is str, "staged bytes expectation must be a UTF-8 string"
+        )
+        try:
+            expected.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise AssertionError(
+                "staged bytes expectation must be a UTF-8 string"
+            ) from error
+    elif case == "argv":
+        require(
+            type(expected) is list
+            and bool(expected)
+            and all(type(arg) is str and arg and "\x00" not in arg for arg in expected),
+            "argv expectation must be a nonempty NUL-free string array",
+        )
+        expected = list(expected)
+    elif case == "command_status":
+        require(
+            type(expected) is int,
+            "command status expectation must be an integer",
+        )
+    else:
+        require(type(expected) is bool, "cleanup expectation must be a boolean")
+    return {"schema_version": 1, "case_id": case, "expected_override": expected}
+
+
+def verify_expectation(case_id, actual, expected):
+    """The same assertions serve normal observations and isolated mismatches."""
+    validated = validate_expectation_input(
+        {"schema_version": 1, "case_id": case_id, "expected_override": expected}
+    )
+    expected = validated["expected_override"]
+    if case_id == "staged_bytes":
+        expected = expected.encode("utf-8")
+    require(
+        type(actual) is type(expected) and actual == expected,
+        EXPECTATION_DIAGNOSTICS[case_id],
+    )
+
+
 def verify_run(
     value,
     manifest,
@@ -30,17 +101,15 @@ def verify_run(
     expected_stdout,
     expected_stderr,
     snapshot_present,
+    staged_bytes,
+    expected_staged_bytes,
 ):
-    """Verify a normally completed command, independently of status zero."""
+    """Verify a completed command and mandatory staged evidence at any status."""
+    verify_expectation("staged_bytes", staged_bytes, expected_staged_bytes)
     require(type(status) is int, "expected status must be an integer")
     require(manifest["snapshot"]["tree_id"] == tree_id, "staged tree mismatch")
-    require(
-        type(manifest["return_code"]) is int
-        and manifest["return_code"] == status
-        and type(value["return_code"]) is int
-        and value["return_code"] == status,
-        "command status mismatch",
-    )
+    verify_expectation("command_status", manifest["return_code"], status)
+    verify_expectation("command_status", value["return_code"], status)
     outcome = "succeeded" if status == 0 else "command_failed"
     require(
         manifest["outcome"] == value["outcome"] == outcome, "command outcome mismatch"
@@ -61,7 +130,7 @@ def verify_run(
             value[field] == manifest["paths"][field] == str(directory / name),
             "retained output path mismatch",
         )
-    require(manifest["command_argv"] == list(command_argv), "configured argv mismatch")
+    verify_expectation("argv", manifest["command_argv"], list(command_argv))
     require(manifest["user"] == user and manifest["cwd"] == cwd, "user/cwd mismatch")
     require(
         manifest["configured_image_id"] == configured_image, "configured image changed"
@@ -83,7 +152,7 @@ def verify_run(
     )
     require(streams["startup_stderr"] == b"", "unexpected startup diagnostic")
     cleanup = manifest["cleanup"]
-    require(cleanup["confirmed_absent"] is True, "container removal unconfirmed")
+    verify_expectation("cleanup", cleanup["confirmed_absent"], True)
     require(cleanup["snapshot_deleted"] is True, "snapshot deletion unconfirmed")
     require(not cleanup["unresolved_resources"], "unresolved resources")
     require(snapshot_present is False, "snapshot still present")

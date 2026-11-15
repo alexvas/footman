@@ -909,17 +909,51 @@ def test_incarnation_observer_distinguishes_missing_process_from_unavailable_pro
         else DescriptorError("open-descriptor", "missing component", cause=cause)
     )
 
-    def read(path):
-        assert Path(path) == Path("/proc/12345/stat")
+    def read(pid):
+        assert pid == 12345
+        if missing == "stat":
+            return None
         raise error
 
-    monkeypatch.setattr(provenance, "read", read)
+    monkeypatch.setattr(provenance, "read_proc_stat", read)
     if missing == "proc":
         with pytest.raises(DescriptorError) as caught:
             observer.incarnation({"pid": 12345, "incarnation": "123"})
         assert caught.value is error
     else:
         assert observer.incarnation({"pid": 12345, "incarnation": "123"}) == "absent"
+
+
+@pytest.mark.parametrize("kind", ["owner", "io"])
+def test_incarnation_observer_unknown_failure_keeps_identity_and_adds_context(
+    monkeypatch, kind
+):
+    from unittest.mock import Mock
+
+    from footman.filesystem.descriptors import DescriptorError, UnsafeDescriptorError
+
+    observer = portability()
+    error = (
+        UnsafeDescriptorError("validate-descriptor", "foreign directory owner")
+        if kind == "owner"
+        else DescriptorError(
+            "open-descriptor", "observer I/O failure", cause=PermissionError("denied")
+        )
+    )
+    read = Mock(side_effect=error)
+    monkeypatch.setattr(provenance, "read_proc_stat", read)
+    monkeypatch.setattr(observer.os, "getpid", lambda: 4321)
+    monkeypatch.setattr(observer.time, "monotonic_ns", lambda: 123456789)
+    with pytest.raises(DescriptorError) as caught:
+        observer.incarnation({"pid": 12345, "incarnation": "98765"})
+    assert caught.value is error
+    read.assert_called_once_with(12345)
+    assert error.__notes__ == [
+        "incarnation observer: pid=12345 expected_starttime_ticks=98765 "
+        "observer_pid=4321 monotonic_ns=123456789 "
+        "operation=read-proc-stat errno=None "
+        + f"stage={getattr(error, 'stage', None)}"
+    ]
 
 
 def test_phase10_build_binding_is_defensively_immutable(tmp_path):
@@ -1234,3 +1268,180 @@ def test_staged_fixture_real_mcp_manifest_flow(tmp_path, phase, status):
     retained = provenance.load(tmp_path / "verified-set.json")
     assert retained["context"] == "development"
     assert retained["wheel_sha256"] is None
+
+
+@pytest.mark.parametrize("kind", ["esrch", "permission", "interruption"])
+def test_incarnation_raw_read_failure_is_annotated_without_retry(monkeypatch, kind):
+    import errno
+    from unittest.mock import Mock
+
+    error = {
+        "esrch": ProcessLookupError(errno.ESRCH, "gone", "stat"),
+        "permission": PermissionError(errno.EACCES, "denied", "stat"),
+        "interruption": KeyboardInterrupt("interrupted read"),
+    }[kind]
+    read = Mock(side_effect=error)
+    monkeypatch.setattr(provenance, "read_proc_stat", read)
+    with pytest.raises(type(error)) as caught:
+        portability().incarnation({"pid": 12345, "incarnation": "98765"})
+    assert caught.value is error
+    read.assert_called_once_with(12345)
+    note = error.__notes__[0]
+    assert "pid=12345 expected_starttime_ticks=98765" in note
+    assert "operation=read-proc-stat" in note
+    assert f"errno={getattr(error, 'errno', None)}" in note
+
+
+def test_proc_stat_after_reaped_child_retains_esrch(tmp_path, monkeypatch):
+    """Real kernel control: pinned proc directory does not pin the task."""
+    import sys
+    from contextlib import ExitStack, nullcontext
+
+    from footman.filesystem.descriptors import DirectoryDescriptor
+    from footman.process import OwnedProcess
+
+    observer = portability()
+    record = {}
+    observation = {
+        "observer_uid": os.geteuid(),
+        "observer_gid": os.getegid(),
+        "observer_uid_map": provenance.read(
+            Path("/proc") / str(os.getpid()) / "uid_map"
+        ).decode(),
+        "observer_gid_map": provenance.read(
+            Path("/proc") / str(os.getpid()) / "gid_map"
+        ).decode(),
+        "observer_user_namespace": os.readlink("/proc/self/ns/user"),
+    }
+
+    def snapshot(directory):
+        info = os.fstat(directory.fd)
+        return {
+            "fd": directory.fd,
+            "uid": info.st_uid,
+            "gid": info.st_gid,
+            "device": info.st_dev,
+            "inode": info.st_ino,
+            "mode": info.st_mode,
+            "monotonic_ns": time.monotonic_ns(),
+        }
+
+    data = bytearray()
+    with ExitStack() as directories:
+        with OwnedProcess.launch(
+            [
+                sys.executable,
+                "-P",
+                "-c",
+                "import os,sys; print(os.getpid(), flush=True); sys.stdin.buffer.read()",
+            ],
+            stdin_mode="pipe",
+            deadline_seconds=10,
+            grace_seconds=1,
+        ) as owner:
+
+            def chunk(stream, payload):
+                data.extend(payload)
+                if record or b"\n" not in data:
+                    return
+                pid = int(bytes(data).splitlines()[0])
+                directory = directories.enter_context(
+                    DirectoryDescriptor.open_secure_path(
+                        provenance.OPS, Path("/proc") / str(pid)
+                    )
+                )
+                raw = provenance.read(Path("/proc") / str(pid) / "stat")
+                record.update(
+                    pid=pid, incarnation=raw.rsplit(b")", 1)[1].split()[19].decode()
+                )
+                record["directory"] = directory
+                observation.update(
+                    pid=pid,
+                    expected_starttime_ticks=record["incarnation"],
+                    before=snapshot(directory),
+                    child_uid_map=provenance.read(
+                        Path("/proc") / str(pid) / "uid_map"
+                    ).decode(),
+                    child_gid_map=provenance.read(
+                        Path("/proc") / str(pid) / "gid_map"
+                    ).decode(),
+                    child_user_namespace=os.readlink(f"/proc/{pid}/ns/user"),
+                )
+                owner.close_stdin(timeout_seconds=1)
+
+            result = owner.stream(chunk)
+            assert result.returncode == 0
+            assert owner.cleanup_status.complete
+            assert record
+            directory = record.pop("directory")
+            observation.update(
+                after=snapshot(directory),
+                child_returncode=result.returncode,
+                cleanup_complete=owner.cleanup_status.complete,
+            )
+            before, after = observation["before"], observation["after"]
+            observation["ownership_changed"] = (before["uid"], before["gid"]) != (
+                after["uid"],
+                after["gid"],
+            )
+            provenance.write(
+                tmp_path / "proc-ownership-observation.json",
+                provenance.canonical(observation),
+            )
+            print(
+                "PROC_OWNERSHIP_OBSERVATION "
+                + provenance.canonical(observation).decode()
+            )
+            assert (before["fd"], before["device"], before["inode"]) == (
+                after["fd"],
+                after["device"],
+                after["inode"],
+            )
+
+            def pinned_directory(ops, path, *, require_owner):
+                assert Path(path) == Path("/proc") / str(record["pid"])
+                assert require_owner is False
+                # Borrow the sole ExitStack-owned capability; do not re-adopt.
+                return nullcontext(directory)
+
+            monkeypatch.setattr(
+                DirectoryDescriptor, "open_secure_path", pinned_directory
+            )
+            assert observer.incarnation(record) == "absent"
+            directory.close()
+            directory.close()  # owner cleanup stays idempotent
+
+
+@pytest.mark.parametrize("argv", [["run"], ["rm", "-f", "b" * 64], ["container", "ls"]])
+def test_reconcile_mismatch_reports_counts_ids_and_raw_records(
+    tmp_path, monkeypatch, argv
+):
+    import json
+
+    observer = portability()
+    (tmp_path / "stub-records").mkdir()
+    item = {"argv": argv, "container_id": "a" * 64, "status": 0, "stdin_eof": True}
+    provenance.write(
+        tmp_path / "stub-records" / "one-call.json", provenance.canonical(item)
+    )
+    monkeypatch.setattr(
+        observer, "journal", lambda case: {"pid": 12345, "incarnation": "123"}
+    )
+    monkeypatch.setattr(observer, "incarnation", lambda record: "absent")
+    case = {
+        "tmp": tmp_path,
+        "request": {"transport_deadline_monotonic": time.monotonic() + 10},
+    }
+    with pytest.raises(
+        AssertionError, match="stub resource not reconciled: "
+    ) as caught:
+        observer.reconcile(case)
+    details = json.loads(str(caught.value).split(": ", 1)[1])
+    assert details["counts"] == {
+        "launches": int(argv[0] == "run"),
+        "removes": int(argv[:2] == ["rm", "-f"]),
+        "confirms": int(argv[:2] == ["container", "ls"]),
+    }
+    assert details["launch_ids"] == (["a" * 64] if argv[0] == "run" else [])
+    assert details["observations"] == [item]
+    assert details["scratch_root"] == str(tmp_path)

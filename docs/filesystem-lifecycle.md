@@ -61,6 +61,24 @@ Before writing a descriptor-owning branch, answer every question below.
    the final owner release. Never close a raw descriptor number while a
    worker can still use it.
 
+## Ownership-refusal diagnostics
+
+A foreign-owned directory still fails closed with `UnsafeDescriptorError`.
+Its exception note records the existing failing descriptor's `fstat` snapshot:
+uid/gid, effective uid/gid, observer PID, numeric fd, mode, device/inode,
+link count, size and atime/mtime/ctime in nanoseconds. The original error
+message/stage and operation/interruption precedence are unchanged. Diagnostics
+perform no pathname re-open, second stat, account-name lookup or logging I/O;
+they cannot accidentally describe a replacement path after the owner releases
+the fd. Unknown timestamps in synthetic stat results remain explicit as `None`.
+The exception note is included in retained tracebacks without a new log sink.
+
+Read-only process-incarnation observers may add domain context separately
+(target PID, expected start-time ticks and monotonic observation timestamp).
+The filesystem foundation does not infer process absence or relax ownership
+policy based on that context. Refusal is an unsuccessful observation, not proof
+of a surviving or absent process. Diagnostic notes do not retry cleanup.
+
 ## Direct-close categories
 
 A textual `close` call in production is permitted only in one of three

@@ -69,10 +69,16 @@ in either mode. Run from the repository root against one unchanged candidate:
 | 10 | Phase 9 MCP transport and server (both registered modules) | 2 |
 | 11 | Phase 10 integrated acceptance and portability | 2 |
 | 12 | Phase 11 Docker-free host-runner contracts (`tests/test_host_acceptance_contracts.py`) | 2 |
+| 13 | Standalone Linux proc-observer regression (`tests/test_proc_observer.py`) | 2 |
 
 Validation runs every registered specialised command required by the delivered
-phase, including each earlier phase suite. Phase-11 registration brings the queue
-to twelve commands. Historical Phase-10 validation covers eleven commands
+phase, including each earlier phase suite. Phase-11 registration established
+twelve commands; the separately registered observer repair adds priority 13,
+bringing the current queue to thirteen commands without renumbering earlier
+entries. Current observer-repair verification requires its standalone command
+alongside the unchanged Phase-10 command; it does not supersede the historical
+Phase-10 registration or attribute observer coverage to earlier results.
+Historical Phase-10 validation covers eleven commands
 (through queue priority 11), without a dependency on the later Phase-11 suite.
 The historical Phase-9 validation set contains ten commands (through queue
 priority 10), without a dependency on the later Phase-10 suite.
@@ -594,9 +600,24 @@ See [Test-bootstrap stderr provenance](#test-bootstrap-stderr-provenance) for
 the reserved stderr namespace these tests use and the diagnostic collision
 guard they prove.
 
+## Standalone Linux proc-observer regression suite
+
+Register and run the observer repair separately, with the same Linux/POSIX and
+unprivileged-user prerequisites as Phase 10:
+
+```sh
+.venv/bin/python -m pytest tests/test_proc_observer.py -n 2 --dist worksteal --tb=short -q
+```
+
+This module covers synthetic proc ownership, PID reuse, narrow leaf-open
+disappearance and independent/repeated cleanup failure authority. It is required
+for current observer-repair verification alongside the original Phase-10 suite
+and the unscoped gate, with its own two-worker allocation at queue priority 13.
+It is not part of the historical Phase-10 registration or validation counts.
+
 ## Phase 10 integrated acceptance and portability suite
 
-Register and run the Docker-free acceptance module with this exact command:
+Register and run the Docker-free acceptance module with its original command:
 
 ```sh
 .venv/bin/python -m pytest tests/test_dispatch_acceptance.py -n 2 --dist worksteal --tb=short -q
@@ -853,6 +874,63 @@ records, oversized results, incomplete cleanup and reserved helper output.
 relocated/host support dependency or wheel-provenance proof. In tests themselves, use
 ordinary `assert` statements to retain pytest assertion introspection.
 
+### Diagnosing Linux incarnation-observer ownership failures
+
+A `/proc/<pid>` ownership refusal retains the filesystem exception's same-fd
+`fstat` snapshot (uid/gid, effective identity, mode, device/inode, link count,
+size and nanosecond timestamps), plus the observer's target PID, expected
+start-time ticks, observer PID and monotonic timestamp. These notes appear in
+complete captured pytest tracebacks. Every failed proc-stat read, including raw
+`OSError` and interruption, carries target PID/start ticks, observer identity,
+monotonic time, `operation=read-proc-stat`, errno and descriptor stage when
+available. Error identity and traceback remain intact. These notes add no
+read/retry/child owner and do not turn unknown observations into confirmed
+absence. The specialized test-only `read_proc_stat(pid)` uses no-follow
+capabilities with `require_owner=False` only for the numeric proc PID directory:
+procfs ownership can change after task exit, including to overflow UID/GID 65534
+inside a rootless user namespace. Ownership alone never establishes absence.
+Generic `read()` and the production directory ownership guard remain unchanged.
+Only ENOENT opening the exact PID directory, or ENOENT/ESRCH opening its `stat`
+leaf, establishes absence. Errors reading an acquired file, unrelated path/errno,
+permissions, and all close failures stay unknown; even a known absence cannot
+hide failure releasing the directory. Start-time comparison still rejects PID
+reuse and resource reconciliation remains independent. A real-kernel regression pins
+a proc-directory capability while the child is alive, releases its stdin,
+collects/reaps through its sole `OwnedProcess`, then opens `stat` relative to the
+pinned capability: this kernel returns `ESRCH`, now narrowly interpreted as
+absence at that leaf-open boundary. The same-fd fstat snapshots before and after
+collection preserve measured ownership and namespace maps without requiring a
+particular UID transition as a success condition. That reproduces a mechanism, not
+the historical failure's exact cause. Cleanup count mismatch diagnostics include
+launch/remove/confirmation counts, launch IDs, raw call records and scratch root.
+
+For a requested isolated lifetime reproduction, retain the registered parallel
+settings and select only the explicit node:
+
+```sh
+.venv/bin/python -m pytest 'tests/test_dispatch_acceptance.py::test_relocated_helper_loss_reconciliation[lifetime]' -n 2 --dist worksteal --tb=short -q
+```
+
+Compare this with repeated executions of the exact full eight-worker development
+command registered above, not merely the two-worker Phase-10 module. Each repeat
+is a separate invocation with full output, actual exit status and worker-local
+fixture resources. Give every invocation its own exclusively created, short
+`PYTEST_DEBUG_TEMPROOT` parent (for example `/tmp/fpd-<id>/r01`); do not reuse it
+for the next invocation. Keep that root outside later runs' rotation/deletion
+targets. The first outer session's `pytest-0` contains its worker-local artifacts;
+record and verify that exact path, rather than selecting newest scratch. Retain
+`service-journal.jsonl`, `lifecycle.json`, `launch-intent.json`,
+`helper-service-cleanup.json`, all `stub-records`, result/stream evidence and run
+manifests in place, along with the complete tree and input identity. Store the
+absolute scratch path in the durable run record. Do not archive only the outer
+pytest traceback: subsequent default pytest sessions retain just three roots
+and can otherwise rotate away the failing case evidence. Use short roots to
+avoid changing installed launcher behavior through oversized venv shebangs.
+Expected Phase-11 RED failures remain unsuccessful runs;
+classify any additional lifecycle failure separately, without filtering it or
+retrying merely to report a passing result. Repeated runs do not waive the final
+unscoped green gate or build/help/exact-wheel installation requirements.
+
 ## Verification guard suites
 
 The full-suite command includes:
@@ -933,6 +1011,110 @@ sensitivity controls, not proof of in-container copy, execution or removal.
 The future host suite must explicitly copy this assertion module in addition to
 the normal transport/bootstrap closure if it reuses it; it is not a dependency
 of that existing closure.
+
+Task 11.2 extends this same registered suite with copied-fixture controls in
+`tests/host_expectation_support.py`. These disposable profiles copy the assertion
+module, its resource-owning JSON support and the skip-policy plugin; no real
+Docker or wheel installation is claimed by these controls. Both profiles use the
+same assertions. Only the negative profile contains the dedicated negative
+module and fixed `host_tests/expectation_input.json`. Copied conftest validates
+that input before the observation fixture runs; normal profiles reject it.
+Schema 1 has exactly `schema_version`, `case_id` and `expected_override`:
+`staged_bytes` uses a UTF-8 string, `argv` a nonempty NUL-free string array,
+`command_status` an integer (not boolean), and `cleanup` a boolean
+confirmed-absence expectation. Values change expectations only, never commands
+or observations. Separate subprocesses retain actual nonzero statuses and full
+streams for each targeted mismatch. Negative fixtures print the exact line
+`FIXTURE_BASELINE_VERIFIED` only after shared `verify_run` succeeds, before the
+intentional expectation check. Pytest capture remains enabled so xdist retains
+this marker in failing-test output. A targeted detection requires exactly one
+baseline marker and raw status 1, plus exactly one controller-emitted
+`FIXTURE_OUTCOMES=` schema-1 JSON record: one collected negative item, passed
+setup, the intended assertion failure and passed teardown, with no collection
+or internal errors, interruption, skip/xfail/xpass or incomplete cleanup. The
+case diagnostic must belong to the failed call's assertion report, not just
+appear elsewhere in output. Missing, duplicate or malformed outcome records
+fail closed; diagnostic/summary text alone is insufficient. Copied regressions
+combine each intended mismatch with teardown cleanup failure, another assertion
+failure or another item's setup error; none may count as successful detection. Same-field missing/invalid staged bytes,
+argv, command status and cleanup observations must be classified as
+`invalid-observation/setup`, even if baseline verification emits the target
+case's diagnostic. `FIXTURE_OBSERVATIONS_ACQUIRED` may already be present, but
+the baseline marker must not be. Traceback source snippets and duplicate marker
+lines do not establish baseline confirmation. Setup/JSON errors and unrelated
+baseline failures are not detections. Shared `verify_run` must require both
+`staged_bytes` and `expected_staged_bytes` and validate them unconditionally.
+Regression controls delete both fields or set both to `None`, in normal and
+negative copied profiles; these must fail baseline validation before any
+baseline-success marker, never count as a targeted mismatch, and preserve raw
+failure status. There is no optional staged-evidence bypass. Staged-byte
+observations here are captured Git blob
+bytes, not proof of Docker transfer. Generated inputs and source-support hashes
+are recorded separately in the copy inventories. Single-file orchestrator RED
+contracts belong to this suite too; its interface is planned, not delivered:
+`/home/aavasiljev/work/home/footman.git/scripts/verify_host_acceptance.py footman-sandbox:latest`.
+
+`tests/host_orchestration_support.py` adds behavioral RED contracts for that
+single-file interface to the same registered command. Missing-script assertions
+precede preparation, so an absent implementation cannot masquerade as a passing
+negative control or fixture error. Core executions select only a complete
+prepared root by copied script location, with recorded synthetic HEAD, full
+inventory, source/build-input identities and candidate-dist preservation. A
+loaded-module probe patches only `_RESULTS_BASE` and `_execute_prepared_leg`;
+it adds no production option/environment channel, never loads the future real
+runner and never runs runner CLI main. All results-base operations in these
+core contracts use exclusively fixture-owned external bases, not the production
+results base. The missing-interpreter check separately executes the exact
+shebang through `/usr/bin/env` from unrelated cwd and must fail with status 127
+before script execution. The script-authored missing-uv prerequisite instead
+requires a preserved nonzero status, a uv diagnostic and no image inspection,
+build or prepared-leg execution; it does not prescribe a numeric exit code.
+Actual default-base/direct-executable success contracts
+are separate work; these loaded-module tests do not substitute for them.
+
+The core boundary receives one typed dataclass with `wheel`, `source_identity`
+(the controlled manifest path), `image`, `evidence`, `workspace`, `profile`,
+`suite_paths` and nullable `case_id`. The test double returns a structured value
+with `pytest_status`, full separate `stdout`/`stderr` bytes, `counts` (collected,
+passed, failed, skipped, xfailed, xpassed), `failure_kind`, `cleanup_complete`
+and `evidence_complete`. These are private test-pinned Python interchange fields,
+not a public runner CLI/API or a runner-process status. Reports retain raw
+pytest statuses, a per-negative `detected` observation and the first unexpected
+status separately. Orchestrator RED pins require `baseline_verified` to record
+confirmation from the retained baseline marker, and `detected` to require that
+confirmation plus the target diagnostic/count/status checks. Neither is inferred
+from a matching diagnostic or the double's assertion failure kind alone.
+A matching diagnostic without baseline confirmation must yield `detected=false`
+and `failure_kind="invalid-observation/setup"`. This remains an unimplemented
+orchestrator contract, not passing execution. Zero requires every targeted detection and the normal suite,
+evidence and reconciliation. The double's outputs/counts are explicitly
+synthetic, not observations of host tests or installation. The planned core
+report uses `report.json`, schema 1, `state`, `success`, `first_unexpected_status`,
+root/bootstrap/revision/both-identity attribution, `commands` with complete
+stream paths and `legs` with raw `pytest_status` and detection observations.
+
+`tests/host_orchestration_tool.py` is a recorded, inert Docker-inspection/build
+boundary double in a separate child, never normal host support or a production
+helper. It delegates reads/writes to existing sole owners, records exact argv,
+cwd and support origin, and returns binary diagnostics/statuses. Its build
+output is inert wheel-labelled bytes with a matching synthetic manifest: no uv
+build, install or usable-wheel claim is made. No image build/pull or service
+launch is possible through the scripted Docker double's exact inspect grammar.
+Independent readiness tests execute these tools and the stdlib probe against an
+inert marker without the absent orchestrator, distinguishing working fixture
+setup from RED due to missing implementation. The registered core RED contracts
+in this same suite pin tag/ID parsing, build/binding rejection, all four negative
+legs plus the separate normal profile, unrelated/prerequisite/policy/zero-collection
+failures, first-status precedence, independent leg attempts, incomplete
+cleanup/evidence, interruption, wrong-root/missing foundation, runner-root refusal
+before execution, import/env poisoning and fresh repeated evidence without
+prior-artifact/report reuse. The orchestrator-dependent contracts currently fail
+at the missing single-file interface assertion; their passing implementation
+belongs to the implementation/integration tasks. These existing pins establish
+neither passing orchestration execution nor real-host success.
+Copied-support path insertion in the separate test-tool child is an attributed
+stub-loader exception only; the orchestrator probe adds no second sys.path root,
+and no test-tool bootstrap authority may reach an installed service.
 
 `tests/host_runner_probe.py` is copied only by development runner-contract fixtures,
 not normal real-host support. Its real SDK traffic uses copied transport and an

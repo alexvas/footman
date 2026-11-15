@@ -68,10 +68,12 @@ in either mode. Run from the repository root against one unchanged candidate:
 | 9 | Standalone scaffold regression registered under Phase 2 | 1 |
 | 10 | Phase 9 MCP transport and server (both registered modules) | 2 |
 | 11 | Phase 10 integrated acceptance and portability | 2 |
+| 12 | Phase 11 Docker-free host-runner contracts (`tests/test_host_acceptance_contracts.py`) | 2 |
 
 Validation runs every registered specialised command required by the delivered
-phase, including each earlier phase suite. Phase-10 validation runs every
-registered specialised command in the table above — currently eleven.
+phase, including each earlier phase suite. Phase-11 registration brings the queue
+to twelve commands. Historical Phase-10 validation covers eleven commands
+(through queue priority 11), without a dependency on the later Phase-11 suite.
 The historical Phase-9 validation set contains ten commands (through queue
 priority 10), without a dependency on the later Phase-10 suite.
 Thus results, snapshot and launcher can initially run alongside the
@@ -864,6 +866,156 @@ The full-suite command includes:
   duplicate-heading suffixes; fenced code is ignored. Explicit HTML anchors and
   non-Markdown fragment targets are unsupported and must not be used in these
   guides. Remote URLs are not checked for availability.
+
+## Phase 11 host-runner RED contracts
+
+Register the Docker-free runner/build/inventory contracts before Phase-11 RED:
+
+```sh
+.venv/bin/python -m pytest tests/test_host_acceptance_contracts.py -n 2 --dist worksteal --tb=short -q
+```
+
+Prerequisites are the development environment above, Git, PATH-resolved
+`python3.14` and `uv`; no real Docker executable, socket or daemon is used.
+The tests belong to the unscoped development collection. They cover bootstrap
+interfaces/tools/foundation isolation, exact wrapper-selected roots and relocation,
+source versus README-inclusive build identity, public build attribution/collisions,
+post-check failure precedence, isolated runner policy/provisioning, archive and
+full-package provenance/evidence controls, static inventory/typing, and collection
+isolation. Wrapper-dependent bodies stop at an explicit missing-interface
+assertion until GREEN supplies the interfaces: their build/repeat/parity/runner
+outcomes must not be reported as observed behavior before that implementation.
+Missing public interfaces are implementation RED, never a passing expected build
+rejection. Broken profiles, tools, copied dependencies or synthetic HEADs are
+setup errors, not attribution-case rejections; direct preparation/instrumentation
+self-tests exercise those distinctions independently of the missing wrappers.
+
+Disposable prepared roots have explicit inventories and a resolvable synthetic
+Git HEAD assembled without staging. The six-root source identity is independent
+of the three-path build identity; README-only changes affect only the latter.
+Scoped code/config/untracked/kind/executable/link changes, excluded planning/docs/
+dist/cache changes, and fixture-only staging changes have separate contracts.
+Only recorded disposable outputs may be removed by fixture-controlled remedies;
+the helper must refuse both predicted sdist/wheel collisions without deletion.
+Real-uv repeat-build tests use complete disposable roots, never candidate dist.
+Candidate-checkout dist is observed and must remain unchanged around these legs.
+Scripted tools exercise attribution only; their artifacts/manifests never feed an
+installation. Unsafe-archive controls additionally install a blocking tool spy
+so even an erroneous runner cannot install those scripted artifacts.
+
+The separately discovered real-Docker suite is named `host_tests/`. Its public
+interfaces, registered now and not yet implemented, are:
+
+```sh
+scripts/build-acceptance-wheel --manifest <build-manifest>
+scripts/run-host-acceptance --wheel <exact-wheel> --source-identity <build-manifest> --image <configured-image-id> --evidence <directory>
+```
+
+The build interface wraps exactly bare `uv build` in its own physically resolved
+wrapper repository root, not the caller cwd. The runner must independently
+compare its wrapper-root source identity, README-inclusive build-input identity
+and exact wheel digest against the controlled manifest. Both future wrappers
+are `#!/bin/sh`, use PATH `python3.14`/`uv` without requiring checkout `.venv`,
+and replace PYTHONPATH with exactly their resolved root's `src/` for bootstrap
+only. Installed-wheel children must not inherit that injection. Missing bootstrap
+tools must diagnose and exit 127. These are planned, explicitly tested exceptions
+to the check entry points' `.venv/bin` rule, not changes to existing check tools.
+The two shell paths will be recorded non-Python inventory exclusions when
+implemented; their Python implementations must be inventoried automatically.
+
+`tests/host_acceptance_assertions.py` supplies resource-free checks over supplied
+MCP/manifest/stream/cleanup observations. The Docker-free controls obtain actual
+MCP responses and retained files with a scripted Docker CLI, then deliberately
+mismatch tree/argv/status/cleanup and related observations without changing
+production code or the developer repository. Actual optimized subprocesses check
+that invalid evidence remains rejected under `python -O`. These are assertion
+sensitivity controls, not proof of in-container copy, execution or removal.
+The future host suite must explicitly copy this assertion module in addition to
+the normal transport/bootstrap closure if it reuses it; it is not a dependency
+of that existing closure.
+
+`tests/host_runner_probe.py` is copied only by development runner-contract fixtures,
+not normal real-host support. Its real SDK traffic uses copied transport and an
+installed-wheel foundation, with the direct-wheel canonical argv (no --lifecycle),
+clean service environment and archive-derived expectations. It deliberately
+exercises stale/missing/extra/symlink/wrong-root sources, entry-source controls,
+malformed/partial/duplicate/overlong/incomplete attestation and evidence read/write/
+close/interruption faults. Synthetic parser terminal changes are labelled as such;
+actual transport terminals and child status/cleanup remain separate observations.
+Failure before versus after complete attestation is distinct from retained
+provenance. Source/README/support mutations also target completion rechecks.
+
+The probe is independently executed using the retained Phase-9 real-wheel fixture
+before its use behind the future runner. Private mutable installation clones are
+attributed as clones, not fresh installs. A separate isolated pytest fixture adds
+locked pytest/xdist dependencies only to its private clone and executes positive,
+skip/xfail/xpass/failure/empty controls with explicit config and host suite paths.
+Nested policy violations remain deliberately unsuccessful inner commands, not
+passing host acceptance. This validates fixture readiness, not the absent runner.
+
+`tests/host_install_proxy.py` is a development tool spy, never an installed-wheel
+client or production dependency. It delegates native uv through the existing
+process owner without cleaning the received environment, records actual statuses/
+full streams, and can alter a private installation before expectations are made
+(including self-consistent stale RECORD data, stale __main__ and a swapped copy).
+Its native failure/interruption/independent-delivery controls preserve authority.
+The stub image lookup/retag controls are explicit development simulations; neither
+they nor successful SDK traffic proves real Docker resolution/copy/removal.
+
+The runner, not an operator's ambient pytest command, will invoke the explicit
+copied `host_tests/` path with explicit isolated configuration, exactly one worker
+setting and `--dist worksteal`. It must reject zero collection, skips, xfails,
+xpasses, missing prerequisites and unresolved cleanup. Host execution requires
+an operator-prepared local image and a Docker-capable host; no automatic image
+build/pull or development-container socket access is permitted. Docker-free
+contracts do not prove real Docker semantics or complete task 11.2's real-host
+negative control. All RED tasks must complete before GREEN task 11.3; production
+static roots/ty scope remain unchanged during this RED work.
+
+### Recorded wrapper contract formats
+
+The RED tests pin concrete evidence layouts for implementation, in addition to
+the CLI interfaces above. These are test/build tooling contracts, not new Footman
+runtime result fields or production MCP capabilities:
+
+- A successful schema-1 build manifest records `revision`, `repository_root`,
+  `wrapper_path`, `caller_cwd`, `source_identity`, `source_inventory`,
+  `build_input_identity`, `build_input_inventory`, and exact `wheel_path`/
+  `wheel_sha256` plus `sdist_path`/`sdist_sha256`. Source identity roots are
+  `src/`, `tests/`, `host_tests/`, `scripts/`, `pyproject.toml`, `uv.lock`; the
+  independent build identity has exactly `src/`, `pyproject.toml`, `README.md`.
+  Both identity objects use schema_version=1, ordered roots and lowercase SHA-256
+  over sorted relative-path/kind/executable/source-digest/link-target records.
+- Each build invocation retains `<manifest-stem>-operation.json` beside its
+  requested manifest, including failures/refusals. It records `argv`, `cwd`,
+  `attempted`, nullable observed `status`, raw `stdout_path`/`stderr_path` beneath
+  that recorded evidence directory when attempted, and separate `post_check_error`
+  when applicable. No attempted build means no fabricated status/empty streams;
+  a nonzero build's original status and binary output survive a later input error.
+- The runner retains `report.json` under --evidence, recording success/cleanup,
+  root/caller/wrapper attribution, both identities and wheel digest, external
+  venv/workspace/expected-origin/provenance paths, and `commands` with literal argv,
+  cwd, actual status and environment key names (not unrelated environment values).
+  Installed help/import, dependency installation and host pytest cannot inherit
+  bootstrap PYTHONPATH. Generated expectations/provenance stay outside identity
+  roots; module hashes come from the bound archive, never installed RECORD.
+- Isolated host pytest receives `FOOTMAN_HOST_CONTEXT`, an external generated
+  JSON path containing `venv_python`, `server_script`, `support_root`,
+  `expected_origin_path`, `provenance_evidence_path`, `neutral_cwd` and
+  `configured_image_id`. This is runner-to-fixture input, never passed to the
+  service. The immediate parent alone writes/reads back final verified evidence.
+  `FOOTMAN_HOST_CONTRACT_*` and `FOOTMAN_HOST_TOOL_*` are development probe controls,
+  not public service options; probes remove all host-context/control keys before
+  launching the service. Normal real-host support excludes these probe/proxy files
+  and the relocated Docker-stub bundle used only by isolated development controls.
+
+Phase-11 development validation adds this registered two-worker command after
+the eleven earlier specialised commands, using the same shared eight-worker
+specialised budget and CPU-capacity condition. Pending RED failures are not a
+passing gate and do not invalidate the historical Phase-10 result as history.
+Record exact commands, full output, statuses, reached assertions and limitations
+in the configured external verification directory. Do not mark a partial task
+complete or interpret absence of Docker as valid behavioral RED evidence.
 
 ## Future implementation
 

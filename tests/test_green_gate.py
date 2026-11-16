@@ -361,6 +361,7 @@ def test_type_check_target_matches_the_declared_policy():
     text = (REPO_ROOT / "scripts/check-types").read_text(encoding="utf-8")
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     include = project["tool"]["ty"]["src"]["include"]
+    assert include == ["src", "host_tests"]
     assert text.rstrip().endswith("check --output-format concise " + " ".join(include))
 
 

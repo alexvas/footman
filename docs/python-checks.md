@@ -31,6 +31,11 @@ the existing scripts inventory. Inside the tooling, Ruff is
 resolved from the interpreter running it (`.venv/bin/ruff`) first and only then
 from `PATH`. Python 3.14+ and `uv` are prerequisites.
 
+The planned `scripts/build-acceptance-wheel` and `scripts/run-host-acceptance`
+bootstrap wrappers are not delivered by the host-package inventory work. Their
+PATH-tool exceptions and shell exclusions are documented with their delivery;
+they do not change the existing check entry points.
+
 ## Commands
 
 | Purpose | Command |
@@ -46,7 +51,7 @@ from `PATH`. Python 3.14+ and `uv` are prerequisites.
   nonzero status; it is never rewritten as success by a pipe, wrapper or
   summary.
 - `--root <directory>` runs the same checks against another repository root
-  that has `src/`, `tests/` and `scripts/`. The tooling contract tests use it
+  that has `src/`, `tests/`, `host_tests/` and `scripts/`. The tooling contract tests use it
   for fixture trees.
 - `ruff check` and `ruff format --check` run with the repository
   configuration, `--no-cache`, and no fixing flags. Check mode never rewrites
@@ -54,7 +59,7 @@ from `PATH`. Python 3.14+ and `uv` are prerequisites.
 
 ## Source selection rules
 
-- **Roots:** `src/`, `tests/`, `scripts/`. A missing root is an error, never
+- **Roots:** `src/`, `tests/`, `host_tests/`, `scripts/`. A missing root is an error, never
   an empty inventory.
 - **Included:** every `.py` and `.pyi` file under those roots, plus every
   extensionless file whose first line is a recognized Python shebang. A
@@ -198,9 +203,9 @@ Docker is replaced at the CLI boundary.
 Phase 11 adds separately discovered `host_tests/` and mandatory real-Docker host
 acceptance against an exact installed wheel and an operator-prepared image;
 development success cannot replace that gate. Missing host prerequisites fail
-host acceptance rather than skipping. This boundary is currently documentation
-only: retain the three source roots and `src/`-only ty scope until phase 11
-creates the host package and updates the inventories together.
+host acceptance rather than skipping. The host package is included in the four-root static inventory and the type
+gate, but is not collected by development pytest. Its conftest explicitly
+registers the skip policy and process markers, with real OS timing by default.
 
 ### Capturing complete gate output
 
@@ -223,11 +228,13 @@ records; neither summaries nor logs are committed or required permanently.
 
 ## Type checks
 
-`scripts/check-types` runs `ty check --output-format concise src` with the
+`scripts/check-types` runs `ty check --output-format concise src host_tests` with the
 Python 3.14 semantics configured in `pyproject.toml`
-(`[tool.ty.environment].python-version` and `[tool.ty.src].include = ["src"]`).
-The checked tree is the maintained package only: `tests/` typing is not part of
-the gate yet, which is a recorded scope boundary, not a filter or a skip.
+(`[tool.ty.environment].python-version` and
+`[tool.ty.src].include = ["src", "host_tests"]`).
+The checked trees are the maintained package and host acceptance support;
+`tests/` remains untyped, a scope boundary distinct from the four-root static
+inventory, not a filter or a skip.
 `tests/test_green_gate.py` rejects an entry point that narrows the typed tree
 below the declared include list.
 

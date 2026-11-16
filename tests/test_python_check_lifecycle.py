@@ -34,7 +34,7 @@ from footman.process import (
     ProcessResult,
     ProcessStream,
 )
-from tests.python_check_fixtures import load_check_module
+from tests.python_check_fixtures import SOURCE_ROOTS, load_check_module
 
 
 @pytest.fixture(scope="module")
@@ -253,7 +253,7 @@ def nested_capability(tmp_path):
 @pytest.fixture()
 def scannable(tmp_path):
     root = tmp_path / "repo"
-    for name in ("src", "tests", "scripts"):
+    for name in SOURCE_ROOTS:
         (root / name).mkdir(parents=True)
         (root / name / f"{name}_entry.py").write_text("value = 1\n", encoding="utf-8")
     (root / "scripts" / "pkg" / "inner").mkdir(parents=True)

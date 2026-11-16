@@ -2,7 +2,7 @@
 
 One inventory feeds linting, formatting and syntax compilation:
 
-* every ``.py``/``.pyi`` file under ``src/``, ``tests/`` and ``scripts/``;
+* every ``.py``/``.pyi`` file under ``src/``, ``tests/``, ``host_tests/`` and ``scripts/``;
 * every extensionless file under those roots whose first line is a recognized
   Python shebang (a direct interpreter path or ``/usr/bin/env`` naming
   ``python``, ``python3`` or a ``python3.<minor>`` interpreter);
@@ -69,7 +69,7 @@ from footman.process import (  # noqa: E402 -- CLI path is set first.
     ProcessStream,
 )
 
-SOURCE_ROOTS = ("src", "tests", "scripts")
+SOURCE_ROOTS = ("src", "tests", "host_tests", "scripts")
 SOURCE_SUFFIXES = (".py", ".pyi")
 EXCLUDED_DIRECTORY_NAMES = frozenset(
     {
@@ -648,7 +648,7 @@ def _parser() -> argparse.ArgumentParser:
             "--root",
             type=Path,
             default=_REPO_ROOT,
-            help="repository root holding src/, tests/ and scripts/",
+            help="repository root holding src/, tests/, host_tests/ and scripts/",
         )
     return parser
 

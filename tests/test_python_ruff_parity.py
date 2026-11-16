@@ -216,7 +216,7 @@ def test_declared_check_policy_matches_the_agreement():
     for forbidden in ("extend-select", "ignore"):
         assert forbidden not in ruff["lint"]
     assert project["tool"]["ty"]["environment"]["python-version"] == "3.14"
-    assert project["tool"]["ty"]["src"]["include"] == ["src"]
+    assert project["tool"]["ty"]["src"]["include"] == ["src", "host_tests"]
 
 
 def declared_development_versions() -> dict[str, str]:

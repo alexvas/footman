@@ -2,7 +2,7 @@
 
 The tooling lives in ``scripts/python_checks.py`` and is deliberately not an
 importable package, so each contract module loads it by path.  Fixture trees
-contain their own ``src/``, ``tests/`` and ``scripts/`` roots because the
+contain their own ``src/``, ``tests/``, ``host_tests/`` and ``scripts/`` roots because the
 selector rejects a missing scoped root instead of silently shrinking coverage.
 """
 
@@ -16,7 +16,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO_ROOT / "scripts" / "python_checks.py"
-SOURCE_ROOTS = ("src", "tests", "scripts")
+SOURCE_ROOTS = ("src", "tests", "host_tests", "scripts")
 
 
 def load_check_module() -> Any:
@@ -35,7 +35,7 @@ def load_check_module() -> Any:
 
 
 def prepare_roots(root: Path) -> None:
-    """Create the three scoped source roots in a fixture repository."""
+    """Create the four scoped source roots in a fixture repository."""
     for name in SOURCE_ROOTS:
         (root / name).mkdir(parents=True, exist_ok=True)
 

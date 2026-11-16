@@ -37,8 +37,7 @@ def _clean_repository_copy(root):
         repository / "src",
         ignore=_CLEAN_COPY_IGNORE,
     )
-    (repository / "tests").mkdir()
-    (repository / "scripts").mkdir()
+    prepare_roots(repository)
     for name in ("python_checks.py", "check-python-compile"):
         shutil.copy2(
             REPO_ROOT / "scripts" / name,

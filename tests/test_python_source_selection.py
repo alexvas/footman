@@ -15,6 +15,7 @@ import os
 import pytest
 
 from tests.python_check_fixtures import (
+    SOURCE_ROOTS,
     load_check_module,
     prepare_roots,
     write_source,
@@ -223,9 +224,7 @@ def test_vendor_and_generated_directories_are_excluded_with_recorded_reasons(
 ):
     prepare_roots(tmp_path)
     excluded_directories = tuple(
-        f"{root}/{name}"
-        for root in ("src", "tests", "scripts")
-        for name in ("vendor", "generated")
+        f"{root}/{name}" for root in SOURCE_ROOTS for name in ("vendor", "generated")
     )
     excluded_files: list[str] = []
     for directory in excluded_directories:

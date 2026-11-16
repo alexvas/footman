@@ -437,7 +437,8 @@ def test_ty_scope_and_entrypoint_include_host_but_not_development_tests():
     assert config["tool"]["ty"]["src"]["include"] == ["src", "host_tests"]
     wrapper = p.read(h.ROOT / "scripts/check-types").decode()
     assert re.search(
-        r"ty\s+check\s+--output-format\s+concise\s+src\s+host_tests", wrapper
+        r'exec\s+"\$ty"\s+check\s+--output-format\s+concise\s+src\s+host_tests\s*$',
+        wrapper,
     )
 
 

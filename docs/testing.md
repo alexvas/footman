@@ -861,8 +861,12 @@ coverage claims for Footman's OpenSpec phases.
 ## Python source and tooling checks
 
 `scripts/python_checks.py` builds one deterministic Python inventory over `src/`,
-`tests/` and `scripts/` and feeds it to Ruff lint, Ruff format and syntax
-compilation; `scripts/check-types` type checks the package. Installation,
+`tests/`, `host_tests/` and `scripts/` and feeds it to Ruff lint, Ruff format and
+syntax compilation; `scripts/check-types` type checks `src/` and `host_tests/`.
+The four-root fixture inventory is shared by all check-tooling fixture builders;
+a missing root remains an error. Host conftest explicitly registers the skip
+policy and process markers without inheriting development clock fixtures;
+real OS timing is the default. Installation,
 source-selection rules, the parallelism contract and the gate entry points are in
 [python-checks.md](python-checks.md). `tests/test_python_source_selection.py`,
 `tests/test_python_syntax_compilation.py`, `tests/test_python_ruff_parity.py`,
@@ -1372,8 +1376,10 @@ Phase 11 separately introduces `host_tests/` and the mandatory real-Docker host
 acceptance gate against an exact installed wheel and an operator-prepared image.
 That suite is not part of development discovery; missing host prerequisites fail
 host acceptance, never become skips. Passing development checks does not establish
-final host acceptance. Until phase 11 creates that package, static roots remain
-`src/`, `tests/`, `scripts/`, and ty checks `src/` only.
+final host acceptance. The host package and support are now present in the
+four-root static inventory (`src/`, `tests/`, `host_tests/`, `scripts/`), and ty
+checks `src/` plus `host_tests/`; `tests/` remains untyped. Host test scenarios
+and installed-wheel runner execution are separate later deliverables.
 Never exercise index mutation or broad container cleanup against this repository;
 use disposable repositories and recorded fixture-owned container IDs.
 

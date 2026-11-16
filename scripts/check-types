@@ -10,4 +10,4 @@ if [ ! -x "$ty" ]; then
 fi
 
 cd "$repo_root"
-exec "$ty" check --output-format concise src
+exec "$ty" check --output-format concise src host_tests

@@ -21,7 +21,13 @@ That installs `pytest==8.4.2`, `pytest-xdist==3.8.0`, `ruff==0.17.1` and
 `ty==0.0.73`. `pyproject.toml` also pins Ruff's `required-version = "==0.17.1"`,
 so a different Ruff refuses to run instead of silently checking with another
 policy. Every entry point requires its interpreter or tool under `.venv/bin` and
-exits `127` with a diagnostic when it is missing. Inside the tooling, Ruff is
+exits `127` with a diagnostic when it is missing. The single-file operator
+entry point `scripts/verify_host_acceptance.py` is an exception: its exact
+`#!/usr/bin/env python3.14` shebang selects Python from PATH, independently of
+checkout `.venv`. Missing Python is diagnosed by `/usr/bin/env` with status 127
+before script execution; the script explicitly checks for PATH `uv`. It has no
+shell wrapper or additional shell exclusion. Its Python source is included in
+the existing scripts inventory. Inside the tooling, Ruff is
 resolved from the interpreter running it (`.venv/bin/ruff`) first and only then
 from `PATH`. Python 3.14+ and `uv` are prerequisites.
 

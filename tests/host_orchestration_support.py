@@ -481,6 +481,7 @@ def main(argv):
 PROBE = """import dataclasses
 import importlib.util
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -493,6 +494,13 @@ exec_requests = []
 reservations = []
 base_creations = []
 support_path = list(sys.path)
+if PRELOAD:
+    # Establish a genuinely different foundation before recorder imports can
+    # cache the prepared copy. Importing process after the recorder was a
+    # no-op and did not exercise the wrong-root preflight at all.
+    sys.path.insert(0, str(Path(CANDIDATE_ROOT) / "src"))
+    import footman.process
+    sys.path[:] = support_path
 sys.path[:0] = [str(root), str(root / "src")]
 from tests.host_orchestration_tool import install_reservation_recorder
 install_reservation_recorder(BASE, RECEIPTS)
@@ -548,6 +556,8 @@ if PATCH_BASE:
 legs = []
 
 def execute(leg):
+    if os.getcwd() != before_cwd or dict(os.environ) != before_env or logging_state() != before_logging:
+        raise RuntimeError("prepared legs leaked process-global state")
     if not dataclasses.is_dataclass(leg):
         raise RuntimeError("prepared leg must be a typed dataclass value")
     values = dataclasses.asdict(leg)
@@ -622,6 +632,10 @@ if SUBSTITUTE:
 exec(PROBE_SETUP)
 before_cwd = os.getcwd()
 before_env = dict(os.environ)
+def logging_state():
+    loggers = [logging.root, *(value for value in logging.root.manager.loggerDict.values() if isinstance(value, logging.Logger))]
+    return {logger.name: (logger.level, logger.disabled, logger.propagate, tuple(logger.handlers), tuple(logger.filters)) for logger in loggers}, logging.root.manager.disable
+before_logging = logging_state()
 status = None
 error = None
 caught = None
@@ -634,6 +648,7 @@ finally:
     observation = {"legs": legs, "call_status": status, "error": error,
                    "cwd_restored": os.getcwd() == before_cwd,
                    "environment_restored": dict(os.environ) == before_env,
+                   "logging_restored": logging_state() == before_logging,
                    "bootstrap_import_root": str(getattr(module, "bootstrap_import_root", "")),
                    "launch_requests": launch_requests, "exec_requests": exec_requests,
                    "exclusive_reservations": reservations,
@@ -667,6 +682,7 @@ def invoke(
 ):
     substitutions = {
         "ROOT": str(prepared["root"]),
+        "CANDIDATE_ROOT": str(h.ROOT),
         "TOOLS": str(prepared["tools"]),
         "BASE": str(prepared["base"]),
         "IMAGE": IMAGE,
@@ -760,6 +776,7 @@ def invoke(
         "orchestrator probe did not report a complete observation: " + repr(result),
     )
     observed = json.loads(records[0])
+    h.check(observed["logging_restored"], "orchestration leaked global logging state")
     p.write(
         diagnostic / "results-inventory.json",
         p.canonical(

@@ -1070,7 +1070,7 @@ failure status. There is no optional staged-evidence bypass. Staged-byte
 observations here are captured Git blob
 bytes, not proof of Docker transfer. Generated inputs and source-support hashes
 are recorded separately in the copy inventories. Single-file orchestrator RED
-contracts belong to this suite too; its interface is planned, not delivered:
+contracts belong to this suite too; the tag/root/results/report core is delivered at:
 `/home/aavasiljev/work/home/footman.git/scripts/verify_host_acceptance.py footman-sandbox:latest`.
 
 `tests/host_orchestration_support.py` adds behavioral RED contracts for that
@@ -1090,8 +1090,12 @@ requires a preserved nonzero status, a uv diagnostic and no image inspection,
 build or prepared-leg execution; it does not prescribe a numeric exit code.
 Separate RED contracts now pin unpatched default-base/direct-executable
 behavior; loaded-module seam tests do not substitute for those contracts.
-These bodies still stop at the missing-orchestrator assertion, before touching
-the real base, and are not passing default-path execution evidence.
+The loaded-module and shebang-direct legs now execute the delivered core through
+the production literal `_RESULTS_BASE`, each reserving a receipt-attributed
+exclusive run directory and asserting a final successful report with four detected
+negative legs. These are real default-path runs with synthetic build/execution
+boundaries only, not real-host acceptance: full integration remains pending
+11.10.1 and the real-host run remains operator-only task 11.15.
 
 `tests/host_results_support.py` supplies test-only no-follow results inventories
 (including caches and dangling links), explicit successful-reservation claims,
@@ -1116,7 +1120,8 @@ while a self-bootstrapped script imports from its prepared source and reserves
 an attributable run. Separate early-mkdir and per-owner fault controls cover
 missing authority, operation/close failure, interruption and repeated release.
 This remains observation-instrumented Docker-free testing, not real-host proof.
-Orchestrator source, constant and CLI remain unchanged. Both observers delegate
+The observers do not change orchestrator source, its results-base constant or
+its CLI. Both observers delegate
 to the real mkdir first; failed exclusive mkdir emits no receipt. A failed
 receipt write leaves unknown resources unowned, never inferred as owned from
 newness.
@@ -1320,6 +1325,30 @@ passing gate and do not invalidate the historical Phase-10 result as history.
 Record exact commands, full output, statuses, reached assertions and limitations
 in the configured external verification directory. Do not mark a partial task
 complete or interpret absence of Docker as valid behavioral RED evidence.
+
+### Single-file orchestration core contracts
+
+`scripts/verify_host_acceptance.py` now supplies the tag/root/results/report
+core. Its executable uses PATH `python3.14`, not checkout `.venv`; missing
+Python is `/usr/bin/env`'s diagnostic/status 127 before script execution. The
+script checks PATH `uv` explicitly. This is a single Python file with no shell
+wrapper, inventoried under `scripts/`.
+
+Run the additional core branch/loader matrix with:
+
+```sh
+.venv/bin/python -m pytest tests/test_host_orchestration_core.py -n 2 --dist worksteal --tb=short -q
+```
+
+Together with the registered Phase-11 contracts, these tests run only disposable
+complete-profile copies, synthetic build/execution boundaries and inert sibling
+loader fixtures. They retain actual helper output/status and structured Python
+call outcomes, not invented runner-process statuses. Synthetic aggregate zero
+proves decision logic only: full build/install/copied-suite integration remains
+pending task 11.10.1 and real-host execution remains operator-only task 11.15.
+The core checks do not authorize running the operator script on the candidate
+checkout or using Docker in development. Existing RED contracts for later
+implementation tasks remain required and unsuccessful, not passing GREEN.
 
 ## Future implementation
 

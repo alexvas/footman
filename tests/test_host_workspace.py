@@ -1,0 +1,527 @@
+"""Task-11.6 isolated workspace contracts, without Docker or future wrappers."""
+
+import ast
+import hashlib
+import importlib.util
+import os
+import shutil
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from tests import mcp_provenance as p
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def runner():
+    spec = importlib.util.spec_from_file_location(
+        "_workspace_contract", ROOT / "scripts/run_host_acceptance.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_runner_support_closure_matches_declared_transport_closure(runner):
+    assert set(runner._SUPPORT_FILES) == set(p.SUPPORT_FILES) | {
+        "tests/host_acceptance_assertions.py"
+    }
+    assert len(runner._SUPPORT_FILES) == len(set(runner._SUPPORT_FILES))
+
+
+def test_delivered_runner_passes_orchestrator_target_and_import_preflight(
+    tmp_path, runner
+):
+    root, _ = source(tmp_path, runner)
+    (root / "src").mkdir()
+    (root / "scripts").mkdir()
+    for name in ("verify_host_acceptance.py", "run_host_acceptance.py"):
+        shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
+    spec = importlib.util.spec_from_file_location(
+        "_workspace_orchestrator_contract", root / "scripts/verify_host_acceptance.py"
+    )
+    orchestrator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(orchestrator)
+    core = orchestrator._Core(
+        (
+            root,
+            runner.DirectoryDescriptor,
+            runner.OwnedDescriptor,
+            runner.PosixDescriptorOps(),
+            runner.OwnedProcess,
+            runner.ProcessStream,
+            runner.StreamOutcome,
+        )
+    )
+    path, digest = orchestrator._runner_target(core)
+    delivered = p.read(ROOT / "scripts/run_host_acceptance.py")
+    assert path == root / "scripts/run_host_acceptance.py"
+    assert p.read(path) == delivered
+    assert digest == hashlib.sha256(delivered).hexdigest()
+    orchestrator._import_safe(ast.parse(delivered).body)
+
+
+@pytest.mark.parametrize("elapsed", [0, 1])
+def test_exhausted_workspace_budget_refuses_command_without_acquisition(
+    tmp_path, runner, monkeypatch, elapsed
+):
+    _, workspace = source(tmp_path, runner)
+    deadline = workspace.deadline
+    monkeypatch.setattr(
+        runner, "time", SimpleNamespace(monotonic=lambda: deadline + elapsed)
+    )
+    launches = []
+
+    def launch(*args, **kwargs):
+        launches.append((args, kwargs))
+        raise AssertionError("exhausted workspace must not launch")
+
+    monkeypatch.setattr(runner, "OwnedProcess", SimpleNamespace(launch=launch))
+    for _ in range(2):
+        with pytest.raises(ValueError, match="original workspace deadline exhausted"):
+            workspace._command(["must-not-launch"])
+        assert not launches and not workspace.commands and not workspace.owners
+        assert workspace.deadline == deadline
+
+
+def source(tmp_path, runner, body="pass"):
+    root = tmp_path / "source"
+    (root / "host_tests").mkdir(parents=True)
+    (root / "tests").mkdir()
+    for relative in (
+        *runner._SUPPORT_FILES,
+        "host_tests/__init__.py",
+        "host_tests/conftest.py",
+        "host_tests/support.py",
+        "pyproject.toml",
+        "uv.lock",
+    ):
+        shutil.copy2(ROOT / relative, root / relative)
+    p.write(
+        root / "host_tests/test_normal.py",
+        ("import pytest\ndef test_probe():\n    " + body + "\n").encode(),
+    )
+    p.write(root / runner._NEGATIVE_SUITE, b"def test_negative():\n    pass\n")
+    external = tmp_path / "external"
+    external.mkdir()
+    return root, runner._Workspace(root, external)
+
+
+def test_normal_and_negative_copy_profiles_are_explicit(tmp_path, runner):
+    root, normal = source(tmp_path, runner)
+    normal.prepare()
+    assert normal.suite_paths == ("host_tests",)
+    assert not (normal.directory / runner._NEGATIVE_SUITE).exists()
+    assert not (normal.directory / "pyproject.toml").exists()
+    assert not (normal.directory / "uv.lock").exists()
+    assert not (normal.directory / "src").exists()
+    assert set(runner._SUPPORT_FILES) <= {r["path"] for r in normal.inventory}
+    assert "tests/mcp_protocol_child.py" not in {r["path"] for r in normal.inventory}
+    extra = tmp_path / "negative"
+    extra.mkdir()
+    negative = runner._Workspace(root, extra).prepare(
+        profile="negative",
+        expectation={
+            "schema_version": 1,
+            "case_id": "cleanup",
+            "expected_override": False,
+        },
+    )
+    assert negative.suite_paths == (runner._NEGATIVE_SUITE,)
+    assert (extra / runner._NEGATIVE_SUITE).is_file()
+    assert not (extra / "host_tests/test_normal.py").exists()
+    assert {record["path"] for record in negative.generated} == {
+        "host.ini",
+        "host_tests/expectation_input.json",
+    }
+    for record in negative.generated:
+        assert (
+            record["sha256"]
+            == hashlib.sha256(p.read(negative.directory / record["path"])).hexdigest()
+        )
+    assert "host_tests/expectation_input.json" not in {
+        r["path"] for r in negative.inventory
+    }
+    with pytest.raises(ValueError, match="once-only"):
+        normal.prepare()
+
+
+@pytest.mark.parametrize("side", ["source", "copy"])
+@pytest.mark.parametrize("change", ["missing", "mutated"])
+def test_assertion_support_is_rechecked(tmp_path, runner, side, change):
+    root, workspace = source(tmp_path, runner)
+    workspace.prepare()
+    target = (
+        root if side == "source" else workspace.directory
+    ) / "tests/host_acceptance_assertions.py"
+    target.unlink()
+    if change == "mutated":
+        p.write(target, b"raise RuntimeError('mutated assertion')\n")
+    with pytest.raises((ValueError, FileNotFoundError)):
+        workspace.verify_copy()
+
+
+@pytest.mark.parametrize("case", ["input", "protocol", "symlink", "nonempty"])
+def test_unsafe_preparation_fails_closed_and_cannot_retry(tmp_path, runner, case):
+    root, workspace = source(tmp_path, runner)
+    if case == "input":
+        p.write(root / "host_tests/expectation_input.json", b"{}")
+    elif case == "protocol":
+        p.write(root / "host_tests/bad.py", b"from tests import mcp_protocol_child\n")
+    elif case == "symlink":
+        (root / "host_tests/link.py").symlink_to("test_normal.py")
+    else:
+        p.write(workspace.directory / "sentinel", b"unrelated")
+    with pytest.raises(ValueError):
+        workspace.prepare()
+    assert not workspace.ready and not workspace.commands
+    with pytest.raises(ValueError, match="once-only"):
+        workspace.prepare()
+
+
+def test_clean_environment_rejects_inherited_injection(monkeypatch, runner):
+    for key in (
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUSERBASE",
+        "PYTEST_ADDOPTS",
+        "FOOTMAN_HOST_CONTEXT",
+    ):
+        monkeypatch.setenv(key, "poison")
+    env = runner._environment()
+    assert [key for key in env if key.startswith("PYTHON")] == ["PYTHONNOUSERSITE"]
+    assert not any(key.startswith(("PYTEST", "FOOTMAN_")) for key in env)
+
+
+@pytest.fixture(scope="module")
+def real_bound(_mcp_worker_wheel):
+    return _mcp_worker_wheel
+
+
+@pytest.mark.parametrize(
+    "case,status", [("pass", 0), ("skip", 1), ("xfail", 1), ("xpass", 1), ("empty", 5)]
+)
+def test_fresh_wheel_environment_policy_and_copied_imports(
+    tmp_path, runner, real_bound, case, status, monkeypatch
+):
+    root, workspace = source(tmp_path, runner)
+    probe = root / "host_tests/test_normal.py"
+    imports = "import pytest\nimport footman.process\nfrom tests import host_acceptance_assertions, mcp_transport, mcp_server_child, mcp_lifecycle, mcp_provenance\n"
+    body = {
+        "pass": "assert host_acceptance_assertions.__file__.startswith("
+        + repr(str(workspace.directory))
+        + ")\n    assert not footman.process.__file__.startswith("
+        + repr(str(ROOT))
+        + ")\n    assert mcp_transport.OwnedProcess is footman.process.OwnedProcess",
+        "skip": "pytest.skip('policy control')",
+        "xfail": "pytest.xfail('policy control')",
+        "xpass": "pass",
+    }
+    probe.unlink()
+    content = (
+        "# no items\n"
+        if case == "empty"
+        else imports
+        + ("@pytest.mark.xfail\n" if case == "xpass" else "")
+        + "def test_probe():\n    "
+        + body[case]
+        + "\n"
+    )
+    p.write(probe, content.encode())
+    workspace.prepare()
+    monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
+    workspace.provision(
+        real_bound.wheel, real_bound.wheel_sha256, interpreter=sys.executable
+    )
+    generated = {record["path"]: record["sha256"] for record in workspace.generated}
+    assert set(generated) == {"host.ini", "locked-constraints.txt"}
+    assert "locked-constraints.txt" not in {r["path"] for r in workspace.inventory}
+    for path, digest in generated.items():
+        assert digest == hashlib.sha256(p.read(workspace.directory / path)).hexdigest()
+    result = workspace.run_pytest()
+    assert result["status"] == status, result
+    assert all(c["cleanup_complete"] for c in workspace.commands)
+    assert all("PYTHONPATH" not in c["environment_keys"] for c in workspace.commands)
+    assert all(owner.cleanup_status.complete for owner in workspace.owners)
+    assert workspace.commands[1]["argv"][-3:] == [
+        str(real_bound.wheel),
+        "pytest==8.4.2",
+        "pytest-xdist==3.8.0",
+    ]
+    assert result["argv"].count("-n") == 1 and "worksteal" in result["argv"]
+    assert str(workspace.ini) in result["argv"]
+    assert str(workspace.directory / "host_tests") in result["argv"]
+    assert (
+        b"BLOCKED" in result["stdout"] if case in {"skip", "xfail", "xpass"} else True
+    )
+    assert b"1 passed" in result["stdout"] if case == "pass" else True
+    with pytest.raises(ValueError, match="once-only"):
+        workspace.provision(
+            real_bound.wheel, real_bound.wheel_sha256, interpreter=sys.executable
+        )
+
+
+@pytest.mark.parametrize("operation", ["read", "write"])
+@pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
+def test_file_owner_faults_release_once_and_preserve_authority(
+    tmp_path, runner, monkeypatch, operation, fault
+):
+    _, workspace = source(tmp_path, runner)
+    target = tmp_path / "payload"
+    if operation == "read":
+        p.write(target, b"payload")
+    original_owner = runner.OwnedDescriptor
+    original_io = getattr(os, operation)
+    owners = []
+    closes = []
+    primary = (
+        KeyboardInterrupt("operation interruption")
+        if fault == "interruption-close"
+        else OSError("operation failure")
+    )
+    close_error = OSError("sole close failure")
+
+    class FailingOps:
+        def close(self, fd):
+            closes.append(fd)
+            workspace.ops.close(fd)
+            raise close_error
+
+    def owner(ops, fd, *, label):
+        result = original_owner(FailingOps(), fd, label=label)
+        owners.append(result)
+        return result
+
+    def io(fd, *args):
+        if fault != "close":
+            raise primary
+        return original_io(fd, *args)
+
+    monkeypatch.setattr(runner, "OwnedDescriptor", owner)
+    monkeypatch.setattr(runner.os, operation, io)
+    expected = close_error if fault == "close" else primary
+    with pytest.raises(BaseException) as caught:
+        getattr(workspace, "_" + operation)(
+            target, b"data"
+        ) if operation == "write" else workspace._read(target)
+    assert caught.value is expected
+    assert len(owners) == len(closes) == 1
+    owners[0].close()
+    assert len(closes) == 1
+
+
+@pytest.mark.parametrize("status", [1, 127])
+def test_provisioning_failure_keeps_actual_status_and_stops(
+    tmp_path, runner, monkeypatch, status
+):
+    _, workspace = source(tmp_path, runner)
+    workspace.prepare()
+    artifact = tmp_path / "exact.whl"
+    p.write(artifact, b"inert")
+    called = []
+
+    def command(argv):
+        record = {
+            "argv": argv,
+            "status": status,
+            "stdout": b"actual out",
+            "stderr": b"actual err",
+        }
+        called.append(record)
+        workspace.commands.append(record)
+        return record
+
+    monkeypatch.setattr(workspace, "_command", command)
+    with pytest.raises(ValueError, match="provisioning failed"):
+        workspace.provision(
+            artifact, hashlib.sha256(b"inert").hexdigest(), interpreter=sys.executable
+        )
+    assert len(called) == 1 and called[0]["status"] == status
+    constraints = next(
+        record
+        for record in workspace.generated
+        if record["path"] == "locked-constraints.txt"
+    )
+    assert (
+        constraints["sha256"]
+        == hashlib.sha256(p.read(workspace.directory / constraints["path"])).hexdigest()
+    )
+    assert constraints["path"] not in {r["path"] for r in workspace.inventory}
+    assert not workspace.provisioned
+    with pytest.raises(ValueError, match="once-only"):
+        workspace.provision(
+            artifact, hashlib.sha256(b"inert").hexdigest(), interpreter=sys.executable
+        )
+
+
+def test_invalid_binding_never_installs(tmp_path, runner):
+    _, workspace = source(tmp_path, runner)
+    workspace.prepare()
+    artifact = tmp_path / "exact.whl"
+    p.write(artifact, b"inert")
+    with pytest.raises(ValueError, match="binding mismatch"):
+        workspace.provision(artifact, "0" * 64, interpreter=sys.executable)
+    assert not workspace.commands
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["operation-close", "close", "interruption-close", "pending", "read-failed"],
+)
+def test_command_sole_owner_faults_and_single_collection(
+    tmp_path, runner, monkeypatch, fault
+):
+    from footman.filesystem.cleanup import CleanupFailures
+
+    _, workspace = source(tmp_path, runner)
+    primary = (
+        KeyboardInterrupt("stream interruption")
+        if fault == "interruption-close"
+        else OSError("stream failure")
+    )
+    release = OSError("pipe release")
+    collections = []
+    releases = []
+
+    class Owner:
+        cleanup_status = SimpleNamespace(complete=fault != "pending")
+
+        def __enter__(self):
+            return self
+
+        def stream(self, chunk, *, on_stream_end):
+            collections.append(1)
+            chunk(runner.ProcessStream.STDOUT, b"actual output")
+            if fault == "interruption-close":
+                raise primary
+            for stream in runner.ProcessStream:
+                on_stream_end(
+                    stream,
+                    runner.StreamOutcome.READ_FAILED
+                    if fault == "read-failed"
+                    else runner.StreamOutcome.EOF,
+                )
+            failures = (
+                (SimpleNamespace(error=primary),) if fault == "operation-close" else ()
+            )
+            if fault == "close":
+                failures = (SimpleNamespace(error=release),)
+            return SimpleNamespace(
+                returncode=0,
+                timed_out=False,
+                lifecycle=SimpleNamespace(
+                    complete=fault != "pending", failures=failures
+                ),
+            )
+
+        def __exit__(self, kind, error, tb):
+            failures = CleanupFailures(error)
+            failures.run(self.close, ordinary=(Exception,))
+            selected = failures.complete()
+            if selected is not None:
+                raise selected
+
+        def close(self):
+            if releases:
+                return
+            releases.append(1)
+            if fault.endswith("close"):
+                raise release
+
+    owner = Owner()
+    launches = []
+
+    def launch(argv, **kwargs):
+        launches.append((argv, kwargs))
+        return owner
+
+    monkeypatch.setattr(runner, "OwnedProcess", SimpleNamespace(launch=launch))
+    with pytest.raises(BaseException) as caught:
+        workspace._command(["synthetic-fixture"])
+    if fault in {"operation-close", "interruption-close"}:
+        assert caught.value is primary
+    elif fault == "close":
+        assert caught.value is release
+    else:
+        assert isinstance(caught.value, ValueError)
+    assert len(collections) == len(releases) == len(launches) == 1
+    assert workspace.owners == [owner]
+    assert workspace.commands[0]["stdout"] == b"actual output"
+    assert launches[0][1]["capture_limit"] == 0
+    assert "PYTHONPATH" not in launches[0][1]["popen_kwargs"]["env"]
+    owner.close()
+    assert len(releases) == 1
+
+
+@pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
+def test_directory_creation_independent_release_matrix(
+    tmp_path, runner, monkeypatch, fault
+):
+    _, workspace = source(tmp_path, runner)
+    parent = runner.DirectoryDescriptor.open_secure_path(workspace.ops, tmp_path)
+    original_close = runner.DirectoryDescriptor.close
+    primary = (
+        KeyboardInterrupt("directory interruption")
+        if fault == "interruption-close"
+        else OSError("directory operation")
+    )
+    release = OSError("directory release")
+    closed = []
+
+    def close(owner):
+        if owner.released:
+            return original_close(owner)
+        closed.append(owner)
+        original_close(owner)
+        if owner is not parent:
+            raise release
+
+    class ChildScope:
+        def __init__(self, owner):
+            self.owner = owner
+
+        def __enter__(self):
+            return self.owner
+
+        def __exit__(self, kind, error, tb):
+            return self.owner.__exit__(kind, error, tb)
+
+    create = parent.create_directory
+
+    def create_with_fault(owner, name, *, mode):
+        assert owner is parent
+        child = create(name, mode=mode)
+
+        # The real acquired child remains sole owner during injected body work.
+        class Scope(ChildScope):
+            def __enter__(self):
+                if fault != "close":
+                    try:
+                        raise primary
+                    except BaseException:
+                        self.owner.__exit__(
+                            type(primary), primary, primary.__traceback__
+                        )
+                        raise
+                return self.owner
+
+        return Scope(child)
+
+    monkeypatch.setattr(
+        runner.DirectoryDescriptor, "open_secure_path", lambda *a, **kw: parent
+    )
+    monkeypatch.setattr(runner.DirectoryDescriptor, "close", close)
+    monkeypatch.setattr(
+        runner.DirectoryDescriptor, "create_directory", create_with_fault
+    )
+    with pytest.raises(BaseException) as caught:
+        workspace._mkdir(tmp_path / "created")
+    assert caught.value is (release if fault == "close" else primary)
+    assert len(closed) == 2 and parent in closed
+    for owner in closed:
+        owner.close()
+    assert len(closed) == 2

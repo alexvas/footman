@@ -1354,6 +1354,39 @@ The core checks do not authorize running the operator script on the candidate
 checkout or using Docker in development. Existing RED contracts for later
 implementation tasks remain required and unsuccessful, not passing GREEN.
 
+### Isolated host-workspace contracts
+
+`scripts/run_host_acceptance.py` supplies private workspace preparation and
+provisioning independently of the later public bootstrap and provenance work.
+Run its Docker-free contracts with:
+
+```sh
+.venv/bin/python -m pytest tests/test_host_workspace.py -n 2 --dist worksteal --tb=short -q
+```
+
+Each leg uses an exclusively prepared external workspace and a fresh venv,
+installs only its exact digest-bound wheel plus lock-constrained pytest/xdist
+and wheel client dependencies, and passes explicit host ini and suite paths.
+The workspace does not copy project/build metadata or checkout src. Child
+import redirection and inherited pytest options are removed. Full separate
+command outputs, actual statuses and retained process owners remain available
+to the caller; zero collection and policy failures are not normalized to success.
+The caller owns the external storage lifetime, including partial-failure files;
+workspace machinery never deletes it or retries preparation/provisioning.
+
+Both copy profiles include `tests/host_acceptance_assertions.py` and the declared
+normal transport/bootstrap closure. Normal copies omit the negative module and
+expectation JSON; negative copies select only the dedicated negative test module
+plus common support, with generated JSON recorded separately from source hashes.
+Generated ini, expectation JSON and locked constraints each have a relative-path
+and SHA-256 record, distinct from the copied source inventory. Contracts also pin
+the declared support closure, the real runner's compatibility with orchestrator
+import preflight, and refusal to launch after the original workspace deadline.
+Source and copied bytes are rechecked before/after execution. Real fresh-wheel
+policy/import tests and omission/mutation/ownership fault controls are simulations,
+not host acceptance. Public CLI/binding/provenance and real host scenarios remain
+separate deliverables.
+
 ## Future implementation
 
 Follow the change's RED → GREEN → INTROSPECT → VALIDATE phase gates. Register each

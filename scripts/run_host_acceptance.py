@@ -5,14 +5,18 @@ are separate delivery tasks. Importing this module acquires no resources.
 """
 
 import ast
+import configparser
 import hashlib
+import io
 import json
 import math
 import os
+import re
 import stat
 import time
 import tomllib
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 from footman.filesystem.descriptors import DirectoryDescriptor, OwnedDescriptor
 from footman.filesystem.operations import PosixDescriptorOps
@@ -30,6 +34,15 @@ _SUPPORT_FILES = (
 _NEGATIVE_SUITE = "host_tests/test_negative_expectations.py"
 _HOST_INI = b"[pytest]\naddopts = --strict-config --strict-markers\n"
 _CACHES = {"__pycache__", ".pytest_cache", ".ruff_cache"}
+_LAUNCHER = """import sys
+from footman.startup import main
+if __name__ == "__main__":
+    if sys.argv[0].endswith("-script.pyw"):
+        sys.argv[0] = sys.argv[0][:-11]
+    elif sys.argv[0].endswith(".exe"):
+        sys.argv[0] = sys.argv[0][:-4]
+    sys.exit(main())
+"""
 
 
 def _require(condition, message):
@@ -43,6 +56,79 @@ def _environment():
         for key, value in os.environ.items()
         if not key.startswith(("PYTHON", "PYTEST", "FOOTMAN_", "GIT_"))
     } | {"PYTHONNOUSERSITE": "1"}
+
+
+def _unique(pairs):
+    value = {}
+    for key, item in pairs:
+        _require(key not in value, "duplicate JSON key: " + key)
+        value[key] = item
+    return value
+
+
+def _archive_modules(data):
+    modules = []
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = archive.namelist()
+        _require(len(names) == len(set(names)), "duplicate wheel members")
+        for name in names:
+            path = PurePosixPath(name)
+            canonical = path.as_posix() + ("/" if name.endswith("/") else "")
+            _require(
+                name == canonical
+                and not path.is_absolute()
+                and ".." not in path.parts
+                and "\\" not in name,
+                "unsafe archive path",
+            )
+            mode = archive.getinfo(name).external_attr >> 16
+            kind = stat.S_IFMT(mode)
+            _require(
+                kind in {0, stat.S_IFREG, stat.S_IFDIR}
+                and (kind != stat.S_IFDIR or name.endswith("/"))
+                and (kind != stat.S_IFREG or not name.endswith("/")),
+                "unsafe archive node",
+            )
+            _require(
+                name.startswith("footman/")
+                or re.match(r"footman-[0-9]+\.[0-9]+\.[0-9]+\.dist-info/", name),
+                "unsupported archive install scheme",
+            )
+            if name.startswith("footman/") and name.endswith(".py"):
+                parts = path.with_suffix("").parts
+                _require(
+                    all(part.isidentifier() for part in parts), "invalid module path"
+                )
+                module = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+                modules.append(
+                    {
+                        "name": module,
+                        "source_path": name,
+                        "sha256": hashlib.sha256(archive.read(name)).hexdigest(),
+                    }
+                )
+        distributions = {
+            PurePosixPath(name).parts[0]
+            for name in names
+            if not name.startswith("footman/")
+        }
+        _require(len(distributions) == 1, "ambiguous wheel distribution")
+        metadata = [
+            name for name in names if name.endswith(".dist-info/entry_points.txt")
+        ]
+        _require(len(metadata) == 1, "ambiguous entry point metadata")
+        config = configparser.ConfigParser()
+        config.read_string(archive.read(metadata[0]).decode())
+        target = config["console_scripts"]["footman"]
+        _require(target == "footman.startup:main", "unexpected console target")
+    mapping = {item["name"] for item in modules}
+    _require(
+        len(mapping) == len(modules)
+        and {"footman", "footman.startup", "footman.process", "footman.__main__"}
+        <= mapping,
+        "missing or duplicate package mapping",
+    )
+    return sorted(modules, key=lambda item: item["source_path"]), target
 
 
 class _Workspace:
@@ -74,6 +160,7 @@ class _Workspace:
         self.owners = []
         self.provisioning_started = False
         self.provisioned = False
+        self.provenance_started = False
         self.inventory = []
         self.generated = []
         self.suite_paths = ()
@@ -117,8 +204,16 @@ class _Workspace:
             "path": path.relative_to(self.directory).as_posix(),
             "sha256": hashlib.sha256(data).hexdigest(),
         }
-        self._write(path, data)
+        # Attempted paths are accounting, not deletion authority. A failed
+        # write/close may leave partial bytes and must remain visible to callers.
+        record["state"] = "attempted"
         self.generated.append(record)
+        try:
+            self._write(path, data)
+        except BaseException:
+            record["state"] = "failed"
+            raise
+        record["state"] = "complete"
 
     def _mkdir(self, path):
         with DirectoryDescriptor.open_secure_path(self.ops, path.parent) as parent:
@@ -264,7 +359,7 @@ class _Workspace:
         try:
             with OwnedProcess.launch(
                 record["argv"],
-                deadline_seconds=remaining / 2,
+                deadline_seconds=remaining - min(5, remaining / 2),
                 grace_seconds=min(5, remaining / 2),
                 capture_limit=0,
                 popen_kwargs={"cwd": str(self.directory), "env": env},
@@ -300,10 +395,12 @@ class _Workspace:
         ) as directory:
             _require("venv" not in directory.list_names(), "venv must be fresh")
         wheel = Path(wheel).absolute()
+        archive = self._read(wheel)
         _require(
-            hashlib.sha256(self._read(wheel)).hexdigest() == wheel_sha256,
+            hashlib.sha256(archive).hexdigest() == wheel_sha256,
             "wheel binding mismatch",
         )
+        _archive_modules(archive)
         lock = self._read(self.root / "uv.lock")
         project = self._read(self.root / "pyproject.toml")
         packages = tomllib.loads(lock.decode())["package"]
@@ -352,6 +449,101 @@ class _Workspace:
         )
         self.verify_copy()
         self.provisioned = True
+
+    def prepare_provenance(self, wheel, build_manifest):
+        """Derive expectations from the bound archive, never installed RECORD."""
+        _require(self.provisioned, "workspace not provisioned")
+        _require(not self.provenance_started, "provenance preparation is once-only")
+        self.provenance_started = True
+        self.verify_copy()
+        wheel = Path(wheel).absolute()
+        binding = json.loads(
+            self._read(Path(build_manifest)), object_pairs_hook=_unique
+        )
+        _require(
+            type(binding.get("schema_version")) is int
+            and binding["schema_version"] == 1,
+            "invalid build manifest version",
+        )
+        bound = binding.get("wheel_sha256")
+        _require(
+            isinstance(bound, str) and re.fullmatch(r"[0-9a-f]{64}", bound),
+            "invalid build wheel digest",
+        )
+        _require(binding.get("wheel_path") == str(wheel), "build wheel path mismatch")
+        data = self._read(wheel)
+        _require(
+            hashlib.sha256(data).hexdigest() == bound,
+            "archive does not match build binding",
+        )
+        # Validate the entire archive before asking the installed interpreter
+        # for its layout; no archive code is imported or executed.
+        modules, target = _archive_modules(data)
+        queried = self._command(
+            [
+                self.python,
+                "-P",
+                "-c",
+                "import sysconfig; print(sysconfig.get_path('purelib'))",
+            ]
+        )
+        _require(queried["status"] == 0, "install scheme query failed")
+        site = Path(queried["stdout"].decode().strip())
+        _require(
+            site.is_absolute()
+            and site.is_relative_to(self.venv)
+            and site == site.resolve(),
+            "wrong installed scheme",
+        )
+        script = self.venv / "bin/footman"
+        launcher = self._read(script)
+        _require(
+            ast.dump(ast.parse(launcher)) == ast.dump(ast.parse(_LAUNCHER)),
+            "unsupported installed launcher semantics",
+        )
+        manifest = {
+            "schema_version": 1,
+            "context": "wheel",
+            "wheel_sha256": bound,
+            "modules": [
+                item | {"expected_path": str(site / item["source_path"])}
+                for item in modules
+            ],
+            "entrypoint": {
+                "script_path": str(script),
+                "target": target,
+                "observed_script_sha256": hashlib.sha256(launcher).hexdigest(),
+            },
+        }
+        origin = self.directory / "expected-origin.json"
+        encoded = json.dumps(
+            manifest, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+        ).encode()
+        self._generate(origin, encoded)
+        _require(self._read(origin) == encoded, "expected-origin readback mismatch")
+        _require(
+            self._read(wheel) == data, "bound wheel changed during provenance setup"
+        )
+        self.verify_copy()
+        neutral = self.directory / "neutral-service"
+        self._mkdir(neutral)
+        self.host_context = {
+            "venv_python": str(self.python),
+            "server_script": str(script),
+            "support_root": str(self.directory),
+            "support_inventory": list(self.inventory),
+            "expected_origin_path": str(origin),
+            "wheel_sha256": bound,
+            "provenance_evidence_path": str(self.directory / "provenance.json"),
+            "neutral_cwd": str(neutral),
+            # The pytest owner ends execution five seconds before the outer
+            # deadline; leave a further five seconds for parent evidence/exit.
+            "service_deadline_monotonic": self.deadline - 10,
+        }
+        self._generate(
+            self.directory / "host-context.json", json.dumps(self.host_context).encode()
+        )
+        return manifest
 
     def run_pytest(self):
         _require(self.provisioned, "workspace not provisioned")

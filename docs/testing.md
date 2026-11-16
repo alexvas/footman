@@ -1387,6 +1387,46 @@ policy/import tests and omission/mutation/ownership fault controls are simulatio
 not host acceptance. Public CLI/binding/provenance and real host scenarios remain
 separate deliverables.
 
+### Archive-authoritative host provenance
+
+The workspace validates the digest-bound wheel archive before provisioning and
+`prepare_provenance` independently compares its wheel path/digest against the
+controlled build manifest. It derives the complete package source set (including
+`__main__`) directly from archive bytes, queries only the fresh venv's install
+scheme, and validates generated launcher semantics against wheel entry points.
+Installed source files or RECORD hashes never supply expected module digests.
+Expected-origin and host-context inputs stay in the external owned workspace.
+Generated-file records distinguish attempted, complete and failed writes; failed
+records name possible partial output, not confirmed bytes or deletion authority.
+
+`host_tests/provenance.py` supplies the immediate-parent verified SDK session for
+copied host fixtures. It checks copied support (including shared assertions) and
+installed client origins, launches the direct-wheel bootstrap without lifecycle
+options through the existing sole-owned transport, and keeps provisional
+attestation separate from final clean-EOF confirmation. Only a confirmed matching
+set can be written/read back as complete provenance evidence. Process/protocol
+failure and evidence or support failure independently prevent acceptance; valid
+provenance can remain retained after an unsuccessful child. No public runner
+entry point or actual Docker scenario is delivered by this layer.
+
+Run its Docker-free contracts and workspace regressions with:
+
+```sh
+.venv/bin/python -m pytest tests/test_host_provenance.py tests/test_host_provenance_faults.py tests/test_host_workspace.py -n 2 --dist worksteal --tb=short -q
+```
+
+Tests include real exact-wheel fresh installations and SDK initialization/tool
+discovery in copied fixtures, stale/self-consistent/swapped and missing/extra/
+symlink package controls (including executable stale/missing `supervision.py`
+controls that preserve formerly pinned modules), launcher and shadow controls, binding and unsafe
+archive rejection before installation, missing Python prerequisites, support
+mutation/omission, and origin/evidence owner failures with repeat cleanup.
+Synthetic parser/terminal and evidence-fault observations are explicitly separate
+from real service-child proof. No real Docker or operator script is executed.
+Public runner wiring, full build/source binding and orchestration integration
+remain assigned to later tasks; their existing RED contracts are not passing
+verification of those interfaces.
+
 ## Future implementation
 
 Follow the change's RED → GREEN → INTROSPECT → VALIDATE phase gates. Register each

@@ -3,9 +3,11 @@
 import ast
 import hashlib
 import importlib.util
+import io
 import os
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -321,7 +323,19 @@ def test_provisioning_failure_keeps_actual_status_and_stops(
     _, workspace = source(tmp_path, runner)
     workspace.prepare()
     artifact = tmp_path / "exact.whl"
-    p.write(artifact, b"inert")
+    # Archive-valid attribution-only bytes; the mocked venv command fails
+    # before installation, so these are never treated as a usable wheel.
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name in ("__init__.py", "startup.py", "process.py", "__main__.py"):
+            archive.writestr("footman/" + name, b"# inert\n")
+        archive.writestr(
+            "footman-0.1.0.dist-info/entry_points.txt",
+            b"[console_scripts]\nfootman = footman.startup:main\n",
+        )
+    payload = buffer.getvalue()
+    p.write(artifact, payload)
+    digest = hashlib.sha256(payload).hexdigest()
     called = []
 
     def command(argv):
@@ -337,9 +351,7 @@ def test_provisioning_failure_keeps_actual_status_and_stops(
 
     monkeypatch.setattr(workspace, "_command", command)
     with pytest.raises(ValueError, match="provisioning failed"):
-        workspace.provision(
-            artifact, hashlib.sha256(b"inert").hexdigest(), interpreter=sys.executable
-        )
+        workspace.provision(artifact, digest, interpreter=sys.executable)
     assert len(called) == 1 and called[0]["status"] == status
     constraints = next(
         record
@@ -353,9 +365,7 @@ def test_provisioning_failure_keeps_actual_status_and_stops(
     assert constraints["path"] not in {r["path"] for r in workspace.inventory}
     assert not workspace.provisioned
     with pytest.raises(ValueError, match="once-only"):
-        workspace.provision(
-            artifact, hashlib.sha256(b"inert").hexdigest(), interpreter=sys.executable
-        )
+        workspace.provision(artifact, digest, interpreter=sys.executable)
 
 
 def test_invalid_binding_never_installs(tmp_path, runner):

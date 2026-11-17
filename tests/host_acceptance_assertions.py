@@ -153,6 +153,129 @@ def verify_copy(manifest, destination):
     )
 
 
+def verify_timeout_cleanup(manifest, observations):
+    """Local-client exit, survivor presence and deletion order are independent."""
+    require(manifest["outcome"] == "timed_out", "timeout outcome missing")
+    cleanup = manifest["cleanup"]
+    verify_expectation("cleanup", cleanup["confirmed_absent"], True)
+    require(
+        cleanup["snapshot_deleted"] is True
+        and cleanup["resources_complete"] is True
+        and not cleanup["unresolved_resources"],
+        "timeout cleanup incomplete",
+    )
+    require(
+        observations["local_client_exited"] is True
+        and observations["survivor_alive"] is True,
+        "survivor after local client exit unproved",
+    )
+    require(
+        observations["snapshot_before_removal"] is True
+        and observations["snapshot_after_confirmation"] is True
+        and observations["snapshot_after_run"] is False,
+        "snapshot removal preceded container confirmation",
+    )
+
+
+def verify_generated_entries(observation):
+    """Only actual in-container probes can establish generated entry semantics."""
+    require(
+        type(observation["uid"]) is int
+        and observation["uid"] == 0
+        and type(observation["file_uid"]) is int
+        and observation["file_uid"] == 0
+        and type(observation["link_uid"]) is int
+        and observation["link_uid"] == 0,
+        "generated entries not root-owned",
+    )
+    require(
+        observation["file_regular"] is True
+        and base64.b64decode(observation["file_bytes"], validate=True)
+        == b"container-only root bytes\x00\xff\n"
+        and observation["link_is_symlink"] is True
+        and observation["link_target"] == "root-owned-file"
+        and base64.b64decode(observation["payload"], validate=True)
+        == b"container changed payload\n",
+        "generated file/symlink observation mismatch",
+    )
+
+
+def verify_safe_retention(manifest, *, snapshot_present):
+    """A contained retention failure is never successful runtime cleanup."""
+    cleanup = manifest["cleanup"]
+    require(
+        manifest["outcome"] == "dispatch_failed"
+        and type(manifest["return_code"]) is int
+        and manifest["return_code"] == 0,
+        "safe retention reported success or an unrelated command failure",
+    )
+    verify_expectation("cleanup", cleanup["confirmed_absent"], True)
+    require(
+        cleanup["snapshot_deleted"] is False
+        and snapshot_present is True
+        and cleanup["resources_complete"] is True
+        and not cleanup["unresolved_resources"]
+        and type(cleanup["failure"]) is dict
+        and bool(cleanup["failure"]),
+        "safe retention not established",
+    )
+
+
+def verify_cleanup_protocol(manifest):
+    """Pin complete successful recorded-ID removal, not counts or inspect errors."""
+    identity = manifest["container_id"]
+    require(
+        type(identity) is str and re.fullmatch(r"[0-9a-fA-F]{64}", identity),
+        "invalid cleanup identity",
+    )
+    operations = manifest["infrastructure_operations"]
+    require(
+        [op["name"] for op in operations]
+        == ["inspect", "mkdir", "cp", "rm", "confirmation"],
+        "cleanup operation order mismatch",
+    )
+    require(
+        operations[-2]["argv"] == ["docker", "rm", "-f", identity],
+        "cleanup removal identity mismatch",
+    )
+    require(
+        operations[-1]["argv"]
+        == [
+            "docker",
+            "container",
+            "ls",
+            "--all",
+            "--no-trunc",
+            "--filter",
+            "id=" + identity,
+            "--format",
+            "{{.ID}}",
+        ],
+        "cleanup confirmation identity mismatch",
+    )
+    for operation in operations:
+        require(
+            type(operation["return_code"]) is int
+            and operation["return_code"] == 0
+            and operation["lifecycle_complete"] is True
+            and not operation["lifecycle_failures"]
+            and operation["failure"] is None
+            and operation["collector_failure"] is None,
+            "cleanup infrastructure unsuccessful",
+        )
+        for stream in ("stdout", "stderr"):
+            require(
+                operation[stream]["completeness_name"] == "EOF",
+                "cleanup infrastructure stream incomplete",
+            )
+    require(
+        operations[-1]["stdout"]["observed_bytes"] == 0
+        and base64.b64decode(operations[-1]["stdout"]["excerpt_base64"], validate=True)
+        == b"",
+        "cleanup absence not confirmed",
+    )
+
+
 def verify_preparation_failure(value, manifest, streams, destination):
     """An existing image directory must never become a stale-content merge."""
     verify_copy(manifest, destination)

@@ -1,6 +1,7 @@
 """Explicit policy registration, independent of development conftest."""
 
 import os
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,18 @@ def host_flow() -> Iterator[Any]:
         yield flow
     finally:
         flow.finish()
+
+
+@pytest.fixture(scope="session")
+def cleanup_flow(host_flow: Any) -> Iterator[Any]:
+    from host_tests.cleanup import CleanupFlow
+
+    producer = CleanupFlow(host_flow)
+    try:
+        producer.start()
+        yield producer
+    finally:
+        producer.finish(sys.exception())
 
 
 def pytest_configure(config: pytest.Config) -> None:

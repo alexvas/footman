@@ -167,7 +167,13 @@ class HostFlow:
         ]
 
     def prepare(
-        self, kind: str, status: int, phase: str | None, preparation: str = "fresh"
+        self,
+        kind: str,
+        status: int,
+        phase: str | None,
+        preparation: str = "fresh",
+        *,
+        probe: str = PROBE,
     ) -> dict[str, Any]:
         case = self.root / ("case-" + str(len(self.cases)))
         mkdir(case)
@@ -176,7 +182,7 @@ class HostFlow:
         mkdir(repository)
         self.git(repository, "init", "--quiet")
         wrapper = (
-            "#!/bin/sh\nexec python3 -c " + shlex.quote(PROBE) + ' "$@"\n'
+            "#!/bin/sh\nexec python3 -c " + shlex.quote(probe) + ' "$@"\n'
         ).encode()
         for name, data, mode in (
             ("payload", PAYLOAD.encode(), "100644"),
@@ -235,7 +241,7 @@ class HostFlow:
             destination = "/tmp"
         arguments = [*ARGUMENTS, str(status)]
         command = (
-            ["python3", "-c", PROBE, *arguments]
+            ["python3", "-c", probe, *arguments]
             if kind == "image"
             else ["./probe-wrapper", *arguments]
         )
@@ -293,7 +299,7 @@ class HostFlow:
 
     def execute(self, scenario: dict[str, Any]) -> dict[str, Any]:
         context = dict(self.context)
-        if len(self.cases) > 1:
+        if self.services:
             context["provenance_evidence_path"] = str(
                 scenario["case"] / "provenance.json"
             )
@@ -359,7 +365,10 @@ class HostFlow:
         )
         assertions.require(
             result.isError
-            is (scenario["status"] != 0 or scenario["preparation"] != "fresh"),
+            is scenario.get(
+                "expected_error",
+                scenario["status"] != 0 or scenario["preparation"] != "fresh",
+            ),
             "MCP application outcome mismatch",
         )
         record = self.cases[-1]
@@ -380,7 +389,7 @@ class HostFlow:
         )
         p.write(scenario["case"] / "observation.json", p.canonical(record))
         metadata = self.context.get("service_observations_path")
-        if metadata and len(self.cases) == 1:
+        if metadata and len(self.services) == 1:
             p.write(
                 Path(metadata),
                 p.canonical(
@@ -462,7 +471,16 @@ class HostFlow:
                 all(
                     case["complete"]
                     and case.get("cleanup", {}).get("confirmed_absent") is True
-                    and case["cleanup"].get("snapshot_deleted") is True
+                    and (
+                        case["cleanup"].get("snapshot_deleted") is True
+                        or (
+                            case.get("expected_retention") is True
+                            and case.get("fixture_reconciled") is True
+                            and case.get("runtime_outcome") == "dispatch_failed"
+                            and case["cleanup"].get("resources_complete") is True
+                            and isinstance(case["cleanup"].get("failure"), dict)
+                        )
+                    )
                     and not case["cleanup"].get("unresolved_resources")
                     for case in self.cases
                 ),

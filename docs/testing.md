@@ -1594,7 +1594,8 @@ All four controls first complete the unmodified shared baseline, then change
 only the selected expectation. Controller outcomes preserve setup/call/teardown
 and independently reject cleanup/unrelated failures. This registration does not
 execute or establish real Docker behavior: operator task 11.15 is still pending,
-as are timeout/cleanup suite work and full orchestration integration.
+as is full orchestration integration. The authored timeout/cleanup scenarios
+are described below; their real execution remains pending.
 
 Generated source fixtures, Git command streams/statuses, per-service provenance,
 bounded diagnostic stderr tails (65536-byte limit, not full raw stderr), MCP
@@ -1622,6 +1623,67 @@ isolation controls, not wheel-install or container-semantic proof. Existing
 provenance/workspace and Phase-11 suites retain stale/swapped-install,
 wheel-binding, stale `__main__`, missing/extra/stale container/supervision,
 symlink/wrong-root, launcher, shadow-sentinel and evidence-owner fault controls.
+
+### Authored timeout and cleanup scenarios
+
+Task 11.10's Docker-free producer, ordering, retention and reconciliation
+controls are registered here before their RED recording:
+
+```sh
+.venv/bin/python -m pytest tests/test_host_cleanup.py -n 8 --dist worksteal --tb=short -q
+```
+
+`host_tests/test_cleanup.py` adds three normal items: `test_timeout_survivor`,
+`test_generated_entries` and `test_snapshot_retention`. Each participating worker
+owns its own fixtures. An archive-authoritative MCP baseline precedes cleanup
+work; another MCP request must report timeout with matching command status and
+successful exact-ID removal/confirmation. Separate installed-wheel `RetainedRun`
+scenarios observe the pre-removal and post-confirmation boundaries locally.
+They do not replace the MCP request or introduce service flags/bootstrap hooks.
+
+The timeout command stays alive inside the container after its local Docker
+client exits. Immediately before the recorded-ID removal, a read-only Docker
+exec probe observes its PID/incarnation and generated entries; a read-only host
+proc observation must establish local-client exit. No fixture signals/reaps the
+borrowed client or independently adopts it. Snapshot witnesses must match before
+removal and after the complete empty confirmation listing, before runtime
+snapshot deletion. Observer work consumes the existing helper/stage allowance;
+no sleeps, retries, replacement collections or enlarged dispatch/cleanup budgets
+are used. The image and host need Linux `/proc`; the image supplies Python3,
+POSIX signals, root and the existing mkdir/copy/keep-alive prerequisites.
+
+The image command and staged wrapper create root-owned regular files and actual
+symlinks, and change container-side payload bytes. Exact probe bytes/types/UIDs
+and no-follow host-snapshot witnesses distinguish those changes from host input
+mutation. Confirmed dedicated-container removal accounts for its generated
+entries. A separately owned sentinel container and host path must remain intact
+through every dispatch; only fixture teardown removes those recorded sentinels.
+No global container listing, name guessing or broad path deletion grants ownership.
+
+Permission and foreign-owner faults are separate, scoped injections in the
+host pytest process's installed-wheel retained-run cleanup, not chmod assumptions
+or claims that container-root ownership transferred to the host. Each must report
+an unsuccessful runtime result, confirmed container absence and a retained host
+snapshot. A deliberately added outward host symlink exercises no-follow
+reconciliation. After restoring the injection, a fresh fixture capability removes
+only the recorded inode/content/member allowlist. This is explicit fixture
+reconciliation, not a retry of the runtime reservation's terminal remove/close.
+The unsuccessful runtime manifest is retained unchanged. Unexpected members,
+changed identities, failed releases, missing evidence or unsettled owners block
+acceptance; they never authorize broader deletion. Independent cleanup and report
+publication are attempted once, retaining failures and unresolved identities.
+
+Docker-free controls run real Git, snapshot export, retained-run supervision and
+manifest persistence with explicitly synthetic Docker/SDK observations. They
+also execute the actual copied cleanup test bodies/conftest and a deliberate
+root-ownership mismatch in isolated pytest children. File/directory/output-owner,
+interruption, repeat, independent cleanup and changed-allowlist controls exercise
+fixture failure handling. The existing dedicated negative JSON module still
+changes only the shared cleanup expectation after its verified MCP baseline;
+it does not acquire the normal cleanup fixture or reinterpret cleanup failure as
+an intended detection. Real Docker execution remains exclusively operator task
+11.15. These controls are not real survivor, ownership or removal proof; full
+orchestrator integration remains task 11.10.1.
 
 ## Future implementation
 

@@ -327,7 +327,7 @@ class _Core:
             key: value
             for key, value in os.environ.items()
             if not key.startswith(("PYTHON", "GIT_", "FOOTMAN_BOOTSTRAP_"))
-        } | {"PYTHONNOUSERSITE": "1"}
+        } | {"PYTHONNOUSERSITE": "1", "GIT_OPTIONAL_LOCKS": "0"}
 
     def command(self, argv, run=None, label=None, report=None):
         argv = list(map(str, argv))
@@ -436,6 +436,10 @@ class _Core:
 
 
 def _runner_target(core):
+    _require(
+        bootstrap_import_root is None or bootstrap_import_root == core.root / "src",
+        "runner/bootstrap root disagreement before module execution",
+    )
     path = core.root / "scripts/run_host_acceptance.py"
     _require(
         not path.is_symlink()
@@ -611,12 +615,27 @@ def _execute_prepared_leg(leg):
     )
     observation = {}
     runner = _load_host_runner(core, observation)
-    result = runner._execute_prepared_host_leg(leg)
-    _require(
-        _runner_target(core)
-        == (Path(observation["module_path"]), observation["source_sha256"]),
-        "runner changed during prepared leg",
+    from footman.filesystem.cleanup import CleanupFailures
+
+    primary = None
+    try:
+        result = runner._execute_prepared_host_leg(leg)
+    except BaseException as error:
+        primary = error
+    failures = CleanupFailures(primary)
+    failures.run(
+        lambda: _require(
+            _runner_target(core)
+            == (Path(observation["module_path"]), observation["source_sha256"]),
+            "runner changed during prepared leg",
+        ),
+        ordinary=(Exception,),
     )
+    selected = failures.complete()
+    if selected is not None:
+        raise selected
+    if primary is not None:
+        raise primary
     return _AttributedResult(result, observation)
 
 

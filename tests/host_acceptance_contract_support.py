@@ -12,6 +12,7 @@ import hashlib
 import os
 import shutil
 import stat
+import time
 from pathlib import Path
 
 from footman.filesystem.descriptors import DirectoryDescriptor
@@ -54,12 +55,21 @@ def operation_record(value):
     }
 
 
-def invoke(root, name, args, *, cwd, evidence, env=None, label="operation"):
+def invoke(
+    root, name, args, *, cwd, evidence, env=None, label="operation", deadline=None
+):
+    deadline = time.monotonic() + 120 if deadline is None else deadline
     wrapper = required_surface(name, root)
     environment = wheel.clean_environment() if env is None else dict(env)
-    value = wheel.command(
-        [wrapper, *args], cwd=cwd, env=environment, timeout_seconds=120
-    )
+    # Both wrappers may provision/build. Admission waiting consumes this same
+    # original envelope; no helper or subprocess receives a renewed 120 seconds.
+    with wheel.build_slot(wheel.BUILD_SLOT_PATH, deadline=deadline):
+        value = wheel.command(
+            [wrapper, *args],
+            cwd=cwd,
+            env=environment,
+            timeout_seconds=deadline - time.monotonic(),
+        )
     p.write(
         evidence / (label + ".json"),
         p.canonical(
@@ -77,6 +87,12 @@ def invoke(root, name, args, *, cwd, evidence, env=None, label="operation"):
 
 
 def prepared_root(tmp):
+    # Bound new preparation/copy/Git work as well as the later uv invocation.
+    with wheel.build_slot(wheel.BUILD_SLOT_PATH, deadline=time.monotonic() + 120):
+        return _prepared_root(tmp)
+
+
+def _prepared_root(tmp):
     # Missing candidate implementation is an explicit RED assertion, outside
     # attribution rejection/setup boundaries, not a broken prepared profile.
     for name in (*SURFACES, *IMPLEMENTATIONS):
@@ -84,7 +100,8 @@ def prepared_root(tmp):
         check(path.is_file(), f"required host interface is not implemented: {path}")
     root = service.prepare_inputs(ROOT, tmp / "prepared")
     (root / "tests").mkdir(mode=0o700)
-    for relative in p.SUPPORT_FILES:
+    support_files = (*p.SUPPORT_FILES, "tests/host_acceptance_assertions.py")
+    for relative in support_files:
         p.write(root / relative, p.read(ROOT / relative))
         (root / relative).chmod((ROOT / relative).stat().st_mode & 0o777)
     (root / "host_tests").mkdir(mode=0o700)
@@ -114,7 +131,7 @@ def prepared_root(tmp):
             "executable": (ROOT / relative).stat().st_mode & 0o111,
             "sha256": hashlib.sha256(p.read(ROOT / relative)).hexdigest(),
         }
-        for relative in p.SUPPORT_FILES
+        for relative in support_files
     )
     expected.sort(key=lambda item: item["path"])
     check(
@@ -126,7 +143,7 @@ def prepared_root(tmp):
         "prepared profile has missing or undeclared roots",
     )
     check(wheel.inventory(root)[0] == wheel.inventory(ROOT)[0], "common bytes differ")
-    for relative in (*p.SUPPORT_FILES, *("scripts/" + s for s in IMPLEMENTATIONS)):
+    for relative in (*support_files, *("scripts/" + s for s in IMPLEMENTATIONS)):
         check(
             p.read(root / relative) == p.read(ROOT / relative), "copy dependency drift"
         )
@@ -449,8 +466,9 @@ def git(root, *args):
     return result["stdout"]
 
 
-def bind(root, evidence, *, cwd=None, env=None, label="binding"):
+def bind(root, evidence, *, cwd=None, env=None, label="binding", deadline=None):
     """Real uv only: the returned wheel may be used by isolated runner tests."""
+    deadline = time.monotonic() + 120 if deadline is None else deadline
     evidence.mkdir()
     path = evidence / "build-manifest.json"
     before, entries = inventory(root)
@@ -463,6 +481,7 @@ def bind(root, evidence, *, cwd=None, env=None, label="binding"):
         evidence=evidence,
         env=env,
         label=label,
+        deadline=deadline,
     )
     check(result["status"] == 0, "controlled real build failed: " + repr(result))
     value = p.load(path)
@@ -557,7 +576,7 @@ def relocate(root, destination):
     """Copy a clean matching root, not a dist-selected reuse or deletion."""
     destination.mkdir()
     for name in root_names(root):
-        if name in CACHE_NAMES or name == "dist":
+        if name in (CACHE_NAMES - {".git"}) or name == "dist":
             continue
         source, target = root / name, destination / name
         if source.is_symlink():

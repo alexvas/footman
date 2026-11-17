@@ -327,3 +327,4 @@ def exercise(root, tmp, case):
         p.load(output / "observation.json") == record,
         "attribution observation retention mismatch",
     )
+    return record

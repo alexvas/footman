@@ -13,6 +13,7 @@ import pytest
 
 from tests import mcp_contract_support as service
 from tests import mcp_provenance as p
+from tests import mcp_wheel_support as wheel
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,7 +47,8 @@ def workspace(tmp_path, runner, _mcp_worker_wheel):
     external = tmp_path / "external"
     external.mkdir()
     value = runner._Workspace(root, external).prepare()
-    value.provision(
+    wheel.provision_workspace(
+        value,
         _mcp_worker_wheel.wheel,
         _mcp_worker_wheel.wheel_sha256,
         interpreter=sys.executable,
@@ -465,8 +467,11 @@ def test_missing_python_prerequisite_is_a_real_failure(workspace, runner, tmp_pa
     directory.mkdir()
     value = runner._Workspace(base.root, directory).prepare()
     with pytest.raises(ValueError, match="provisioning failed"):
-        value.provision(
-            bound.wheel, bound.wheel_sha256, interpreter=tmp_path / "absent-python"
+        wheel.provision_workspace(
+            value,
+            bound.wheel,
+            bound.wheel_sha256,
+            interpreter=tmp_path / "absent-python",
         )
     assert len(value.commands) == 1
     assert value.commands[0]["status"] != 0
@@ -554,3 +559,112 @@ def test_unsupported_launcher_is_not_attested(workspace):
     with pytest.raises(ValueError, match="launcher semantics"):
         value.prepare_provenance(bound.wheel, binding)
     assert not (value.directory / "expected-origin.json").exists()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["none", "entry", "container", "supervision", "missing", "extra", "symlink"],
+)
+def test_full_installed_set_is_checked_without_import_before_help(
+    workspace, runner, fault
+):
+    value, bound, binding = workspace
+    manifest = value.prepare_provenance(bound.wheel, binding)
+    package = Path(
+        next(
+            item["expected_path"]
+            for item in manifest["modules"]
+            if item["name"] == "footman"
+        )
+    ).parent
+    if fault in {"entry", "container", "supervision"}:
+        target = (
+            package
+            / {
+                "entry": "__main__.py",
+                "container": "container.py",
+                "supervision": "supervision.py",
+            }[fault]
+        )
+        target.unlink()
+        p.write(target, b"raise RuntimeError('UNVERIFIED_SOURCE_EXECUTED')\n")
+    elif fault == "missing":
+        (package / "supervision.py").unlink()
+    elif fault == "extra":
+        p.write(package / "unexpected.py", b"# unexpected source\n")
+    elif fault == "symlink":
+        (package / "supervision.py").unlink()
+        (package / "supervision.py").symlink_to("startup.py")
+    before = len(value.commands)
+    if fault == "none":
+        runner._verify_installed(value, manifest)
+    else:
+        with pytest.raises(ValueError):
+            runner._verify_installed(value, manifest)
+    assert len(value.commands) == before
+    assert not (value.directory / "provenance.json").exists()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "schema-bool",
+        "attestation-bool",
+        "extra",
+        "wrong-argv",
+        "digest",
+        "source",
+        "missing",
+    ],
+)
+def test_persisted_set_validation_is_not_satisfied_by_malformed_evidence(
+    workspace, runner, fault
+):
+    # Explicitly synthetic file-format control, never service-child proof.
+    value, bound, binding = workspace
+    manifest = value.prepare_provenance(bound.wheel, binding)
+    _, sources = p.manifest_set(manifest)
+    attestation = {
+        "schema_version": 1,
+        "source_count": len(sources),
+        "set_sha256": hashlib.sha256(p.canonical(sources)).hexdigest(),
+    }
+    payload = {
+        **attestation,
+        "sources": sources,
+        "attestation": dict(attestation),
+        "context": "wheel",
+        "wheel_sha256": bound.wheel_sha256,
+        "argv": [
+            str(value.python),
+            "-P",
+            str(value.directory / "tests/mcp_server_child.py"),
+            "--expected-origin",
+            str(value.directory / "expected-origin.json"),
+            "--entrypoint",
+            str(value.venv / "bin/footman"),
+            "--",
+            "--config",
+            "/external/config.toml",
+        ],
+    }
+    if fault == "schema-bool":
+        payload["schema_version"] = True
+    elif fault == "attestation-bool":
+        payload["attestation"]["schema_version"] = True
+    elif fault == "extra":
+        payload["unexpected"] = 1
+    elif fault == "wrong-argv":
+        payload["argv"].insert(-3, "--lifecycle")
+    elif fault == "digest":
+        payload["wheel_sha256"] = "0" * 64
+    elif fault == "source":
+        payload["sources"] = sources[:-1]
+    if fault != "missing":
+        p.write(value.directory / "provenance.json", p.canonical(payload))
+    if fault == "none":
+        assert runner._verified_evidence(value)
+    else:
+        with pytest.raises((OSError, ValueError)):
+            runner._verified_evidence(value)

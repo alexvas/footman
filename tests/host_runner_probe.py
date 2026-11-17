@@ -348,6 +348,17 @@ def run():
                 p.write(
                     records / "mcp-result.json", p.canonical(result.structuredContent)
                 )
+                if context.get("service_observations_path") is not None:
+                    retained = p.load(Path(result.structuredContent["resultPath"]))
+                    p.write(
+                        Path(context["service_observations_path"]),
+                        p.canonical(
+                            {
+                                "configured_image_id": retained["configured_image_id"],
+                                "observed_image_id": retained["observed_image_id"],
+                            }
+                        ),
+                    )
                 p.require(not result.isError, "stub command unsuccessful")
 
     try:

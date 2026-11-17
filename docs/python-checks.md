@@ -20,8 +20,13 @@ uv sync --extra dev --locked    # creates/updates .venv from uv.lock
 That installs `pytest==8.4.2`, `pytest-xdist==3.8.0`, `ruff==0.17.1` and
 `ty==0.0.73`. `pyproject.toml` also pins Ruff's `required-version = "==0.17.1"`,
 so a different Ruff refuses to run instead of silently checking with another
-policy. Every entry point requires its interpreter or tool under `.venv/bin` and
-exits `127` with a diagnostic when it is missing. The single-file operator
+policy. Check entry points require their interpreter or tool under `.venv/bin` and
+exit `127` with a diagnostic when it is missing. The acceptance shell wrappers
+`scripts/build-acceptance-wheel` and `scripts/run-host-acceptance` instead
+require PATH `python3.14` and `uv`, diagnosing either missing tool with status
+127 without requiring a checkout venv. They replace bootstrap PYTHONPATH with
+exactly their physically resolved repository's `src/`; installed-wheel children
+receive clean environments without that injection. The single-file operator
 entry point `scripts/verify_host_acceptance.py` is an exception: its exact
 `#!/usr/bin/env python3.14` shebang selects Python from PATH, independently of
 checkout `.venv`. Missing Python is diagnosed by `/usr/bin/env` with status 127
@@ -31,10 +36,8 @@ the existing scripts inventory. Inside the tooling, Ruff is
 resolved from the interpreter running it (`.venv/bin/ruff`) first and only then
 from `PATH`. Python 3.14+ and `uv` are prerequisites.
 
-The planned `scripts/build-acceptance-wheel` and `scripts/run-host-acceptance`
-bootstrap wrappers are not delivered by the host-package inventory work. Their
-PATH-tool exceptions and shell exclusions are documented with their delivery;
-they do not change the existing check entry points.
+These acceptance-tool PATH exceptions do not change the existing check entry
+points or the independently typed `src/` and `host_tests/` boundary.
 
 ## Commands
 
@@ -71,7 +74,8 @@ they do not change the existing check entry points.
   interpreter. A Python script without a recognizable shebang must be listed in
   `EXPLICIT_PYTHON_SOURCES` in `scripts/python_checks.py`; an unlisted
   extensionless file with no shebang is an error, not a silent omission. The
-  repository's own `scripts/check-*` wrappers are `#!/bin/sh` and are therefore
+  repository's own `scripts/check-*`, `scripts/build-acceptance-wheel` and
+  `scripts/run-host-acceptance` wrappers are `#!/bin/sh` and are therefore
   recorded as non-Python exclusions, not dropped silently.
 - **Excluded, each with a recorded reason:** `__pycache__`, `.git`,
   `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.venv`, `vendor` and

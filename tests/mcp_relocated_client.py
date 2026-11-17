@@ -348,9 +348,29 @@ def main():
                             await checkpoint("accepted-work")
                 if hold != "accepted-work":
                     await checkpoint("accepted-work")
-        await checkpoint("before-evidence")
         from footman.process import StreamOutcome
 
+        # This existing checkpoint is a receipt of successful real calls AND
+        # clean transport/provenance completion, before any synthetic mutation.
+        # Observe final settlement, not an earlier immutable result snapshot.
+        settled = None if observed.owner is None else observed.owner.cleanup_status
+        p.require(
+            parser.confirmed
+            and observed.eof_delivered
+            and set(observed.terminals) == set(footman.process.ProcessStream)
+            and all(
+                outcome is StreamOutcome.EOF for outcome in observed.terminals.values()
+            )
+            and observed.result is not None
+            and observed.result.returncode == 0
+            and not observed.result.timed_out
+            and not observed.result.lifecycle.failures
+            and settled is not None
+            and settled.complete
+            and not settled.failures,
+            "pre-fault service baseline incomplete",
+        )
+        await checkpoint("before-evidence")
         if fault == "stderr-read-failure":
             parser.end(StreamOutcome.READ_FAILED)
         elif fault == "stdout-aborted":
@@ -365,6 +385,7 @@ def main():
         p.require(
             parser.confirmed
             and observed.eof_delivered
+            and set(observed.terminals) == set(footman.process.ProcessStream)
             and all(
                 outcome is StreamOutcome.EOF for outcome in observed.terminals.values()
             ),

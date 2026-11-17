@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+for tool in python3.14 uv; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'Missing required bootstrap tool: %s\n' "$tool" >&2
+        exit 127
+    fi
+done
+wrapper=$(realpath -- "$0")
+repo_root=$(CDPATH= cd -- "$(dirname -- "$wrapper")/.." && pwd -P)
+for relative in footman/__init__.py footman/process.py footman/filesystem/__init__.py footman/filesystem/descriptors.py footman/filesystem/operations.py footman/filesystem/cleanup.py; do
+    if [ ! -f "$repo_root/src/$relative" ] || [ -L "$repo_root/src/$relative" ]; then
+        printf 'Missing or unsafe checkout foundation root: %s\n' "$repo_root/src/$relative" >&2
+        exit 1
+    fi
+done
+unset PYTHONHOME PYTHONUSERBASE
+PYTHONPATH="$repo_root/src" PYTHONNOUSERSITE=1 exec python3.14 -P "$repo_root/scripts/build_acceptance_wheel.py" "$@"

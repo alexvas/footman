@@ -458,6 +458,237 @@ def relocated_worker(relocated_worker_provider):
 
 
 @pytest.mark.parametrize(
+    "change",
+    [
+        "none",
+        "missing",
+        "outcome",
+        "status",
+        "null",
+        "boolean",
+        "fields",
+        "checkpoint",
+        "checkpoint-partial",
+        "checkpoint-boolean",
+    ],
+)
+def test_post_dispatch_controls_require_successful_baseline(change):
+    runs = [{"outcome": "succeeded", "return_code": 0} for _ in range(2)]
+    checkpoint = {"stage": "before-evidence", "monotonic": 1.0}
+    if change == "checkpoint":
+        checkpoint = None
+    elif change == "checkpoint-partial":
+        checkpoint.pop("monotonic")
+    elif change == "checkpoint-boolean":
+        checkpoint["monotonic"] = False
+    if change == "missing":
+        runs.pop()
+    elif change == "outcome":
+        runs[0]["outcome"] = "dispatch_failed"
+    elif change in {"status", "null", "boolean"}:
+        runs[0]["return_code"] = {"status": 7, "null": None, "boolean": False}[change]
+    elif change == "fields":
+        runs[0].clear()
+    if change == "none":
+        assert portability()._require_completed_dispatches(runs, 2, checkpoint) is None
+    else:
+        with pytest.raises(AssertionError, match="successful dispatch baseline"):
+            portability()._require_completed_dispatches(runs, 2, checkpoint)
+
+
+@pytest.mark.parametrize("writer", ["write", "write_observation"])
+def test_observation_and_durable_writers_keep_distinct_sync_contracts(
+    tmp_path, monkeypatch, writer
+):
+    import stat
+
+    original_sync = os.fsync
+    modes = []
+
+    def sync(fd):
+        modes.append(os.fstat(fd).st_mode)
+        return original_sync(fd)
+
+    monkeypatch.setattr(os, "fsync", sync)
+    target = tmp_path / "record"
+    getattr(provenance, writer)(target, b"complete bytes")
+    assert provenance.read(target) == b"complete bytes"
+    if writer == "write":
+        assert len(modes) == 2 and stat.S_ISREG(modes[0]) and stat.S_ISDIR(modes[1])
+    else:
+        assert modes == []
+
+
+@pytest.mark.parametrize("writer", ["write", "write_observation"])
+@pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
+def test_observation_writer_sole_owner_failure_and_repeat_cleanup(
+    tmp_path, monkeypatch, writer, fault
+):
+    original_ops, original_owner, original_write = (
+        provenance.OPS,
+        provenance.OwnedDescriptor,
+        os.write,
+    )
+    owners, targets, releases, directories = [], set(), [], []
+    primary = (
+        KeyboardInterrupt("record interrupted")
+        if fault == "interruption-close"
+        else OSError("record write failed")
+    )
+    secondary = OSError("record close failed")
+
+    class Ops:
+        def __getattr__(self, name):
+            return getattr(original_ops, name)
+
+        def close(self, fd):
+            directory = os.readlink(f"/proc/self/fd/{fd}") == str(tmp_path)
+            original_ops.close(fd)
+            if directory:
+                directories.append(fd)
+            if fd in targets:
+                releases.append(fd)
+                raise secondary
+
+    def descriptor(ops, fd, **kwargs):
+        owner = original_owner(ops, fd, **kwargs)
+        targets.add(fd)
+        owners.append(owner)
+        return owner
+
+    def write(fd, data):
+        if fd in targets and fault != "close":
+            raise primary
+        return original_write(fd, data)
+
+    monkeypatch.setattr(provenance, "OPS", Ops())
+    monkeypatch.setattr(provenance, "OwnedDescriptor", descriptor)
+    monkeypatch.setattr(os, "write", write)
+    with pytest.raises(BaseException) as caught:
+        getattr(provenance, writer)(tmp_path / "record", b"data")
+    assert caught.value is (secondary if fault == "close" else primary)
+    assert len(owners) == len(releases) == len(directories) == 1
+    owners[0].close()
+    assert len(releases) == 1
+
+
+@pytest.mark.parametrize("writer", ["write", "write_observation"])
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_observation_writer_never_replaces_existing_entry(
+    tmp_path, monkeypatch, writer, kind
+):
+    from unittest.mock import Mock
+
+    target, entry = tmp_path / "existing", tmp_path / "record"
+    write_bytes(target, b"existing")
+    if kind == "symlink":
+        entry.symlink_to(target)
+    else:
+        write_bytes(entry, b"existing")
+    adoption = Mock(side_effect=AssertionError("collision cannot acquire a file owner"))
+    with monkeypatch.context() as patch:
+        patch.setattr(provenance, "OwnedDescriptor", adoption)
+        with pytest.raises(FileExistsError):
+            getattr(provenance, writer)(entry, b"replacement")
+    adoption.assert_not_called()
+    assert provenance.read(target) == b"existing"
+    if kind == "symlink":
+        assert entry.is_symlink() and entry.readlink() == target
+    else:
+        assert provenance.read(entry) == b"existing"
+
+
+@pytest.mark.parametrize("stage", ["file", "directory"])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_verified_evidence_still_requires_both_durability_barriers(
+    tmp_path, monkeypatch, stage, interrupted
+):
+    import stat
+
+    primary = (
+        KeyboardInterrupt("evidence sync interrupted")
+        if interrupted
+        else OSError("evidence sync failed")
+    )
+    calls = []
+    original_sync = os.fsync
+
+    def sync(fd):
+        actual = "directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
+        calls.append(actual)
+        if actual == stage:
+            raise primary
+        return original_sync(fd)
+
+    monkeypatch.setattr(os, "fsync", sync)
+    with pytest.raises(BaseException) as caught:
+        provenance.write(tmp_path / "retained", b"unconfirmed evidence")
+    assert caught.value is primary
+    assert calls == (["file"] if stage == "file" else ["file", "directory"])
+
+
+def test_relocated_stub_observations_do_not_wait_for_durability_barriers(
+    relocated_worker, tmp_path
+):
+    support = portability()
+    case = support.prepare_case(relocated_worker, tmp_path)
+    root = case["support"]
+    code = f"""
+import importlib.util, os, sys
+from pathlib import Path
+root = Path({str(root)!r})
+spec = importlib.util.spec_from_file_location("tests", root / "tests/__init__.py", submodule_search_locations=[str(root / "tests")])
+package = importlib.util.module_from_spec(spec)
+sys.modules["tests"] = package
+spec.loader.exec_module(package)
+from tests import mcp_provenance as p
+def barrier(fd):
+    raise OSError("synchronous diagnostic barrier on CLI critical path")
+os.fsync = barrier
+spec = importlib.util.spec_from_file_location("_stub_probe", root / "tests/relocated_docker_child.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+sys.argv = [str(spec.origin), "--support-root", str(root), "--", "rm", "-f", {("d" * 64)!r}]
+raise SystemExit(module.main())
+"""
+    operation = support.build.command(
+        [str(case["python"]), "-P", "-c", code],
+        cwd=case["neutral"],
+        env=case["env"],
+        timeout_seconds=10,
+    )
+    provenance.write(
+        tmp_path / "stub-probe-operation.json",
+        provenance.canonical(support.operation_record(operation)),
+    )
+    if operation["status"] != 0:
+        assert (
+            b"synchronous diagnostic barrier on CLI critical path"
+            in operation["stderr"]
+        ), operation["stderr"]
+    assert operation["status"] == 0, operation["stderr"].decode(
+        errors="backslashreplace"
+    )
+    records = [
+        provenance.load(path)
+        for path in (tmp_path / "stub-records").glob("*-call.json")
+    ]
+    origins = [
+        provenance.load(path)
+        for path in (tmp_path / "stub-records").glob("*-origin.json")
+    ]
+    assert len(records) == len(origins) == 1
+    assert records[0] == {
+        "argv": ["rm", "-f", "d" * 64],
+        "container_id": "d" * 64,
+        "status": 0,
+        "stdin_eof": True,
+    }
+    assert origins[0]["interpreter"] == str(case["python"])
+    assert origins[0]["context"] == "wheel"
+
+
+@pytest.mark.parametrize(
     "case",
     [
         "success",

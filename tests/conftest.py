@@ -24,7 +24,14 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session")
-def _mcp_worker_wheel(request, tmp_path_factory):
+def _wheel_build_slot_path(request, tmp_path_factory):
+    base = tmp_path_factory.getbasetemp()
+    shared = base.parent if hasattr(request.config, "workerinput") else base
+    return shared / "mcp-build.lock"
+
+
+@pytest.fixture(scope="session")
+def _mcp_worker_wheel(request, tmp_path_factory, _wheel_build_slot_path):
     from pathlib import Path
 
     from tests import mcp_contract_support as support
@@ -37,9 +44,13 @@ def _mcp_worker_wheel(request, tmp_path_factory):
     )
     evidence = root / "installation"
     evidence.mkdir(mode=0o700)
-    bound = wheel.build_and_install_contract_wheel(
-        prepared, evidence_directory=evidence
-    )
+    # Session setup can precede function-scoped autouse fixtures. Admit it too,
+    # without an outer lock (the build/install routine takes its own slot).
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(wheel, "BUILD_SLOT_PATH", _wheel_build_slot_path)
+        bound = wheel.build_and_install_contract_wheel(
+            prepared, evidence_directory=evidence
+        )
     p.write(
         root / "setup.json",
         p.canonical(
@@ -63,19 +74,26 @@ def _mcp_worker_wheel(request, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def _mcp_build_admission(request, tmp_path_factory, monkeypatch):
-    if request.node.path.name not in {"test_mcp_transport.py", "test_mcp_server.py"}:
+def _mcp_build_admission(request, _wheel_build_slot_path, monkeypatch):
+    name = request.node.path.name
+    if name not in {
+        "test_mcp_transport.py",
+        "test_mcp_server.py",
+        "test_host_acceptance_contracts.py",
+        "test_host_build_tooling.py",
+        "test_host_provenance.py",
+        "test_host_workspace.py",
+    }:
         return
     from tests import mcp_contract_support, mcp_wheel_support
 
-    monkeypatch.setattr(
-        mcp_contract_support,
-        "WHEEL_PROVIDER",
-        lambda: request.getfixturevalue("_mcp_worker_wheel"),
-    )
-    base = tmp_path_factory.getbasetemp()
-    shared = base.parent if hasattr(request.config, "workerinput") else base
-    monkeypatch.setattr(mcp_wheel_support, "BUILD_SLOT_PATH", shared / "mcp-build.lock")
+    if name in {"test_mcp_transport.py", "test_mcp_server.py"}:
+        monkeypatch.setattr(
+            mcp_contract_support,
+            "WHEEL_PROVIDER",
+            lambda: request.getfixturevalue("_mcp_worker_wheel"),
+        )
+    monkeypatch.setattr(mcp_wheel_support, "BUILD_SLOT_PATH", _wheel_build_slot_path)
 
 
 @pytest.fixture

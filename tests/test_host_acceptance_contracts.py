@@ -2,7 +2,7 @@
 
 The first missing-interface assertion is deliberately outside expected rejection
 boundaries: a missing public wrapper must not normalize to a passing negative
-case. Production static roots remain unchanged until GREEN task 11.3.
+case. Host support is included in the four-root static inventory and type scope.
 """
 
 import ast
@@ -49,6 +49,75 @@ def test_phase11_real_base_serialization_is_explicit_without_changing_commands()
     assert "Phase-11 real-base serialization exception" in phase
     assert "do not overlap" in phase
     assert_documented_suite(text)
+
+
+@pytest.mark.parametrize("name", h.SURFACES)
+@pytest.mark.parametrize(
+    "location", ["checkout", "identity", "symlink", "noncanonical"]
+)
+def test_generated_output_path_refusal_precedes_all_managed_acquisition(
+    tmp_path, name, location
+):
+    root, _ = h.prepared_root(tmp_path)
+    h.install_acquisition_guard(root)
+    records = tmp_path / "records"
+    records.mkdir()
+    (root / "dist").mkdir()
+    p.write(root / "dist/retained-unowned.whl", b"unowned artifact must survive")
+    leaf = "out.json" if name == "build-acceptance-wheel" else "ev"
+    if location == "checkout":
+        target = root / leaf
+    elif location == "identity":
+        target = root / "src" / leaf
+    else:
+        external = tmp_path / "external"
+        external.mkdir()
+        if location == "symlink":
+            alias = tmp_path / "alias"
+            alias.symlink_to(external, target_is_directory=True)
+            target = alias / leaf
+        else:
+            target = external / ".." / leaf
+    before = attribution.dist_identity(root), attribution.dist_identity(h.ROOT)
+    args = (
+        ["--manifest", str(target)]
+        if name == "build-acceptance-wheel"
+        else [
+            "--wheel",
+            str(tmp_path / "absent.whl"),
+            "--source-identity",
+            str(tmp_path / "absent.json"),
+            "--image",
+            "d9e853e87e55",
+            "--evidence",
+            str(target),
+        ]
+    )
+    result = h.invoke(root, name, args, cwd=tmp_path, evidence=records)
+    assert result["status"] != 0
+    text = result["stderr"].decode("utf-8", "replace")
+    assert (
+        "evidence inside checkout"
+        if location in {"checkout", "identity"}
+        else "unsafe external evidence path"
+    ) in text
+    counters = [
+        json.loads(line.removeprefix("contract-acquisitions "))
+        for line in text.splitlines()
+        if line.startswith("contract-acquisitions ")
+    ]
+    assert counters, "missing acquisition instrumentation is a broken fixture"
+    assert all(
+        value == {"descriptor_adoptions": 0, "launch_calls": 0} for value in counters
+    )
+    assert (
+        attribution.dist_identity(root),
+        attribution.dist_identity(h.ROOT),
+    ) == before
+    assert not target.exists()
+    assert not target.with_name(target.stem + "-operation.json").exists()
+    assert not (target / "report.json").exists()
+    assert not target.with_name(target.name + "-workspace").exists()
 
 
 def test_host_interfaces_are_registered_before_red():
@@ -345,7 +414,9 @@ def test_real_uv_repeat_build_preserves_both_outputs_and_candidate_dist(tmp_path
     assert set(before_repeat) == {
         "footman-0.1.0.tar.gz",
         "footman-0.1.0-py3-none-any.whl",
+        ".gitignore",
     }
+    assert p.read(root / "dist/.gitignore") == b"*"
     second = h.invoke(
         root,
         "build-acceptance-wheel",
@@ -857,7 +928,7 @@ def inert_profile_candidate(tmp_path):
     candidate = service.prepare_inputs(h.ROOT, tmp_path / "candidate")
     service.copy_tree(h.ROOT / "scripts", candidate / "scripts")
     (candidate / "tests").mkdir()
-    for relative in p.SUPPORT_FILES:
+    for relative in (*p.SUPPORT_FILES, "tests/host_acceptance_assertions.py"):
         p.write(candidate / relative, p.read(h.ROOT / relative))
     p.write(candidate / "uv.lock", p.read(h.ROOT / "uv.lock"))
     for name in h.SURFACES:
@@ -919,13 +990,6 @@ def test_wrapper_driver_preserves_collection_failure_and_never_publishes_success
     surface.assert_called_once_with("build-acceptance-wheel", tmp_path)
     command.assert_called_once()
     publish.assert_not_called()
-
-
-@pytest.fixture(autouse=True)
-def host_contract_build_admission(tmp_path_factory, request, monkeypatch):
-    base = tmp_path_factory.getbasetemp()
-    shared = base.parent if hasattr(request.config, "workerinput") else base
-    monkeypatch.setattr(wheel, "BUILD_SLOT_PATH", shared / "host-contract-build.lock")
 
 
 PROBE_FAULTS = (
@@ -2595,12 +2659,12 @@ def test_failed_build_keeps_real_status_and_streams_when_postcheck_also_fails(
     executable, call, attempts = h.scripted_uv(tmp_path, case)
     if post_fault == "missing-readme":
         script = p.read(executable).decode()
-        assert script.count("raise SystemExit(17)") == 1
+        assert script.count("\nraise SystemExit(17)\n") == 1
         h.replace(
             executable,
             script.replace(
-                "raise SystemExit(17)",
-                "(root / 'README.md').unlink()\nraise SystemExit(17)",
+                "\nraise SystemExit(17)\n",
+                "\n(root / 'README.md').unlink()\nraise SystemExit(17)\n",
             ).encode(),
         )
     else:

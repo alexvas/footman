@@ -8,12 +8,15 @@ import os
 import shutil
 import sys
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from tests import mcp_provenance as p
+from tests import mcp_wheel_support as wheel
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,6 +68,176 @@ def test_delivered_runner_passes_orchestrator_target_and_import_preflight(
     assert p.read(path) == delivered
     assert digest == hashlib.sha256(delivered).hexdigest()
     orchestrator._import_safe(ast.parse(delivered).body)
+
+
+@pytest.mark.parametrize(
+    "collector,admitted",
+    [
+        (name, True)
+        for name in (
+            "test_mcp_transport.py",
+            "test_mcp_server.py",
+            "test_host_acceptance_contracts.py",
+            "test_host_build_tooling.py",
+            "test_host_provenance.py",
+            "test_host_workspace.py",
+        )
+    ]
+    + [("test_host_provenance_faults.py", False), ("test_scaffold.py", False)],
+)
+def test_shared_admission_covers_actual_provisioning_collectors(
+    collector, admitted, _wheel_build_slot_path, monkeypatch
+):
+    from tests.conftest import _mcp_build_admission
+
+    request = SimpleNamespace(node=SimpleNamespace(path=Path(collector)))
+    with monkeypatch.context() as patch:
+        patch.setattr(wheel, "BUILD_SLOT_PATH", None)
+        _mcp_build_admission.__wrapped__(request, _wheel_build_slot_path, patch)
+        assert wheel.BUILD_SLOT_PATH == (_wheel_build_slot_path if admitted else None)
+
+
+def test_workspace_admission_cannot_silently_bypass_shared_slot(monkeypatch):
+    value = SimpleNamespace(deadline=120, provision=Mock())
+    slot = Mock(side_effect=AssertionError("must refuse before admission/acquisition"))
+    monkeypatch.setattr(wheel, "BUILD_SLOT_PATH", None)
+    monkeypatch.setattr(wheel, "build_slot", slot)
+    with pytest.raises(
+        ValueError, match="missing shared workspace provisioning admission"
+    ):
+        wheel.provision_workspace(value, "exact.whl", "digest", interpreter="python")
+    slot.assert_not_called()
+    value.provision.assert_not_called()
+
+
+def test_workspace_admission_wait_charges_original_command_deadline(
+    tmp_path, runner, monkeypatch
+):
+    clock, plans = [100.0], []
+    monkeypatch.setattr(runner, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    value = runner._Workspace(tmp_path / "source", tmp_path)
+    original_deadline = value.deadline
+
+    @contextmanager
+    def slot(path, *, deadline):
+        assert path == wheel.BUILD_SLOT_PATH and path is not None
+        assert deadline == original_deadline
+        clock[0] += 7  # deterministic admission wait, not an OS timing claim
+        yield
+
+    primary = OSError("command launch boundary")
+
+    def launch(argv, **kwargs):
+        plans.append(kwargs)
+        raise primary
+
+    def provision(artifact, digest, *, interpreter):
+        assert (artifact, digest, interpreter) == ("exact.whl", "digest", "python")
+        return value._command(["synthetic"])
+
+    monkeypatch.setattr(wheel, "build_slot", slot)
+    monkeypatch.setattr(value, "provision", provision)
+    monkeypatch.setattr(runner, "OwnedProcess", SimpleNamespace(launch=launch))
+    with pytest.raises(OSError) as caught:
+        wheel.provision_workspace(value, "exact.whl", "digest", interpreter="python")
+    assert caught.value is primary and value.deadline == original_deadline == 220
+    assert len(plans) == 1 and not value.owners
+    assert plans[0]["deadline_seconds"] + plans[0]["grace_seconds"] == 113
+
+
+@pytest.mark.parametrize(
+    "fault", ["none", "operation-close", "close", "interruption-close"]
+)
+def test_workspace_admission_owner_faults_and_independent_release(monkeypatch, fault):
+    original_ops, original_owner = wheel.OPS, wheel.OwnedDescriptor
+    targets, releases, owners, directories = set(), [], [], []
+    primary = (
+        KeyboardInterrupt("provision interrupted")
+        if fault == "interruption-close"
+        else ValueError("provision failed")
+    )
+    secondary, result = OSError("admission close failed"), object()
+
+    class Ops:
+        def __getattr__(self, name):
+            return getattr(original_ops, name)
+
+        def close(self, fd):
+            directory = os.readlink(f"/proc/self/fd/{fd}") == str(
+                wheel.BUILD_SLOT_PATH.parent
+            )
+            original_ops.close(fd)
+            if directory:
+                directories.append(fd)
+            if fd in targets:
+                releases.append(fd)
+                if fault != "none":
+                    raise secondary
+
+    def descriptor(ops, fd, **kwargs):
+        owner = original_owner(ops, fd, **kwargs)
+        targets.add(fd)
+        owners.append(owner)
+        return owner
+
+    def provision(*args, **kwargs):
+        assert len(owners) == 1 and not releases
+        if fault in {"operation-close", "interruption-close"}:
+            raise primary
+        return result
+
+    value = SimpleNamespace(
+        deadline=wheel.time.monotonic() + 120, provision=Mock(side_effect=provision)
+    )
+    monkeypatch.setattr(wheel, "OPS", Ops())
+    monkeypatch.setattr(wheel, "OwnedDescriptor", descriptor)
+    if fault == "none":
+        assert (
+            wheel.provision_workspace(
+                value, "exact.whl", "digest", interpreter="python"
+            )
+            is result
+        )
+    else:
+        with pytest.raises(BaseException) as caught:
+            wheel.provision_workspace(
+                value, "exact.whl", "digest", interpreter="python"
+            )
+        assert caught.value is (secondary if fault == "close" else primary)
+    value.provision.assert_called_once_with("exact.whl", "digest", interpreter="python")
+    assert len(owners) == len(releases) == len(directories) == 1
+    owners[0].close()
+    assert len(releases) == 1
+
+
+def test_workspace_admission_contention_exhausts_without_provisioning(
+    tmp_path, monkeypatch
+):
+    # Isolated real flock contention, not a wall-time or native-uv proof. Both
+    # contenders use this same private file; other workers keep their shared slot.
+    assert wheel.BUILD_SLOT_PATH is not None
+    path = tmp_path / "admission.lock"
+    monkeypatch.setattr(wheel, "BUILD_SLOT_PATH", path)
+    with wheel.build_slot(path, deadline=wheel.time.monotonic() + 120):
+        clock, waits = [100.0], []
+
+        def wait(seconds):
+            waits.append(seconds)
+            clock[0] = 101.0
+
+        monkeypatch.setattr(
+            wheel, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=wait)
+        )
+        value = SimpleNamespace(deadline=101.0, provision=Mock())
+        with pytest.raises(TimeoutError, match="build admission envelope exhausted"):
+            wheel.provision_workspace(
+                value, "exact.whl", "digest", interpreter="python"
+            )
+        assert waits == [0.01] and value.deadline == 101.0
+        value.provision.assert_not_called()
+    # Independent acquisition proves the waiting contender and holder released.
+    with wheel.build_slot(path, deadline=102.0):
+        assert clock[0] == 101.0
 
 
 @pytest.mark.parametrize("elapsed", [0, 1])
@@ -236,8 +409,8 @@ def test_fresh_wheel_environment_policy_and_copied_imports(
     p.write(probe, content.encode())
     workspace.prepare()
     monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
-    workspace.provision(
-        real_bound.wheel, real_bound.wheel_sha256, interpreter=sys.executable
+    wheel.provision_workspace(
+        workspace, real_bound.wheel, real_bound.wheel_sha256, interpreter=sys.executable
     )
     generated = {record["path"]: record["sha256"] for record in workspace.generated}
     assert set(generated) == {"host.ini", "locked-constraints.txt"}

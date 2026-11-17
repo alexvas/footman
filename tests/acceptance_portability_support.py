@@ -580,6 +580,8 @@ def run_resources(scratch):
                         "container_id": value.get("container_id"),
                         "snapshot": str(snapshot),
                         "snapshot_absent": True,
+                        "outcome": value.get("outcome"),
+                        "return_code": value.get("return_code"),
                     }
                 )
 
@@ -797,6 +799,26 @@ def run_helper(case):
     }
 
 
+def _require_completed_dispatches(runs, expected_count, checkpoint):
+    if (
+        type(checkpoint) is not dict
+        or set(checkpoint) != {"stage", "monotonic"}
+        or checkpoint["stage"] != "before-evidence"
+        or type(checkpoint["monotonic"]) not in (int, float)
+        or not 0 < checkpoint["monotonic"] < float("inf")
+    ):
+        raise AssertionError(
+            "post-dispatch control lacks successful dispatch baseline checkpoint"
+        )
+    if len(runs) != expected_count or not all(
+        run.get("outcome") == "succeeded"
+        and type(run.get("return_code")) is int
+        and run["return_code"] == 0
+        for run in runs
+    ):
+        raise AssertionError("post-dispatch control lacks successful dispatch baseline")
+
+
 def exercise_relocated(worker, tmp, case_id):
     mutable = case_id in {
         "clone-success",
@@ -976,6 +998,28 @@ def exercise_relocated(worker, tmp, case_id):
     else:
         observation = run_helper(case)
     settled = reconcile(case)
+    if case_id in {
+        "missing-result",
+        "partial-result",
+        "oversized-result",
+        "duplicate-result",
+        "helper-before-evidence",
+        "helper-after-evidence",
+        "stderr-read-failure",
+        "stdout-aborted",
+        "evidence-unwritable",
+        "evidence-truncated",
+        "evidence-inconsistent",
+        "duplicate-attestation",
+        "partial-attestation",
+    }:
+        # A later parser/evidence fault must not pass because dispatch/cleanup
+        # failed first. Keep the real two-call flow and strict native records.
+        _require_completed_dispatches(
+            settled["retained_runs"],
+            len(case["request"]["calls"]),
+            p.load(case["tmp"] / "stage-before-evidence"),
+        )
     observation.update(
         settled,
         expected_interpreter=str(case["python"]),

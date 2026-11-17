@@ -391,6 +391,17 @@ A child record proves that the helper reached its recording point, not that
 cleanup or external work succeeded; a parent launch request alone proves neither
 acquisition nor child execution.
 
+The seven `test_unconfirmed_listing_retains_snapshot` cases test policy at the
+managed-result boundary with explicitly synthetic no-fd helpers. Their original
+0.5-second cleanup allowance is unchanged; exact argv, delivered status/bytes,
+timeout flag, snapshot retention and once-only settlement are pinned. They do
+not claim cold Python startup or OS timing. Separate real-child listing-wire
+cases require actual status/bytes/EOF and strict child records. A real child that
+settles without recording is explicitly rejected; settlement is never upgraded
+to protocol evidence. Existing real cleanup/timeout suites retain their own OS
+owners, original budgets and strict record requirements. No polling for records,
+sleep/retry, fabricated child record or missing-record tolerance is introduced.
+
 The deadline-only `LaunchJournal` records entry to the parent launch boundary
 before acquisition, with a stable ordinal, literal argv and the passed execution
 and grace allowances. Its working and cleanup scripts have independent strict
@@ -555,11 +566,32 @@ clones, not new installs or general-purpose relocatable venvs; activation and
 unrelated dependency CLI launchers are not used. Direct fixture/attribution and
 wheel-swap boundary tests still exercise their own public build surface.
 
-One fixture-owned admission file per pytest invocation bounds real provisioning
-and native clone-copy work across workers. Waiting consumes the original setup
-deadline, without renewal. Scripted attribution-only cases bypass heavy-work
-admission. The service venv contains no pytest/xdist; installed-foundation checks
-provision their own test environment. Shared-base reuse, private manifests,
+One fixture-owned `mcp-build.lock` per pytest invocation admits the provisioning
+and native clone-copy helpers in `test_mcp_transport.py`, `test_mcp_server.py`,
+`test_host_acceptance_contracts.py`, `test_host_build_tooling.py`,
+`test_host_provenance.py` and `test_host_workspace.py`. Selecting the path alone
+is not admission: actual heavy-work callers must enter `build_slot`. Host
+preparation copies, actual wrapper calls and real by-path Python prepared legs
+use that same file, not a separate host-only lock. Direct real `_Workspace`
+provisioning in the provenance/workspace collectors goes through the test-only
+`provision_workspace` adapter, which holds admission across the unmodified
+`provision` call, including uv venv and pip. Initial worker-wheel session setup
+is admitted even when it precedes function autouse fixtures.
+
+Waiting consumes each caller's original deadline. Build and prepared execution
+share their original 120-second fixture envelope; direct workspace provisioning
+uses the workspace's original deadline, including preparation/waiting already
+spent. Child remainders are computed afterward, never renewed. A missing shared
+path is an error for the direct-workspace adapter, not a silent bypass. This is
+fixture admission, not a production runner option or a widened host/cleanup
+window. Synthetic `test_host_provenance_faults.py`, mocked provisioning failures,
+archive-preflight refusals and once-only rejection controls do not run uv. MCP
+scripted attribution-only cases bypass heavy-work admission; host wrapper probes
+still use their admission boundary. This is not a global limit on every uv
+process in development tests: independent Phase-10 portability and foundation
+fixtures retain their existing concurrency, deadlines and ownership contracts.
+The service venv contains no pytest/xdist; installed-foundation checks provision
+their own test environment. Shared-base reuse, private manifests,
 clone mutation isolation, relocated launcher/layout and process-owner fault
 matrices are included in the registered MCP suite, alongside admission
 failure/contention/interruption/repeat/independent-cleanup cases.
@@ -706,6 +738,26 @@ The checkout integration test alone does not establish wheel portability. Phase-
 substitute. Only fixture-owned disposable build outputs may be created; existing
 candidate dist artifacts must remain untouched. Validation also requires every
 earlier registered suite, the unscoped gate and build/help/exact-wheel smoke.
+
+Relocated CLI origin records are ephemeral stub observations, not confirmed
+provenance evidence or power-loss-durable journals. They use exclusive no-follow
+complete writes and sole-owner closes through `write_observation`, without file
+or directory fsync on the short CLI critical path. Write/close failures still
+fail the child; argv/status/stdin-EOF records, native outcomes and descendant
+absence remain strict. Actual provenance evidence, lifecycle journals and run
+results retain their required synchronization. A real-wheel CLI probe makes any
+fsync on the diagnostic path fail deterministically; separate owner/collision
+and synchronization controls preserve the two distinct writer contracts. This
+removes an unnecessary latency source, not a guarantee of cold-child startup or
+proof that fsync caused any historical timeout. No budgets or two-dispatch case
+profiles change. Post-dispatch parser/result/evidence controls additionally
+require two retained successful code-zero dispatches AND the existing
+`before-evidence` checkpoint. That receipt is emitted only after successful MCP
+calls, confirmed provenance, both clean stream EOFs and a settled code-zero
+service, before synthetic mutation. Visible manifest success alone cannot prove
+confirmed publication/MCP success. Missing or invalid checkpoint evidence fails;
+an unrelated execution or cleanup failure cannot substitute for the intended
+negative condition.
 
 The copied closure is the Phase-9 normal support list plus
 `tests/mcp_relocated_client.py`, `tests/relocated_docker_child.py`,
@@ -1005,7 +1057,7 @@ installation. Unsafe-archive controls additionally install a blocking tool spy
 so even an erroneous runner cannot install those scripted artifacts.
 
 The separately discovered real-Docker suite is named `host_tests/`. Its public
-interfaces, registered now and not yet implemented, are:
+interfaces, registered before RED and now implemented, are:
 
 ```sh
 scripts/build-acceptance-wheel --manifest <build-manifest>
@@ -1015,14 +1067,14 @@ scripts/run-host-acceptance --wheel <exact-wheel> --source-identity <build-manif
 The build interface wraps exactly bare `uv build` in its own physically resolved
 wrapper repository root, not the caller cwd. The runner must independently
 compare its wrapper-root source identity, README-inclusive build-input identity
-and exact wheel digest against the controlled manifest. Both future wrappers
+and exact wheel digest against the controlled manifest. Both delivered wrappers
 are `#!/bin/sh`, use PATH `python3.14`/`uv` without requiring checkout `.venv`,
 and replace PYTHONPATH with exactly their resolved root's `src/` for bootstrap
 only. Installed-wheel children must not inherit that injection. Missing bootstrap
-tools must diagnose and exit 127. These are planned, explicitly tested exceptions
+tools diagnose and exit 127. These are delivered, explicitly tested exceptions
 to the check entry points' `.venv/bin` rule, not changes to existing check tools.
-The two shell paths will be recorded non-Python inventory exclusions when
-implemented; their Python implementations must be inventoried automatically.
+The two shell paths are recorded non-Python inventory exclusions; their Python
+implementations are inventoried automatically.
 
 `tests/host_acceptance_assertions.py` supplies resource-free checks over supplied
 MCP/manifest/stream/cleanup observations. The Docker-free controls obtain actual
@@ -1281,9 +1333,10 @@ setting and `--dist worksteal`. It must reject zero collection, skips, xfails,
 xpasses, missing prerequisites and unresolved cleanup. Host execution requires
 an operator-prepared local image and a Docker-capable host; no automatic image
 build/pull or development-container socket access is permitted. Docker-free
-contracts do not prove real Docker semantics or complete task 11.2's real-host
-negative control. All RED tasks must complete before GREEN task 11.3; production
-static roots/ty scope remain unchanged during this RED work.
+contracts do not prove real Docker semantics or establish real-host negative
+control success. Host support is included in the four-root static inventory;
+ty checks `src/` and `host_tests/`, not development tests. Full development GREEN
+and operator-only host acceptance remain separate gates.
 
 ### Recorded wrapper contract formats
 
@@ -1305,18 +1358,43 @@ runtime result fields or production MCP capabilities:
   that recorded evidence directory when attempted, and separate `post_check_error`
   when applicable. No attempted build means no fabricated status/empty streams;
   a nonzero build's original status and binary output survive a later input error.
+  Pre-existing dist and predicted destinations are retained independently of the
+  command record. After an attempted build, source, build-input and dist
+  inventories are independently attempted even when collection/status or another
+  post-check fails. `produced_dist` is the full observed post-build inventory,
+  including pre-existing entries (not artifact-selection/deletion authority);
+  null means unavailable, not empty. Separate `post_check_errors` identify every
+  failed observation without replacing the original build failure/raw status.
+  Stream retention and operation-summary publication are independent attempts:
+  a failed/interrupted stream write cannot prevent the other stream or
+  `*-operation.json` publication. Evidence paths describe intended destinations,
+  not proof that their writes succeeded.
 - The runner retains `report.json` under --evidence, recording success/cleanup,
   root/caller/wrapper attribution, both identities and wheel digest, external
   venv/workspace/expected-origin/provenance paths, and `commands` with literal argv,
   cwd, actual status and environment key names (not unrelated environment values).
   Installed help/import, dependency installation and host pytest cannot inherit
-  bootstrap PYTHONPATH. Generated expectations/provenance stay outside identity
-  roots; module hashes come from the bound archive, never installed RECORD.
+  bootstrap PYTHONPATH. Once safe external domains are validated, prerequisite,
+  manifest/binding and archive checks run inside that same failure-finalization
+  boundary. Early failures retain all acquired command outputs/raw statuses and
+  attempt report publication without preparing/installing a workspace. Every
+  command's streams are attempted independently of every other command, including
+  after interruption; command metadata/raw statuses remain in the report even
+  when a stream destination could not be written. Summary publication is attempted
+  once after all those attempts. Identity,
+  revision and wheel-digest fields remain null until independently checked;
+  `build_manifest_path` still identifies the requested input. Finalization errors
+  cannot turn failure into success or replace an earlier ordinary failure, while
+  interruptions retain authority. Generated expectations/provenance stay outside
+  identity roots; module hashes come from the bound archive, never installed RECORD.
 - Isolated host pytest receives `FOOTMAN_HOST_CONTEXT`, an external generated
   JSON path containing `venv_python`, `server_script`, `support_root`,
   `expected_origin_path`, `provenance_evidence_path`, `neutral_cwd` and
   `configured_image_id`. This is runner-to-fixture input, never passed to the
   service. The immediate parent alone writes/reads back final verified evidence.
+  `service_observations_path` is a recorded fixture-output path for configured/
+  observed image attribution; absent or unusable image metadata is diagnostic
+  and never an image-equality launch gate. Actual Docker errors still fail.
   `FOOTMAN_HOST_CONTRACT_*` and `FOOTMAN_HOST_TOOL_*` are development probe controls,
   not public service options; probes remove all host-context/control keys before
   launching the service. Normal real-host support excludes these probe/proxy files
@@ -1423,9 +1501,75 @@ archive rejection before installation, missing Python prerequisites, support
 mutation/omission, and origin/evidence owner failures with repeat cleanup.
 Synthetic parser/terminal and evidence-fault observations are explicitly separate
 from real service-child proof. No real Docker or operator script is executed.
-Public runner wiring, full build/source binding and orchestration integration
-remain assigned to later tasks; their existing RED contracts are not passing
-verification of those interfaces.
+Public runner wiring and full build/source binding are delivered by the
+controlled tooling below. Full orchestration/suite integration remains assigned
+to 11.10.1, and real-host execution exclusively to operator task 11.15; neither
+is established by these Docker-free results.
+
+### Controlled build and low-level execution
+
+Run the focused tooling/ownership, provenance and loader regressions with:
+
+```sh
+.venv/bin/python -m pytest tests/test_host_build_tooling.py tests/test_host_provenance.py tests/test_host_provenance_faults.py tests/test_host_workspace.py tests/test_host_orchestration_core.py -n 2 --dist worksteal --tb=short -q
+```
+
+Shared implementation helpers live in private checkout-only
+`src/_footman_acceptance.py`, outside `src/footman/`. The existing validated
+root/src bootstrap resolves them without a scripts-package import or another
+import root. They are source/build identity inputs and statically checked, but
+the explicit Hatch wheel package selection excludes them from installed Footman.
+They add no runtime API or package-provenance scope.
+
+Generated manifest/evidence destinations must be canonical, symlink-free and
+outside the entire wrapper-selected checkout (stronger than merely outside its
+identity roots). Rejection precedes managed acquisition, uv or installation.
+
+The host-leg budget is explicit, not the short build-helper default: normal
+2990 seconds, negative 820 seconds. Its recorded planning basis is 600 seconds
+for cold provisioning, 120 for preflight/identity/help/import checks, 32 normal
+(or one negative) dispatch windows of 60 seconds plus 10 seconds cleanup, and
+30 seconds for final evidence. Windows are conservative suite-scope allowances,
+not collection limits or test filters; fixtures use dispatch deadlines at most
+60 seconds, including lower intentional-timeout settings. Both report.json and
+the fixture context record the basis. These are components of one original
+monotonic deadline, not separate renewable budgets; process cleanup keeps its
+existing local reserve. Suite growth or longer configured dispatch deadlines
+requires reviewing this policy, not silently inheriting a helper default.
+
+The two shell wrappers use PATH python3.14/uv without a checkout venv, replace
+bootstrap PYTHONPATH with their resolved repository's src/, and validate that
+root independently in Python before managed acquisition. Caller cwd is recorded
+but never selects build inputs. Installed help, imports, pytest and service
+children receive explicit clean environments without bootstrap injection.
+
+The controlled helper runs exactly bare `uv build` at that root. Both predicted
+sdist and wheel destinations must be absent, including dangling links. Refusal
+names the root and every conflict and performs no build/deletion/replacement.
+After retaining evidence, an operator may remove only the named conflicts outside
+the helper, or invoke a different clean matching-input/revision root's wrapper
+(and matching runner). Changing caller cwd is not a remedy; resolving only the
+wheel when both outputs conflict is insufficient. Unrelated dist entries are
+never chosen as artifacts or deleted. The manifest binds the exact successful
+output paths and independent digests (with uv's auxiliary `dist/.gitignore`
+recorded separately), plus separate source and README-inclusive
+build-input identities and inventories. Both identities are checked before and
+after build and independently by the runner before install, after copy and at
+completion; revision or installed RECORD cannot substitute for them. Read-only
+Git observations disable optional locks to avoid refreshing the developer index.
+The complete installed source set is checked without import before help/import
+smoke, independently of the service child's later pre-dispatch verification.
+
+The private prepared-leg function shares execution between the normal CLI and
+the orchestrator's normal/negative profiles, with explicit complete suite paths
+and no extra CLI/env selector. Python call outcomes are distinct from actual
+child statuses. The four-option public wrapper is exercised separately in
+Docker-free subprocess contracts; those checks do not establish real-host proof.
+The independent Phase-9/10 attribution implementations remain parity surfaces,
+not imports or substitutes for the controlled production helper. All scripted
+and real-uv development build contracts use disposable prepared roots and prove
+the candidate checkout's dist artifacts unchanged. Host suites and full
+orchestration integration are separate delivery work.
 
 ## Future implementation
 

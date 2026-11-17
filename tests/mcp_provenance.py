@@ -93,9 +93,24 @@ def _read(path, *, transform, proc_stat):
 
 
 def write(path, data):
+    """Retained evidence: complete bytes, file sync, close, then directory sync."""
+    return _write(path, data, synchronize=True)
+
+
+def write_observation(path, data):
+    """Ephemeral CLI observation: complete exclusive write/close, NOT durable evidence.
+
+    Keep diagnostic durability barriers out of short native helper allowances.
+    Write/close errors still fail; callers/parents still require complete records.
+    Never use this for verified provenance, lifecycle journals or run evidence.
+    """
+    return _write(path, data, synchronize=False)
+
+
+def _write(path, data, *, synchronize):
     path = Path(path)
     with DirectoryDescriptor.open_secure_path(OPS, path.parent) as parent:
-        label = "MCP exclusive evidence"
+        label = "MCP exclusive evidence" if synchronize else "stub observation"
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         fd = os.open(parent.child_basename(path.name), flags, 0o600, dir_fd=parent.fd)
         with OwnedDescriptor(OPS, fd, label=label) as owner:
@@ -104,8 +119,10 @@ def write(path, data):
                 count = os.write(owner.fd, remaining)
                 require(count > 0, "evidence write made no progress")
                 remaining = remaining[count:]
-            os.fsync(owner.fd)
-        os.fsync(parent.fd)
+            if synchronize:
+                os.fsync(owner.fd)
+        if synchronize:
+            os.fsync(parent.fd)
 
 
 def load(path):

@@ -61,6 +61,15 @@ def build_slot(path, *, deadline):
         # Closing the sole descriptor releases the lock; no retry/unlock owner.
 
 
+def provision_workspace(workspace, wheel, wheel_sha256, *, interpreter):
+    """Test-only admission; the borrowed workspace keeps its original deadline/owners."""
+    p.require(
+        BUILD_SLOT_PATH is not None, "missing shared workspace provisioning admission"
+    )
+    with build_slot(BUILD_SLOT_PATH, deadline=workspace.deadline):
+        return workspace.provision(wheel, wheel_sha256, interpreter=interpreter)
+
+
 # Reviewed transport/cache/concurrency controls cannot select build destinations.
 BUILD_ENV_ALLOWLIST = frozenset(
     {

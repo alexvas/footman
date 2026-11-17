@@ -65,7 +65,10 @@ def main():
     )
     directory = Path(os.environ["FOOTMAN_STUB_RECORDS"])
     identifier = str(time.time_ns()) + "-" + str(os.getpid())
-    p.write(
+    # This is an ephemeral stub observation, not confirmed provenance evidence.
+    # Complete write/close is required; power-loss durability must not stall the
+    # real CLI inside its original short execution/cleanup allowance.
+    p.write_observation(
         directory / (identifier + "-origin.json"),
         p.canonical(
             {

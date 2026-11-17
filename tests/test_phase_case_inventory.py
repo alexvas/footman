@@ -49,6 +49,8 @@ import pytest
                 "test_rm_failure_does_not_suppress_confirmation",
                 "test_snapshot_permission_failure_after_confirmation_is_unsuccessful",
                 "test_unconfirmed_listing_retains_snapshot",
+                "test_unconfirmed_listing_wire_observation_requires_child_record",
+                "test_settled_real_child_without_record_is_not_wire_evidence",
                 "test_unknown_identity_never_guesses_removal",
                 "test_cleanup_observation_requires_bounded_timeout",
                 "test_command_setup_failure_still_removes_known_container",

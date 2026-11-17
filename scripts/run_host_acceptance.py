@@ -1,9 +1,6 @@
-"""Private isolated host-workspace machinery.
+"""Isolated exact-wheel host execution; importing acquires no resources."""
 
-Public bootstrap, binding/provenance authority and prepared-leg orchestration
-are separate delivery tasks. Importing this module acquires no resources.
-"""
-
+import argparse
 import ast
 import configparser
 import hashlib
@@ -11,13 +8,25 @@ import io
 import json
 import math
 import os
+import platform
 import re
+import shutil
 import stat
+import sys
 import time
 import tomllib
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
+from _footman_acceptance import (
+    Tooling,
+    canonical,
+    checked_root,
+    compare_binding,
+)
+from footman.filesystem.cleanup import CleanupFailures
 from footman.filesystem.descriptors import DirectoryDescriptor, OwnedDescriptor
 from footman.filesystem.operations import PosixDescriptorOps
 from footman.process import OwnedProcess, ProcessStream, StreamOutcome
@@ -32,6 +41,36 @@ _SUPPORT_FILES = (
     "tests/mcp_lifecycle.py",
 )
 _NEGATIVE_SUITE = "host_tests/test_negative_expectations.py"
+
+# Explicit host policy, not Tooling's short build-helper default. Windows are
+# planning allowances, not a collection filter/count limit. Fixture dispatches
+# use at most this declared timeout (the intentional timeout scenario is lower).
+_HOST_PROVISIONING_SECONDS = 600
+_HOST_PREFLIGHT_AND_SMOKES_SECONDS = 120
+_HOST_DISPATCH_TIMEOUT_SECONDS = 60
+_HOST_DISPATCH_CLEANUP_SECONDS = 10
+_HOST_NORMAL_DISPATCH_WINDOWS = 32
+_HOST_FINALIZATION_SECONDS = 30
+
+
+def _leg_budget(profile):
+    windows = _HOST_NORMAL_DISPATCH_WINDOWS if profile == "normal" else 1
+    return {
+        "schema_version": 1,
+        "profile": profile,
+        "provisioning_seconds": _HOST_PROVISIONING_SECONDS,
+        "preflight_and_smokes_seconds": _HOST_PREFLIGHT_AND_SMOKES_SECONDS,
+        "dispatch_timeout_seconds": _HOST_DISPATCH_TIMEOUT_SECONDS,
+        "dispatch_cleanup_seconds": _HOST_DISPATCH_CLEANUP_SECONDS,
+        "dispatch_windows": windows,
+        "finalization_seconds": _HOST_FINALIZATION_SECONDS,
+        "total_seconds": _HOST_PROVISIONING_SECONDS
+        + _HOST_PREFLIGHT_AND_SMOKES_SECONDS
+        + windows * (_HOST_DISPATCH_TIMEOUT_SECONDS + _HOST_DISPATCH_CLEANUP_SECONDS)
+        + _HOST_FINALIZATION_SECONDS,
+    }
+
+
 _HOST_INI = b"[pytest]\naddopts = --strict-config --strict-markers\n"
 _CACHES = {"__pycache__", ".pytest_cache", ".ruff_cache"}
 _LAUNCHER = """import sys
@@ -54,7 +93,11 @@ def _environment():
     return {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(("PYTHON", "PYTEST", "FOOTMAN_", "GIT_"))
+        if not key.startswith(("PYTHON", "PYTEST", "GIT_"))
+        and (
+            not key.startswith("FOOTMAN_")
+            or key.startswith(("FOOTMAN_HOST_CONTRACT_", "FOOTMAN_HOST_TOOL_"))
+        )
     } | {"PYTHONNOUSERSITE": "1"}
 
 
@@ -167,6 +210,8 @@ class _Workspace:
         self.profile = None
         self.started = False
         self.ready = False
+        self.environment_extra = {}
+        self.junit = None
         self.venv = self.directory / "venv"
         self.python = self.venv / "bin/python"
         self.ini = self.directory / "host.ini"
@@ -242,7 +287,7 @@ class _Workspace:
             visit(host, "host_tests")
         return tuple(files)
 
-    def prepare(self, *, profile="normal", expectation=None):
+    def prepare(self, *, profile="normal", expectation=None, prepared=False):
         _require(not self.started, "workspace preparation is once-only")
         _require(profile in ("normal", "negative"), "unknown copy profile")
         _require(
@@ -253,7 +298,32 @@ class _Workspace:
         with DirectoryDescriptor.open_secure_path(
             self.ops, self.directory
         ) as directory:
-            _require(not directory.list_names(), "workspace must be empty")
+            _require(
+                set(directory.list_names()) == ({"host_tests"} if prepared else set()),
+                "workspace must be empty or explicitly prepared",
+            )
+            if prepared:
+                with directory.open_directory("host_tests") as host:
+                    _require(
+                        set(host.list_names())
+                        == (
+                            {"expectation_input.json"}
+                            if profile == "negative"
+                            else set()
+                        ),
+                        "unexpected prepared host input",
+                    )
+                    if profile == "negative":
+                        _require(
+                            json.loads(
+                                self._read(
+                                    self.directory / "host_tests/expectation_input.json"
+                                ),
+                                object_pairs_hook=_unique,
+                            )
+                            == expectation,
+                            "prepared expectation mismatch",
+                        )
         files = self._host_files()
         _require(
             "host_tests/expectation_input.json" not in files,
@@ -279,7 +349,8 @@ class _Workspace:
             self.suite_paths = ("host_tests",)
         self.profile = profile
         for name in ("host_tests", "tests"):
-            self._mkdir(self.directory / name)
+            if name != "host_tests" or not prepared:
+                self._mkdir(self.directory / name)
         directories = {"host_tests", "tests"}
         for relative in (*files, *_SUPPORT_FILES):
             for parent in reversed(Path(relative).parents):
@@ -303,7 +374,7 @@ class _Workspace:
                 {"path": relative, "sha256": hashlib.sha256(data).hexdigest()}
             )
         self._generate(self.ini, _HOST_INI)
-        if expectation is not None:
+        if expectation is not None and not prepared:
             self._generate(
                 self.directory / "host_tests/expectation_input.json",
                 json.dumps(expectation).encode(),
@@ -336,7 +407,7 @@ class _Workspace:
     def _command(self, argv):
         remaining = self.deadline - time.monotonic()
         _require(remaining > 0, "original workspace deadline exhausted")
-        env = _environment()
+        env = _environment() | self.environment_extra
         record = {
             "argv": list(map(str, argv)),
             "cwd": str(self.directory),
@@ -356,6 +427,7 @@ class _Workspace:
                 errors.append(error)
                 raise
 
+        owner = None
         try:
             with OwnedProcess.launch(
                 record["argv"],
@@ -369,6 +441,7 @@ class _Workspace:
                     chunk, on_stream_end=lambda s, end: ends.__setitem__(s, end)
                 )
                 record["status"] = result.returncode
+                record["cleanup_complete"] = owner.cleanup_status.complete
                 if errors:
                     raise errors[0]
                 if result.lifecycle.failures:
@@ -382,6 +455,13 @@ class _Workspace:
                 "incomplete workspace command",
             )
         finally:
+            if owner is not None:
+                record["cleanup_complete"] = owner.cleanup_status.complete
+                if record["status"] is None:
+                    record["status"] = getattr(owner, "returncode", None)
+            record["terminals"] = {
+                stream.name: end.name for stream, end in ends.items()
+            }
             record["stdout"] = bytes(output[ProcessStream.STDOUT])
             record["stderr"] = bytes(output[ProcessStream.STDERR])
         return record
@@ -556,6 +636,7 @@ class _Workspace:
                 "pytest",
                 "-c",
                 self.ini,
+                *([] if self.junit is None else ["--junitxml", str(self.junit)]),
                 *(self.directory / p for p in self.suite_paths),
                 "-n",
                 "1",
@@ -569,3 +650,429 @@ class _Workspace:
         # Exit 5 (zero items) and skip-policy failures are real unsuccessful
         # outcomes, never normalized to passing host acceptance.
         return result
+
+
+def _counts(workspace):
+    counts = dict.fromkeys(
+        ("collected", "passed", "failed", "skipped", "xfailed", "xpassed"), 0
+    )
+    tree = ET.fromstring(workspace._read(workspace.junit))
+    for case in tree.iter("testcase"):
+        counts["collected"] += 1
+        if case.find("failure") is not None or case.find("error") is not None:
+            counts["failed"] += 1
+        elif case.find("skipped") is not None:
+            skipped = case.find("skipped")
+            counts[
+                "xfailed" if skipped.get("type") == "pytest.xfail" else "skipped"
+            ] += 1
+        else:
+            counts["passed"] += 1
+    return counts
+
+
+def _verify_installed(workspace, manifest):
+    initializer = next(
+        item for item in manifest["modules"] if item["name"] == "footman"
+    )
+    package = Path(initializer["expected_path"]).parent
+    _require(
+        package.is_relative_to(workspace.venv),
+        "installed package outside fresh environment",
+    )
+    _, records = Tooling(package.parent).inventory(("footman/",))
+    _require(
+        all(item["kind"] in {"directory", "file"} for item in records),
+        "unsafe installed package node",
+    )
+    actual = {
+        item["path"]: item["sha256"]
+        for item in records
+        if item["kind"] == "file" and item["path"].endswith(".py")
+    }
+    expected = {item["source_path"]: item["sha256"] for item in manifest["modules"]}
+    _require(
+        actual == expected, "installed full package source-set mismatch before smoke"
+    )
+
+
+def _verified_evidence(workspace):
+    expected = json.loads(
+        workspace._read(workspace.directory / "expected-origin.json"),
+        object_pairs_hook=_unique,
+    )
+    retained = json.loads(
+        workspace._read(workspace.directory / "provenance.json"),
+        object_pairs_hook=_unique,
+    )
+    sources = sorted(
+        (
+            {
+                "path": item["source_path"].removeprefix("footman/"),
+                "sha256": item["sha256"],
+            }
+            for item in expected["modules"]
+        ),
+        key=lambda item: item["path"],
+    )
+    attestation = {
+        "schema_version": 1,
+        "source_count": len(sources),
+        "set_sha256": hashlib.sha256(canonical(sources)).hexdigest(),
+    }
+    _require(
+        type(retained) is dict
+        and set(retained)
+        == {
+            "schema_version",
+            "source_count",
+            "set_sha256",
+            "sources",
+            "context",
+            "wheel_sha256",
+            "attestation",
+            "argv",
+        }
+        and type(retained.get("schema_version")) is int
+        and type(retained.get("source_count")) is int
+        and type(retained.get("attestation")) is dict
+        and type(retained["attestation"].get("schema_version")) is int
+        and type(retained["attestation"].get("source_count")) is int
+        and retained.get("sources") == sources
+        and retained.get("attestation") == attestation
+        and all(retained.get(key) == value for key, value in attestation.items())
+        and retained.get("wheel_sha256") == expected["wheel_sha256"]
+        and retained.get("wheel_sha256") == workspace.host_context["wheel_sha256"]
+        and retained.get("context") == "wheel"
+        and type(retained.get("argv")) is list
+        and len(retained["argv"]) == 10
+        and retained["argv"][:9]
+        == [
+            str(workspace.python),
+            "-P",
+            str(workspace.directory / "tests/mcp_server_child.py"),
+            "--expected-origin",
+            str(workspace.directory / "expected-origin.json"),
+            "--entrypoint",
+            str(workspace.venv / "bin/footman"),
+            "--",
+            "--config",
+        ],
+        "inconsistent retained provenance",
+    )
+    return True
+
+
+def _execute_prepared_host_leg(leg):
+    """Private typed-input execution shared by CLI and both orchestrator profiles.
+
+    Existing prepared directories remain caller-owned; this function retains
+    generated files but never deletes a resource or changes process globals.
+    """
+    root = checked_root(__file__, "run-host-acceptance")
+    _require(leg.profile in {"normal", "negative"}, "invalid prepared profile")
+    _require(
+        isinstance(leg.image, str)
+        and re.fullmatch(r"(?:sha256:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{12,64})", leg.image),
+        "invalid configured image ID",
+    )
+    budget = _leg_budget(leg.profile)
+    tool = Tooling(root, timeout_seconds=budget["total_seconds"])
+    evidence = tool.external(leg.evidence)
+    directory = tool.external(leg.workspace)
+    _require(
+        not directory.is_relative_to(evidence)
+        and not evidence.is_relative_to(directory),
+        "overlapping prepared domains",
+    )
+    expected = (
+        (directory / "host_tests",)
+        if leg.profile == "normal"
+        else (directory / _NEGATIVE_SUITE,)
+    )
+    _require(
+        type(leg.suite_paths) is tuple and leg.suite_paths == expected,
+        "incomplete or unsafe prepared suite paths",
+    )
+    _require(
+        (leg.case_id is None) == (leg.profile == "normal"), "case/profile mismatch"
+    )
+    wheel = Path(leg.wheel).absolute()
+    manifest = None
+    workspace = _Workspace(root, directory)
+    workspace.deadline = tool.deadline
+    report = {
+        "schema_version": 1,
+        "budget": budget,
+        "repository_root": str(root),
+        "wrapper_path": str(root / "scripts/run-host-acceptance"),
+        "caller_cwd": os.getcwd(),
+        # Unknown until the initial independent binding check succeeds.
+        "source_identity": None,
+        "build_input_identity": None,
+        "revision": None,
+        "build_manifest_path": str(leg.source_identity),
+        "wheel_path": str(wheel),
+        "wheel_sha256": None,
+        "configured_image_id": leg.image,
+        "observed_image_id": None,
+        "success": False,
+        "cleanup_complete": False,
+        "commands": [],
+        "warnings": [],
+    }
+    primary = None
+    result = None
+    verified = False
+    counts = dict.fromkeys(
+        ("collected", "passed", "failed", "skipped", "xfailed", "xpassed"), 0
+    )
+    try:
+        # Safe external domains/report state exist before prerequisite/provenance
+        # work: even an early failure must retain acquired command observations
+        # and attempt the same independent evidence finalization below.
+        for name in ("uv", "git", "docker"):
+            _require(
+                shutil.which(name) is not None, "missing host prerequisite: " + name
+            )
+        manifest = tool.load(leg.source_identity)
+        compare_binding(tool, manifest, wheel)
+        report.update(
+            source_identity=manifest["source_identity"],
+            build_input_identity=manifest["build_input_identity"],
+            revision=manifest["revision"],
+            wheel_sha256=manifest["wheel_sha256"],
+        )
+        # Archive preflight must still precede all install acquisition.
+        _archive_modules(tool.read(wheel))
+        for argv in (["git", "--version"], ["docker", "--version"]):
+            record = tool.command(argv)
+            _require(record["status"] == 0, "host prerequisite failed: " + repr(record))
+        expectation = None
+        if leg.profile == "negative":
+            expectation = tool.load(directory / "host_tests/expectation_input.json")
+            _require(
+                type(expectation) is dict
+                and set(expectation)
+                == {"schema_version", "case_id", "expected_override"}
+                and type(expectation["schema_version"]) is int
+                and expectation["schema_version"] == 1
+                and expectation["case_id"] == leg.case_id
+                and leg.case_id
+                in {"staged_bytes", "argv", "command_status", "cleanup"},
+                "invalid prepared expectation",
+            )
+            override = expectation["expected_override"]
+            _require(
+                (
+                    isinstance(override, str)
+                    if leg.case_id == "staged_bytes"
+                    else type(override) is list
+                    and all(isinstance(item, str) and item for item in override)
+                    if leg.case_id == "argv"
+                    else type(override) is int
+                    if leg.case_id == "command_status"
+                    else type(override) is bool
+                ),
+                "invalid prepared expectation value",
+            )
+        with DirectoryDescriptor.open_secure_path(workspace.ops, directory) as existing:
+            prepared = "host_tests" in existing.list_names()
+        workspace.prepare(
+            profile=leg.profile, expectation=expectation, prepared=prepared
+        )
+        compare_binding(tool, manifest, wheel)
+        workspace.provision(wheel, manifest["wheel_sha256"], interpreter=sys.executable)
+        origin = workspace.prepare_provenance(wheel, leg.source_identity)
+        _verify_installed(workspace, origin)
+        workspace.host_context["configured_image_id"] = leg.image
+        workspace.host_context["leg_budget"] = budget
+        workspace.host_context["service_observations_path"] = str(
+            directory / "service-observations.json"
+        )
+        # The original context file is exclusive and already retained. Publish
+        # the augmented fixture context at a distinct recorded path, no rewrite.
+        context = directory / "execution-context.json"
+        workspace._generate(context, canonical(workspace.host_context))
+        workspace.environment_extra = {"FOOTMAN_HOST_CONTEXT": str(context)}
+        attribution = workspace._command(
+            [
+                workspace.python,
+                "-P",
+                "-c",
+                "import importlib.metadata as m,json,sys; import footman,footman.process; "
+                "print(json.dumps({'python':sys.version,'interpreter':sys.executable,'package':footman.__file__,'process':footman.process.__file__,'dependencies':{n:m.version(n) for n in ('mcp','pytest','pytest-xdist')}}))",
+            ]
+        )
+        _require(attribution["status"] == 0, "installed import smoke failed")
+        imported = json.loads(attribution["stdout"])
+        paths = {item["name"]: item["expected_path"] for item in origin["modules"]}
+        _require(
+            imported["interpreter"] == str(workspace.python)
+            and imported["package"] == paths["footman"]
+            and imported["process"] == paths["footman.process"],
+            "installed import origins disagree with bound wheel",
+        )
+        report["environment"] = imported | {"os": platform.platform()}
+        for argv in (
+            [workspace.venv / "bin/footman", "--help"],
+            [workspace.python, "-P", "-m", "footman", "--help"],
+        ):
+            smoke = workspace._command(argv)
+            _require(smoke["status"] == 0, "installed help smoke failed")
+        workspace.junit = directory / "pytest.xml"
+        result = workspace.run_pytest()
+        counts = _counts(workspace)
+        xpasses = re.findall(
+            rb"(?:^|[ ,])(\d+) xpassed(?:[, ]|$)", result["stdout"], re.MULTILINE
+        )
+        if xpasses:
+            counts["xpassed"] = int(xpasses[-1])
+            counts["passed"] -= counts["xpassed"]
+        if result["status"] == 0 or leg.profile == "negative":
+            verified = _verified_evidence(workspace)
+        _require(counts["collected"] > 0, "zero host items collected")
+        _require(
+            not any(counts[name] for name in ("skipped", "xfailed", "xpassed")),
+            "host skip policy failed",
+        )
+    except BaseException as error:
+        primary = error
+    failures = CleanupFailures(primary)
+
+    def image_attribution():
+        path = directory / "service-observations.json"
+        if not os.path.lexists(path):
+            report["warnings"].append("observed image metadata unavailable")
+            return
+        try:
+            value = tool.load(path)
+        except json.JSONDecodeError:
+            report["warnings"].append("unusable observed image metadata")
+            return
+        observed = value.get("observed_image_id") if isinstance(value, dict) else None
+        if isinstance(observed, str) and re.fullmatch(
+            r"sha256:[0-9a-fA-F]{64}", observed
+        ):
+            report["observed_image_id"] = observed
+        else:
+            report["warnings"].append("unusable observed image metadata")
+        report["image_metadata"] = value
+
+    failures.run(image_attribution, ordinary=(Exception,))
+    if manifest is not None:
+        failures.run(
+            lambda: compare_binding(tool, manifest, wheel), ordinary=(Exception,)
+        )
+    if workspace.ready:
+        failures.run(workspace.verify_copy, ordinary=(Exception,))
+    report.update(
+        venv=str(workspace.venv),
+        expected_origin_path=str(directory / "expected-origin.json"),
+        provenance_evidence_path=str(directory / "provenance.json"),
+        counts=counts,
+        inventory=workspace.inventory,
+        generated=workspace.generated,
+    )
+    report["cleanup_complete"] = all(
+        owner.cleanup_status.complete and not owner.cleanup_status.failures
+        for owner in (*tool.owners, *workspace.owners)
+    )
+    report["pytest_status"] = None if result is None else result["status"]
+    report["success"] = (
+        primary is None
+        and result is not None
+        and result["status"] == 0
+        and report["cleanup_complete"]
+    )
+
+    for index, record in enumerate((*tool.commands, *workspace.commands)):
+        prefix = f"command-{index}-"
+        # Keep raw status/metadata even if one of this command's writes fails.
+        # Paths describe attempted destinations, not proof of retained bytes.
+        report["commands"].append(tool.command_evidence(record, evidence, prefix))
+        failures.run(
+            lambda record=record, prefix=prefix: tool.retain_command(
+                record, evidence, prefix
+            ),
+            ordinary=(Exception,),
+        )
+    try:
+        selected = failures.complete()
+    except BaseException as error:
+        selected = error
+    if selected is None:
+        selected = primary
+    if selected is not None:
+        report["success"] = False
+        report["warnings"].append(type(selected).__name__ + ": " + str(selected))
+    publication = CleanupFailures(selected)
+    publication.run(
+        lambda: tool.write(evidence / "report.json", canonical(report)),
+        ordinary=(Exception,),
+    )
+    published = publication.complete()
+    if published is not None:
+        selected = published
+    if selected is not None:
+        raise selected
+    return SimpleNamespace(
+        pytest_status=result["status"],
+        counts=counts,
+        failure_kind=None
+        if result["status"] == 0
+        else "assertion"
+        if counts["failed"]
+        else "policy",
+        cleanup_complete=report["cleanup_complete"],
+        evidence_complete=verified,
+        stdout=result["stdout"],
+        stderr=result["stderr"],
+        commands=report["commands"],
+        success=report["success"],
+    )
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--wheel", required=True, type=Path)
+    parser.add_argument("--source-identity", required=True, type=Path)
+    parser.add_argument("--image", required=True)
+    parser.add_argument("--evidence", required=True, type=Path)
+    args = parser.parse_args(argv)
+    root = checked_root(__file__, "run-host-acceptance")
+    _require(
+        re.fullmatch(r"(?:sha256:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{12,64})", args.image),
+        "invalid configured image ID",
+    )
+    tool = Tooling(root)
+    evidence = tool.external(args.evidence)
+    directory = evidence.parent / (evidence.name + "-workspace")
+    workspace = _Workspace(root, directory)
+    workspace._mkdir(directory)
+    leg = SimpleNamespace(
+        wheel=args.wheel.absolute(),
+        source_identity=args.source_identity.absolute(),
+        image=args.image,
+        evidence=evidence,
+        workspace=directory,
+        profile="normal",
+        suite_paths=(directory / "host_tests",),
+        case_id=None,
+    )
+    result = _execute_prepared_host_leg(leg)
+    return (
+        result.pytest_status
+        if result.pytest_status != 0
+        else 0
+        if result.success
+        else 1
+    )
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(1) from error

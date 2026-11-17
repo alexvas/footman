@@ -19,7 +19,7 @@ from tests import mcp_attribution_support as attribution
 from tests import mcp_provenance as p
 from tests import mcp_wheel_support as wheel
 from tests.python_check_fixtures import load_check_module
-from tests.test_green_gate import assert_documented_suite
+from tests.test_green_gate import assert_documented_suite, assert_registered_suite
 from tests.test_python_check_lifecycle import scannable as scannable
 from tests.wheel_attribution_cases import CASES
 
@@ -128,28 +128,74 @@ def test_host_interfaces_are_registered_before_red():
         "--image <configured-image-id> --evidence <directory>"
     ) in text
     assert "host_tests/" in text
-    assert (
-        ".venv/bin/python -m pytest tests/test_host_acceptance_contracts.py "
-        "-n 2 --dist worksteal --tb=short -q"
-    ) in text
     queue = text.split("| Queue priority | Registered suite | Workers |", 1)[1]
     queue = queue.split("\n\n", 1)[0]
     rows = re.findall(r"^\| (\d+) \| (.*?) \| (\d+) \|$", queue, re.MULTILINE)
     assert [int(priority) for priority, _, _ in rows] == list(range(1, 14))
-    assert rows[-3] == ("11", "Phase 10 integrated acceptance and portability", "2")
-    assert rows[-2] == (
-        "12",
-        "Phase 11 Docker-free host-runner contracts "
-        "(`tests/test_host_acceptance_contracts.py`)",
-        "2",
+    suites = (
+        (
+            "11",
+            "Phase 10 integrated acceptance and portability",
+            ("tests/test_dispatch_acceptance.py",),
+        ),
+        (
+            "12",
+            "Phase 11 Docker-free host-runner contracts "
+            "(`tests/test_host_acceptance_contracts.py`)",
+            ("tests/test_host_acceptance_contracts.py",),
+        ),
+        (
+            "13",
+            "Standalone Linux proc-observer regression (`tests/test_proc_observer.py`)",
+            ("tests/test_proc_observer.py",),
+        ),
     )
-    assert rows[-1] == (
-        "13",
-        "Standalone Linux proc-observer regression (`tests/test_proc_observer.py`)",
-        "2",
-    )
+    for row, (priority, name, modules) in zip(rows[-3:], suites, strict=True):
+        assert row[:2] == (priority, name)
+        assert int(row[2]) == assert_registered_suite(text, modules)
     assert "Historical Phase-10 validation covers eleven commands" in text
     assert "(through queue priority 11)" in text
+
+
+@pytest.mark.parametrize(
+    "priority, module",
+    [
+        (11, "tests/test_dispatch_acceptance.py"),
+        (12, "tests/test_host_acceptance_contracts.py"),
+        (13, "tests/test_proc_observer.py"),
+    ],
+)
+@pytest.mark.parametrize("consistent", [True, False])
+def test_host_registration_uses_documented_allocations(
+    monkeypatch, priority, module, consistent
+):
+    path = h.ROOT / "docs/testing.md"
+    read = p.read
+    text = read(path).decode()
+    allocation = assert_registered_suite(text, (module,))
+    replacement = 1 if allocation != 1 else 2
+    text, count = re.subn(
+        rf"(?m)^(\| {priority} \| .*? \| )\d+( \|)$",
+        lambda match: f"{match[1]}{replacement}{match[2]}",
+        text,
+    )
+    assert count == 1
+    if consistent:
+        prefix = re.escape(f".venv/bin/python -m pytest {module} -n ")
+        text, count = re.subn(
+            rf"(?m)^({prefix})\d+",
+            lambda match: f"{match[1]}{replacement}",
+            text,
+        )
+        assert count == 1
+    monkeypatch.setattr(
+        p, "read", lambda target: text.encode() if target == path else read(target)
+    )
+    if consistent:
+        test_host_interfaces_are_registered_before_red()
+    else:
+        with pytest.raises(AssertionError):
+            test_host_interfaces_are_registered_before_red()
 
 
 @pytest.mark.parametrize("name", h.SURFACES)
@@ -6462,3 +6508,336 @@ def test_orchestrator_report_has_handoff_identity_counts_warnings_and_resource_s
         assert isinstance(leg["counts"], dict)
         assert p.read(leg["stdout_path"]) is not None
         assert p.read(leg["stderr_path"]) is not None
+
+
+@pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
+@pytest.mark.parametrize("teardown", [False, True])
+def test_delivered_negative_suite_uses_copied_assertions_and_exact_outcomes(
+    tmp_path, simulated_host_run, case, teardown
+):
+    from tests import host_execution_controls as controls
+    from tests import host_expectation_support as expectations
+
+    overrides = {
+        "staged_bytes": "wrong staged value",
+        "argv": ["wrong"],
+        "command_status": simulated_host_run["status"] + 1,
+        "cleanup": False,
+    }
+    workspace, result = controls.profile(
+        tmp_path,
+        simulated_host_run,
+        negative=True,
+        expectation={
+            "schema_version": 1,
+            "case_id": case,
+            "expected_override": overrides[case],
+        },
+        teardown=teardown,
+    )
+    assert result["status"] == 1, result
+    assert (workspace / "flow-acquired").exists()
+    classified = expectations.classify_negative_result(result, case)
+    assert classified["detected"] is (not teardown), classified
+    assert b"FIXTURE_BASELINE_VERIFIED" in result["stdout"]
+    assert p.read(workspace / "host_tests/test_negative_expectations.py") == p.read(
+        h.ROOT / "host_tests/test_negative_expectations.py"
+    )
+
+
+@pytest.mark.parametrize(
+    "control", ["normal", "normal-input", "unknown", "boolean", "duplicate", "missing"]
+)
+def test_delivered_host_fixture_input_validation_precedes_flow_acquisition(
+    tmp_path, simulated_host_run, control
+):
+    from tests import host_execution_controls as controls
+
+    valid = {"schema_version": 1, "case_id": "cleanup", "expected_override": False}
+    value, raw = None, None
+    if control in {"normal-input", "unknown", "boolean"}:
+        value = dict(valid)
+        if control == "unknown":
+            value["case_id"] = "not-an-expectation"
+        if control == "boolean":
+            value["schema_version"] = True
+    if control == "duplicate":
+        raw = b'{"schema_version":1,"schema_version":1,"case_id":"cleanup","expected_override":false}'
+    workspace, result = controls.profile(
+        tmp_path,
+        simulated_host_run,
+        negative=control not in {"normal", "normal-input"},
+        expectation=value,
+        raw=raw,
+    )
+    if control == "normal":
+        assert result["status"] == 0, result
+        assert (workspace / "flow-acquired").exists()
+    else:
+        assert result["status"] != 0, result
+        assert not (workspace / "flow-acquired").exists()
+        assert b"FIXTURE_BASELINE_VERIFIED" not in result["stdout"].splitlines()
+
+
+@pytest.mark.parametrize("fault", ["none", "image", "inspection", "mkdir", "copy"])
+def test_host_copy_assertions_pin_native_manifest_identity(simulated_host_run, fault):
+    import copy
+
+    from tests.host_acceptance_assertions import verify_copy
+
+    manifest = copy.deepcopy(simulated_host_run["manifest"])
+    if fault == "image":
+        manifest["configured_image_id"] = "a" * 12
+    elif fault == "inspection":
+        manifest["infrastructure_operations"][0]["argv"][-1] = "f" * 64
+    elif fault == "mkdir":
+        manifest["infrastructure_operations"][1]["argv"].insert(-1, "-p")
+    elif fault == "copy":
+        manifest["infrastructure_operations"][2]["argv"][-1] += "wrong/"
+    if fault == "none":
+        verify_copy(manifest, simulated_host_run["cwd"])
+    else:
+        with pytest.raises(AssertionError):
+            verify_copy(manifest, simulated_host_run["cwd"])
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "observed-missing",
+        "observed-nonstring",
+        "observed-abbreviated",
+        "observed-malformed",
+        "observed-unrelated",
+        "inspection-missing",
+        "inspection-empty",
+        "inspection-abbreviated",
+        "inspection-unrelated",
+        "inspection-extra-field",
+    ],
+)
+def test_host_copy_assertions_require_observed_inspection_image(
+    simulated_host_run, fault
+):
+    import base64
+    import copy
+
+    from tests.host_acceptance_assertions import verify_copy
+
+    manifest = copy.deepcopy(simulated_host_run["manifest"])
+    observed = manifest["observed_image_id"]
+    unrelated = "sha256:" + ("0" if observed != "sha256:" + "0" * 64 else "1") * 64
+    if fault.startswith("observed-"):
+        manifest["observed_image_id"] = {
+            "observed-missing": None,
+            "observed-nonstring": 17,
+            "observed-abbreviated": observed[:19],
+            "observed-malformed": "sha256:" + "z" * 64,
+            "observed-unrelated": unrelated,
+        }[fault]
+    else:
+        output = manifest["infrastructure_operations"][0]["stdout"]
+        fields = base64.b64decode(output["excerpt_base64"]).rstrip(b"\n").split(b"|")
+        assert len(fields) == 3 and fields[2] == observed.encode()
+        if fault == "inspection-missing":
+            fields = fields[:2]
+        elif fault == "inspection-empty":
+            fields[2] = b""
+        elif fault == "inspection-abbreviated":
+            fields[2] = observed[:19].encode()
+        elif fault == "inspection-unrelated":
+            fields[2] = unrelated.encode()
+        elif fault == "inspection-extra-field":
+            fields.append(b"unexpected")
+        output["excerpt_base64"] = base64.b64encode(b"|".join(fields) + b"\n").decode()
+    with pytest.raises(AssertionError, match="observed image attribution"):
+        verify_copy(manifest, simulated_host_run["cwd"])
+
+
+def test_host_copy_observed_image_need_not_equal_configured_image(simulated_host_run):
+    import copy
+
+    from tests.host_acceptance_assertions import verify_copy
+
+    manifest = copy.deepcopy(simulated_host_run["manifest"])
+    observed = manifest["observed_image_id"]
+    configured = "sha256:" + ("0" if observed != "sha256:" + "0" * 64 else "1") * 64
+    manifest["configured_image_id"] = configured
+    launch = manifest["startup"]["argv"]
+    launch[launch.index("--") + 1] = configured
+    assert configured != observed
+    verify_copy(manifest, simulated_host_run["cwd"])
+
+
+def test_host_producer_success_pipeline_retains_separate_sessions(
+    tmp_path, monkeypatch, simulated_host_run
+):
+    # Explicit session-boundary double over a real scripted-Docker manifest.
+    # Real Git/index preparation and producer/assertion/finalization code run;
+    # manufactured probe observations are NOT container or provenance proof.
+    import base64
+    import copy
+    import time
+    import tomllib
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from host_tests import execution as e
+
+    context = {
+        "support_root": str(tmp_path),
+        "service_deadline_monotonic": time.monotonic() + 120,
+        "configured_image_id": simulated_host_run["configured_image"],
+        "provenance_evidence_path": str(tmp_path / "provenance.json"),
+        "expected_origin_path": str(tmp_path / "origin.json"),
+        "wheel_sha256": "f" * 64,
+        "neutral_cwd": str(tmp_path),
+        "service_observations_path": str(tmp_path / "image.json"),
+    }
+    flow = e.HostFlow(context)
+    active, contexts, calls = [], [], []
+
+    @asynccontextmanager
+    async def verified(selected, config, observation):
+        contexts.append(selected)
+        scenario = active[-1]
+        observation.owner = SimpleNamespace(
+            cleanup_status=SimpleNamespace(complete=True, failures=())
+        )
+        observation.result = SimpleNamespace(returncode=0)
+        observation.stderr_tail.extend(b"explicit synthetic diagnostic tail")
+        p.write(
+            Path(selected["provenance_evidence_path"]),
+            p.canonical({"argv": ["synthetic-boundary"]}),
+        )
+
+        class Session:
+            async def list_tools(self):
+                return SimpleNamespace(
+                    tools=[SimpleNamespace(name="run_privileged_command")]
+                )
+
+            async def call_tool(self, name, arguments):
+                calls.append((name, arguments))
+                baseline = copy.deepcopy(simulated_host_run)
+                manifest, value, streams = (
+                    baseline["manifest"],
+                    baseline["value"],
+                    baseline["streams"],
+                )
+                destination = scenario["destination"]
+                directory = scenario["case"]
+                identity = manifest["container_id"]
+                paths = {
+                    key: str(directory / Path(path).name)
+                    for key, path in manifest["paths"].items()
+                }
+                manifest.update(
+                    paths=paths,
+                    output_directory=str(directory),
+                    phase=None,
+                    command_argv=scenario["command"],
+                    return_code=0,
+                    outcome="succeeded",
+                    cwd=destination,
+                    docker_command_argv=[
+                        "docker",
+                        "exec",
+                        "-u",
+                        "root",
+                        "-w",
+                        destination,
+                        identity,
+                        *scenario["command"],
+                    ],
+                )
+                settings = tomllib.loads(p.read(scenario["config"]).decode())
+                manifest["startup"]["argv"] = [
+                    context["configured_image_id"] if arg == "{image_id}" else arg
+                    for arg in settings["container_start_argv"]
+                ]
+                manifest["snapshot"].update(
+                    tree_id=scenario["tree"],
+                    path=str(directory / "never-acquired-snapshot"),
+                )
+                operations = manifest["infrastructure_operations"]
+                operations[1]["argv"][-1] = destination
+                operations[2]["argv"] = [
+                    "docker",
+                    "cp",
+                    manifest["snapshot"]["path"] + "/.",
+                    identity + ":" + destination + "/",
+                ]
+                value.update(paths, return_code=0, outcome="succeeded")
+                probe = {
+                    "payload": base64.b64encode(
+                        flow.git(
+                            scenario["repository"],
+                            "show",
+                            scenario["tree"] + ":payload",
+                        )
+                    ).decode(),
+                    "binary": base64.b64encode(e.BINARY).decode(),
+                    "payload_mode": 0o644,
+                    "wrapper_mode": 0o755,
+                    "link": True,
+                    "target": "payload",
+                    "uid": 0,
+                    "cwd": destination,
+                    "argv": scenario["arguments"],
+                    "entries": ["binary", "internal-link", "payload", "probe-wrapper"],
+                }
+                streams.update(
+                    stdout=p.canonical(probe) + b"\nSTDOUT\x00\xff\n",
+                    stderr=b"STDERR\x00\x80\n",
+                )
+                failed = scenario["preparation"] != "fresh"
+                if failed:
+                    manifest.update(
+                        return_code=None,
+                        outcome="dispatch_failed",
+                        docker_command_argv=[],
+                    )
+                    value.update(return_code=None, outcome="dispatch_failed")
+                    operations[1]["return_code"] = 1
+                    operations[2].update(argv=[], return_code=None)
+                    streams.update(stdout=b"", stderr=b"")
+                for stream, field in (
+                    ("stdout", "stdoutPath"),
+                    ("stderr", "stderrPath"),
+                    ("startup_stdout", "startupStdoutPath"),
+                    ("startup_stderr", "startupStderrPath"),
+                ):
+                    p.write(Path(paths[field]), streams[stream])
+                p.write(Path(paths["resultPath"]), p.canonical(manifest))
+                return SimpleNamespace(structuredContent=value, isError=failed)
+
+        yield Session()
+
+    monkeypatch.setattr(e, "verified_session", verified)
+    for preparation in ("fresh", "missing-parent", "existing"):
+        scenario = flow.prepare("wrapper", 0, None, preparation)
+        active.append(scenario)
+        observed = flow.execute(scenario)
+        if preparation == "fresh":
+            flow.verify(scenario, observed)
+        else:
+            from tests.host_acceptance_assertions import verify_preparation_failure
+
+            verify_preparation_failure(
+                observed["value"],
+                observed["manifest"],
+                observed["streams"],
+                scenario["destination"],
+            )
+    flow.finish()
+    assert (
+        len(flow.services) == 3
+        and len({c["provenance_evidence_path"] for c in contexts}) == 3
+    )
+    assert (
+        contexts[0]["provenance_evidence_path"] == context["provenance_evidence_path"]
+    )
+    assert calls == [("run_privileged_command", {})] * 3
+    assert p.load(flow.root / "summary.json")["cases"] == flow.cases
+    flow.finish()  # no summary rewrite, new session, acquisition or renewed budget

@@ -9,7 +9,7 @@ import pytest
 
 from footman.process import StreamOutcome
 from tests.dispatcher_harness import read_bytes
-from tests.test_green_gate import assert_documented_suite
+from tests.test_green_gate import assert_documented_suite, assert_registered_suite
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,8 +47,10 @@ def test_phase9_build_binding_is_defensively_immutable(tmp_path):
 
 
 def test_registered_suite():
-    command = ".venv/bin/python -m pytest tests/test_mcp_transport.py tests/test_mcp_server.py -n 2 --dist worksteal --tb=short -q"
-    assert command in read_bytes(ROOT / "docs/testing.md").decode()
+    assert_registered_suite(
+        read_bytes(ROOT / "docs/testing.md").decode(),
+        ("tests/test_mcp_transport.py", "tests/test_mcp_server.py"),
+    )
     for name in ("docs/testing.md", "docs/python-checks.md", "README.md"):
         assert_documented_suite(read_bytes(ROOT / name).decode())
 

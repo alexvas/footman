@@ -61,15 +61,15 @@ in either mode. Run from the repository root against one unchanged candidate:
 | 2 | Phase 4 snapshot | 1 |
 | 3 | Phase 5 launcher, including split scenario modules | 6 |
 | 4 | Phase 6 lifecycle, including split scenario modules | 4 |
-| 5 | Phase 8 owned stdin (all four registered modules) | 2 |
+| 5 | Phase 8 owned stdin (all four registered modules) | 8 |
 | 6 | Phase 1 foundation | 3 |
 | 7 | Phase 3 output reservation | 1 |
-| 8 | Phase 2 configuration | 2 |
+| 8 | Phase 2 configuration | 8 |
 | 9 | Standalone scaffold regression registered under Phase 2 | 1 |
-| 10 | Phase 9 MCP transport and server (both registered modules) | 2 |
-| 11 | Phase 10 integrated acceptance and portability | 2 |
-| 12 | Phase 11 Docker-free host-runner contracts (`tests/test_host_acceptance_contracts.py`) | 2 |
-| 13 | Standalone Linux proc-observer regression (`tests/test_proc_observer.py`) | 2 |
+| 10 | Phase 9 MCP transport and server (both registered modules) | 8 |
+| 11 | Phase 10 integrated acceptance and portability | 8 |
+| 12 | Phase 11 Docker-free host-runner contracts (`tests/test_host_acceptance_contracts.py`) | 8 |
+| 13 | Standalone Linux proc-observer regression (`tests/test_proc_observer.py`) | 8 |
 
 **Phase-11 real-base serialization exception.** The registered Phase-11 command
 and the unscoped gate both collect
@@ -91,7 +91,7 @@ phase, including each earlier phase suite. Phase-11 registration established
 twelve commands; the separately registered observer repair adds priority 13,
 bringing the current queue to thirteen commands without renumbering earlier
 entries. Current observer-repair verification requires its standalone command
-alongside the unchanged Phase-10 command; it does not supersede the historical
+alongside the current Phase-10 command; it does not supersede the historical
 Phase-10 registration or attribute observer coverage to earlier results.
 Historical Phase-10 validation covers eleven commands
 (through queue priority 11), without a dependency on the later Phase-11 suite.
@@ -123,8 +123,9 @@ development machine with 32 available logical CPUs: median combined wall time
 was 111.67 s for gate then sequential suites, 85.27 s for gate plus a sequential
 suite branch, and 28.44 s for this budgeted schedule. All commands passed. These
 are historical **loadfile** performance observations, predating worksteal
-adoption, not current verification or a guarantee for worksteal/different I/O
-loads. The admission budgets are retained; future timings must name the scheduler
+adoption and the change from two to eight workers for specialised commands,
+not current verification or a guarantee for the current worker allocations,
+worksteal or different I/O loads. The admission budgets are retained; future timings must name the scheduler
 actually used. The automatic working-policy choice is limited to the
 32-or-more-available-CPU condition above; lower or unknown capacity uses the
 sequential fallback, not an unmeasured concurrent default. Do not silently change
@@ -229,7 +230,7 @@ Prerequisites are the same as the Phase 1 suite; Docker is not required.
 Run this command for configuration RED and subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_configuration.py tests/test_scaffold.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_configuration.py tests/test_scaffold.py -n 8 --dist worksteal --tb=short -q
 ```
 
 The missing-file startup replacement alone can be recorded before the remaining
@@ -491,7 +492,7 @@ Use the Phase 1 prerequisites; no MCP or Docker is required. Register and run
 this exact command for owned-stdin RED and subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_process_stdin.py tests/test_process_lifecycle.py tests/test_process_orthogonal_results.py tests/test_process_single_collection.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_process_stdin.py tests/test_process_lifecycle.py tests/test_process_orthogonal_results.py tests/test_process_single_collection.py -n 8 --dist worksteal --tb=short -q
 ```
 
 The stdin suite exercises the opt-in process foundation independently of MCP.
@@ -517,7 +518,7 @@ required. Register and run this exact command for MCP transport/server RED and
 subsequent regression:
 
 ```sh
-.venv/bin/python -m pytest tests/test_mcp_transport.py tests/test_mcp_server.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_mcp_transport.py tests/test_mcp_server.py -n 8 --dist worksteal --tb=short -q
 ```
 
 `tests/test_mcp_transport.py` holds the project-owned test-client transport, the
@@ -653,21 +654,21 @@ Register and run the observer repair separately, with the same Linux/POSIX and
 unprivileged-user prerequisites as Phase 10:
 
 ```sh
-.venv/bin/python -m pytest tests/test_proc_observer.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_proc_observer.py -n 8 --dist worksteal --tb=short -q
 ```
 
 This module covers synthetic proc ownership, PID reuse, narrow leaf-open
 disappearance and independent/repeated cleanup failure authority. It is required
 for current observer-repair verification alongside the original Phase-10 suite
-and the unscoped gate, with its own two-worker allocation at queue priority 13.
+and the unscoped gate, with its own eight-worker allocation at queue priority 13.
 It is not part of the historical Phase-10 registration or validation counts.
 
 ## Phase 10 integrated acceptance and portability suite
 
-Register and run the Docker-free acceptance module with its original command:
+Register and run the Docker-free acceptance module with its current command:
 
 ```sh
-.venv/bin/python -m pytest tests/test_dispatch_acceptance.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_dispatch_acceptance.py -n 8 --dist worksteal --tb=short -q
 ```
 
 Prerequisites are the Phase-9 tools and pinned SDK/dependencies, including uv,
@@ -979,11 +980,11 @@ For a requested isolated lifetime reproduction, retain the registered parallel
 settings and select only the explicit node:
 
 ```sh
-.venv/bin/python -m pytest 'tests/test_dispatch_acceptance.py::test_relocated_helper_loss_reconciliation[lifetime]' -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest 'tests/test_dispatch_acceptance.py::test_relocated_helper_loss_reconciliation[lifetime]' -n 8 --dist worksteal --tb=short -q
 ```
 
 Compare this with repeated executions of the exact full eight-worker development
-command registered above, not merely the two-worker Phase-10 module. Each repeat
+command registered above, not merely the narrower eight-worker Phase-10 module. Each repeat
 is a separate invocation with full output, actual exit status and worker-local
 fixture resources. Give every invocation its own exclusively created, short
 `PYTEST_DEBUG_TEMPROOT` parent (for example `/tmp/fpd-<id>/r01`); do not reuse it
@@ -1021,7 +1022,7 @@ The full-suite command includes:
 Register the Docker-free runner/build/inventory contracts before Phase-11 RED:
 
 ```sh
-.venv/bin/python -m pytest tests/test_host_acceptance_contracts.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_host_acceptance_contracts.py -n 8 --dist worksteal --tb=short -q
 ```
 
 Prerequisites are the development environment above, Git, PATH-resolved
@@ -1400,7 +1401,7 @@ runtime result fields or production MCP capabilities:
   launching the service. Normal real-host support excludes these probe/proxy files
   and the relocated Docker-stub bundle used only by isolated development controls.
 
-Phase-11 development validation adds this registered two-worker command after
+Phase-11 development validation adds this registered eight-worker command after
 the eleven earlier specialised commands, using the same shared eight-worker
 specialised budget and CPU-capacity condition. Pending RED failures are not a
 passing gate and do not invalidate the historical Phase-10 result as history.
@@ -1419,7 +1420,7 @@ wrapper, inventoried under `scripts/`.
 Run the additional core branch/loader matrix with:
 
 ```sh
-.venv/bin/python -m pytest tests/test_host_orchestration_core.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_host_orchestration_core.py -n 8 --dist worksteal --tb=short -q
 ```
 
 Together with the registered Phase-11 contracts, these tests run only disposable
@@ -1439,7 +1440,7 @@ provisioning independently of the later public bootstrap and provenance work.
 Run its Docker-free contracts with:
 
 ```sh
-.venv/bin/python -m pytest tests/test_host_workspace.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_host_workspace.py -n 8 --dist worksteal --tb=short -q
 ```
 
 Each leg uses an exclusively prepared external workspace and a fresh venv,
@@ -1490,7 +1491,7 @@ entry point or actual Docker scenario is delivered by this layer.
 Run its Docker-free contracts and workspace regressions with:
 
 ```sh
-.venv/bin/python -m pytest tests/test_host_provenance.py tests/test_host_provenance_faults.py tests/test_host_workspace.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_host_provenance.py tests/test_host_provenance_faults.py tests/test_host_workspace.py -n 8 --dist worksteal --tb=short -q
 ```
 
 Tests include real exact-wheel fresh installations and SDK initialization/tool
@@ -1511,7 +1512,7 @@ is established by these Docker-free results.
 Run the focused tooling/ownership, provenance and loader regressions with:
 
 ```sh
-.venv/bin/python -m pytest tests/test_host_build_tooling.py tests/test_host_provenance.py tests/test_host_provenance_faults.py tests/test_host_workspace.py tests/test_host_orchestration_core.py -n 2 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests/test_host_build_tooling.py tests/test_host_provenance.py tests/test_host_provenance_faults.py tests/test_host_workspace.py tests/test_host_orchestration_core.py -n 8 --dist worksteal --tb=short -q
 ```
 
 Shared implementation helpers live in private checkout-only
@@ -1570,6 +1571,57 @@ not imports or substitutes for the controlled production helper. All scripted
 and real-uv development build contracts use disposable prepared roots and prove
 the candidate checkout's dist artifacts unchanged. Host suites and full
 orchestration integration are separate delivery work.
+
+### Authored host execution scenarios
+
+Task 11.9 delivers `host_tests/test_execution.py` and the dedicated
+`host_tests/test_negative_expectations.py`, using common `host_tests/execution.py`
+fixtures and copied `tests.host_acceptance_assertions`. The normal item exercises
+image `python3` and a staged shell wrapper, each with phase/no-phase and 0/17
+statuses, then missing-parent/existing-destination failures. The image must supply
+`python3`, `sh`, `sleep infinity`, `mkdir --`, an existing directory-only `/tmp`,
+and the configured root identity; no image is built, pulled or provisioned here.
+The byte probe checks the exact staged regular/binary bytes, executable mode,
+actual internal symlink/target, exact directory membership (no Git metadata,
+untracked/ignored/image residue), literal argv, root UID and in-container cwd.
+Fresh UUID-named final destinations are created by Footman, not fixture retries.
+An existing `/tmp` destination is refused before copy or configured execution,
+so it cannot merge snapshot contents with pre-existing image content.
+
+The copied conftest validates fixed-path expectation JSON at session start only
+for the exact dedicated negative module; normal/mixed selection rejects it.
+All four controls first complete the unmodified shared baseline, then change
+only the selected expectation. Controller outcomes preserve setup/call/teardown
+and independently reject cleanup/unrelated failures. This registration does not
+execute or establish real Docker behavior: operator task 11.15 is still pending,
+as are timeout/cleanup suite work and full orchestration integration.
+
+Generated source fixtures, Git command streams/statuses, per-service provenance,
+bounded diagnostic stderr tails (65536-byte limit, not full raw stderr), MCP
+results and summaries are retained under recorded external workspace paths.
+They never target the candidate index. Service sessions use the existing
+archive-authoritative direct-wheel bootstrap, not the nested relocated lifecycle
+variant. The first service retains the runner's canonical provenance artifact;
+subsequent services have separate exclusive evidence paths. Each session retains
+its same process owner/observation through failure; finalization never retries.
+Package-byte provenance excludes third-party dependencies/stdlib and generated
+launcher hashes remain attribution, not archive-member expectations.
+
+Run the Docker-free producer/ownership/policy contracts with:
+
+```sh
+.venv/bin/python -m pytest tests/test_host_execution.py tests/test_host_package.py -n 8 --dist worksteal --tb=short -q
+```
+
+The existing registered Phase-11 command additionally executes the actual copied
+host conftest/test bodies with explicit execution-boundary doubles over retained
+real MCP/scripted-Docker manifests. All four intended mismatches preserve actual
+nonzero nested pytest statuses; malformed/duplicate/missing JSON and normal
+input leakage fail before flow acquisition. These are fixture sensitivity and
+isolation controls, not wheel-install or container-semantic proof. Existing
+provenance/workspace and Phase-11 suites retain stale/swapped-install,
+wheel-binding, stale `__main__`, missing/extra/stale container/supervision,
+symlink/wrong-root, launcher, shadow-sentinel and evidence-owner fault controls.
 
 ## Future implementation
 

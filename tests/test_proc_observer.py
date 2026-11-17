@@ -16,17 +16,14 @@ from footman.filesystem.descriptors import (
 )
 from tests import mcp_provenance as p
 from tests.acceptance_portability_support import incarnation
+from tests.test_green_gate import assert_registered_suite
 
 
 def test_proc_observer_is_registered_as_standalone_suite():
-    command = (
-        ".venv/bin/python -m pytest tests/test_proc_observer.py "
-        "-n 2 --dist worksteal --tb=short -q"
-    )
     documentation = p.read(
         Path(__file__).resolve().parents[1] / "docs/testing.md"
     ).decode()
-    assert documentation.count(command) == 1
+    assert_registered_suite(documentation, ("tests/test_proc_observer.py",))
 
 
 @pytest.fixture

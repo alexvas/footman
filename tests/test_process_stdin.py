@@ -1470,10 +1470,17 @@ def _isolated_fd_alias_control(tmp_path, scenario, failure):
 def test_registered_suite_documentation_contract():
     from pathlib import Path
 
-    from tests.test_green_gate import assert_documented_suite
+    from tests.test_green_gate import assert_documented_suite, assert_registered_suite
 
     root = Path(__file__).resolve().parents[1]
     for name in ("docs/testing.md", "docs/python-checks.md", "README.md"):
         assert_documented_suite((root / name).read_text())
-    command = ".venv/bin/python -m pytest tests/test_process_stdin.py tests/test_process_lifecycle.py tests/test_process_orthogonal_results.py tests/test_process_single_collection.py -n 2 --dist worksteal --tb=short -q"
-    assert (root / "docs/testing.md").read_text().count(command) == 1
+    assert_registered_suite(
+        (root / "docs/testing.md").read_text(),
+        (
+            "tests/test_process_stdin.py",
+            "tests/test_process_lifecycle.py",
+            "tests/test_process_orthogonal_results.py",
+            "tests/test_process_single_collection.py",
+        ),
+    )

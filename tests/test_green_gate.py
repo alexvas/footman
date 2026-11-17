@@ -120,6 +120,77 @@ def assert_documented_suite(text):
             assert not any("no:xdist" in arg for arg in args)
 
 
+def assert_registered_suite(text, modules):
+    """Check suite scope/options; the guide owns its worker allocation."""
+    assert_documented_suite(text)
+    prefix = [".venv/bin/python", "-m", "pytest", *modules]
+    workers = []
+    for body in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S):
+        for line in body.splitlines():
+            argv = shlex.split(line)
+            if argv[: len(prefix)] != prefix:
+                continue
+            options = []
+            allocation = None
+            args = iter(argv[len(prefix) :])
+            for arg in args:
+                if arg == "-n":
+                    allocation = int(next(args))
+                elif arg.startswith("-n"):
+                    allocation = int(arg[2:].removeprefix("="))
+                elif arg == "--dist":
+                    options.extend((arg, next(args)))
+                elif arg.startswith("--dist="):
+                    options.extend(("--dist", arg.partition("=")[2]))
+                else:
+                    options.append(arg)
+            if options == ["--dist", "worksteal", "--tb=short", "-q"]:
+                assert allocation is not None
+                workers.append(allocation)
+    assert len(workers) == 1, f"register exactly one complete suite: {modules}"
+    return workers[0]
+
+
+@pytest.mark.parametrize("workers", [1, 2, 8, 16, 32])
+@pytest.mark.parametrize("spelling", ["-n {}", "-n{}", "-n={}"])
+def test_registered_suite_observes_documented_worker_allocation(workers, spelling):
+    gate = " ".join(EXPECTED_COMMANDS[-1])
+    phase = (
+        ".venv/bin/python -m pytest tests/test_scaffold.py "
+        f"{spelling.format(workers)} --dist=worksteal --tb=short -q"
+    )
+    text = f"```sh\n{gate}\n{phase}\n```\n"
+    assert assert_registered_suite(text, ("tests/test_scaffold.py",)) == workers
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing", "duplicate", "extra-module", "filtered", "wrong-module", "prose"],
+)
+def test_registered_suite_still_requires_one_complete_runnable_scope(mutation):
+    gate = " ".join(EXPECTED_COMMANDS[-1])
+    phase = (
+        ".venv/bin/python -m pytest tests/test_scaffold.py "
+        "-n 16 --dist worksteal --tb=short -q"
+    )
+    prose = ""
+    if mutation == "missing":
+        phase = ""
+    elif mutation == "duplicate":
+        phase += "\n" + phase
+    elif mutation == "extra-module":
+        phase = phase.replace(" -n ", " tests/test_configuration.py -n ")
+    elif mutation == "filtered":
+        phase += " -k selected"
+    elif mutation == "wrong-module":
+        phase = phase.replace("test_scaffold.py", "test_configuration.py")
+    elif mutation == "prose":
+        prose, phase = phase, ""
+    text = f"{prose}\n```sh\n{gate}\n{phase}\n```\n"
+    with pytest.raises(AssertionError, match="register exactly one complete suite"):
+        assert_registered_suite(text, ("tests/test_scaffold.py",))
+
+
 @pytest.mark.parametrize("relative", DOCUMENTED_GATE_PATHS)
 def test_documented_suite_matches_gate(relative):
     path = REPO_ROOT / relative

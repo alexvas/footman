@@ -12,7 +12,7 @@ from tests import mcp_attribution_support as reference_attribution
 from tests import mcp_contract_support as service
 from tests import mcp_provenance as provenance
 from tests.dispatcher_harness import write_bytes
-from tests.test_green_gate import assert_documented_suite
+from tests.test_green_gate import assert_documented_suite, assert_registered_suite
 from tests.wheel_attribution_cases import CASES
 
 
@@ -1355,10 +1355,10 @@ def test_worker_scope_preparation_failure_is_retained_without_retry(
 def test_acceptance_registration_and_documented_commands():
     for name in ("docs/testing.md", "docs/python-checks.md", "README.md"):
         assert_documented_suite(provenance.read(ROOT / name).decode())
-    assert (
-        ".venv/bin/python -m pytest tests/test_dispatch_acceptance.py "
-        "-n 2 --dist worksteal --tb=short -q"
-    ) in provenance.read(ROOT / "docs/testing.md").decode()
+    assert_registered_suite(
+        provenance.read(ROOT / "docs/testing.md").decode(),
+        ("tests/test_dispatch_acceptance.py",),
+    )
 
 
 @pytest.mark.parametrize("phase", [None, "review_2"])

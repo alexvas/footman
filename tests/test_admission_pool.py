@@ -19,7 +19,10 @@ from footman.process import OwnedProcess, ProcessStream, StreamOutcome
 from tests import mcp_provenance, mcp_wheel_support
 from tests.admission_support import (
     AdmissionPool,
+    CapacityDecision,
+    CapacityObservationUnavailable,
     PosixAdmissionSystem,
+    PosixCapacitySystem,
     resolve_admission_capacity,
 )
 
@@ -916,6 +919,32 @@ def test_pool_rejects_unsafe_node(tmp_path, case):
 
 
 @pytest.mark.parametrize(
+    ("capacity", "reason", "error"),
+    [
+        *[
+            (value, "valid diagnostic", TypeError)
+            for value in (True, False, None, "2", 2.0, 1j)
+        ],
+        *[(value, "valid diagnostic", ValueError) for value in (0, -1)],
+        *[(1, value, TypeError) for value in (None, True, 1, 1.0, b"diagnostic")],
+        *[(1, value, ValueError) for value in ("", " ", "\t\n", "\u2003")],
+        (1, "single worker", None),
+        (6, "workers and affinity", None),
+        (10**1000, "large integer", None),
+        (2, "  keep original diagnostic \n", None),
+    ],
+)
+def test_capacity_decision_validates_direct_construction(capacity, reason, error):
+    if error is not None:
+        with pytest.raises(error):
+            CapacityDecision(capacity=capacity, reason=reason)
+    else:
+        decision = CapacityDecision(capacity=capacity, reason=reason)
+        assert decision.capacity == capacity
+        assert decision.reason == reason
+
+
+@pytest.mark.parametrize(
     ("workers", "affinity", "expected", "error"),
     [
         (8, frozenset(range(6)), 6, None),
@@ -934,6 +963,7 @@ def test_pool_rejects_unsafe_node(tmp_path, case):
 )
 def test_capacity_respects_workers_and_affinity(workers, affinity, expected, error):
     observations = []
+    files = v2_observations()
 
     class RawSystem:
         def affinity(self):
@@ -944,7 +974,7 @@ def test_capacity_respects_workers_and_affinity(workers, affinity, expected, err
 
         def read_text(self, path):
             observations.append(str(path))
-            raise AssertionError("P07 must not discover quotas before P08/P09")
+            return files[path]
 
     system = None if affinity == "default" else RawSystem()
     if error is not None:
@@ -963,4 +993,794 @@ def test_capacity_respects_workers_and_affinity(workers, affinity, expected, err
     with pytest.raises(FrozenInstanceError):
         # Deliberate mutation: verify decisions cannot be changed after resolution.
         result.capacity = 999  # ty: ignore[invalid-assignment]
-    assert observations == ([] if system is None else ["affinity"])
+    assert observations == ([] if system is None else ["affinity", *map(str, files)])
+
+
+def v2_observations(
+    *, leaf="max 100000", parent="max 100000", root="max 100000", mount_root="/slice"
+):
+    # Literal raw hierarchy, including an unrelated mount and an escaped space.
+    return {
+        Path("/proc/self/cgroup"): "0::/slice/team/job\n",
+        Path("/proc/self/mountinfo"): (
+            "31 20 0:28 /unrelated /other rw - cgroup2 cgroup rw\n"
+            f"32 20 0:29 {mount_root} /cpu\\040budgets rw - cgroup2 cgroup rw\n"
+        ),
+        Path("/cpu budgets/team/job/cpu.max"): leaf + "\n",
+        Path("/cpu budgets/team/cpu.max"): parent + "\n",
+        Path("/cpu budgets/cpu.max"): root + "\n",
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "leaf", "parent", "root", "workers", "cpus", "expected"),
+    [
+        ("finite", "250000 100000", "max 100000", "max 100000", 8, 6, 2),
+        ("sub-cpu", "50000 100000", "max 100000", "max 100000", 8, 6, 1),
+        ("unlimited-leaf", "max 100000", "180000 100000", "max 100000", 8, 6, 1),
+        ("ancestor-min", "450000 100000", "250000 100000", "max 100000", 8, 6, 2),
+        ("root-min", "max 100000", "max 100000", "150000 100000", 8, 6, 1),
+        ("unlimited", "max 100000", "max 100000", "max 100000", 8, 6, 6),
+        ("workers", "max 100000", "max 100000", "max 100000", 3, 6, 3),
+        ("affinity", "max 100000", "max 100000", "max 100000", 8, 2, 2),
+        ("huge", f"{10**400 * 5} {10**400 * 2}", "max 100000", "max 100000", 8, 6, 2),
+        ("visible-root", "250000 100000", "max 100000", "max 100000", 8, 6, 2),
+        *[
+            (layout, "250000 100000", "max 100000", "max 100000", 8, 6, 2)
+            for layout in ("widest-view", "root-components", "escaped-root")
+        ],
+        *[
+            (fault, "250000 100000", "max 100000", "max 100000", 8, 6, 2)
+            for fault in (
+                "owned-repeat",
+                "nonregular-close",
+                "decode-close",
+                "operation-close",
+                "sole-close",
+                "interruption",
+                "later-operation-close",
+            )
+        ],
+    ],
+)
+def test_capacity_respects_v2_quota(
+    tmp_path, case, leaf, parent, root, workers, cpus, expected
+):
+    files = v2_observations(leaf=leaf, parent=parent, root=root)
+    if case == "visible-root":
+        files = {
+            Path("/proc/self/cgroup"): "0::/team/job\n",
+            Path(
+                "/proc/self/mountinfo"
+            ): "32 20 0:29 / /cpu\\040budgets rw - cgroup2 cgroup rw\n",
+            **{
+                path: text
+                for path, text in files.items()
+                if str(path).startswith("/cpu budgets/")
+            },
+        }
+    if case == "widest-view":
+        files[Path("/proc/self/mountinfo")] += (
+            "33 20 0:29 /slice/team /narrow rw - cgroup2 cgroup rw\n"
+        )
+    elif case == "root-components":
+        files[Path("/proc/self/mountinfo")] = (
+            "30 20 0:29 /slic /trap rw - cgroup2 cgroup rw\n"
+            + files[Path("/proc/self/mountinfo")]
+        )
+    elif case == "escaped-root":
+        files[Path("/proc/self/cgroup")] = "0::/slice space/team/job\n"
+        files[Path("/proc/self/mountinfo")] = (
+            "32 20 0:29 /slice\\040space /cpu\\040budgets rw - cgroup2 cgroup rw\n"
+        )
+    missing_paths = set()
+    if case == "visible-root":
+        del files[Path("/cpu budgets/cpu.max")]
+        files[Path("/cpu budgets/cgroup.controllers")] = "cpu memory pids\n"
+        missing_paths = {Path("/cpu budgets/cpu.max"), Path("/cpu budgets/cgroup.type")}
+    expected_reads = list(files)
+    if missing_paths:
+        expected_reads = [
+            *list(files)[:-1],
+            Path("/cpu budgets/cpu.max"),
+            Path("/cpu budgets/cgroup.type"),
+            Path("/cpu budgets/cgroup.controllers"),
+        ]
+    observed = []
+    owned = case in {
+        "visible-root",
+        "nonregular-close",
+        "decode-close",
+        "owned-repeat",
+        "operation-close",
+        "sole-close",
+        "interruption",
+        "later-operation-close",
+    }
+    primary = (
+        KeyboardInterrupt("quota observation interrupted")
+        if case == "interruption"
+        else OSError("quota observation failed")
+    )
+    release = OSError("quota read close failed")
+    fault_index = 2 if case == "later-operation-close" else 0
+
+    class ReadDescriptors(RecordingDescriptors):
+        active = True
+
+        def openat(self, directory_fd, name, flags, mode=0):
+            assert not self.live, "previous read must settle before another acquisition"
+            return super().openat(directory_fd, name, flags, mode)
+
+        def fstat(self, fd):
+            info = super().fstat(fd)
+            if (
+                self.active
+                and len(self.opened) - 1 == fault_index
+                and case in {"operation-close", "interruption", "later-operation-close"}
+            ):
+                raise primary
+            return info
+
+        def close(self, fd):
+            token = self.live[fd]
+            super().close(fd)
+            if (
+                self.active
+                and token[0] == fault_index
+                and case
+                in {
+                    "nonregular-close",
+                    "decode-close",
+                    "operation-close",
+                    "sole-close",
+                    "interruption",
+                    "later-operation-close",
+                }
+            ):
+                raise release
+
+    ops = ReadDescriptors(tmp_path)
+    if owned:
+        for path, text in files.items():
+            real = tmp_path / str(path).lstrip("/")
+            real.parent.mkdir(parents=True, exist_ok=True)
+            mcp_provenance.write(real, text.encode())
+    damaged = tmp_path / "proc/self/cgroup"
+    if case in {"nonregular-close", "decode-close"}:
+        damaged.unlink()
+        if case == "nonregular-close":
+            os.mkfifo(damaged, 0o600)
+        else:
+            mcp_provenance.write(damaged, b"\xff")
+
+    class RawSystem(PosixCapacitySystem):
+        def affinity(self):
+            return frozenset(range(cpus))
+
+        def read_text(self, path):
+            assert path in files or path in missing_paths, (
+                f"unexpected CPU observation: {path}"
+            )
+            observed.append(path)
+            if owned:
+                return super().read_text(tmp_path / str(path).lstrip("/"))
+            return files[path]
+
+    system = RawSystem(descriptors=ops)
+    if owned and case not in {"owned-repeat", "visible-root"}:
+        with pytest.raises(BaseException) as caught:
+            resolve_admission_capacity(workers=workers, system=system)
+        if case == "nonregular-close":
+            assert isinstance(caught.value, UnsafeDescriptorError)
+        elif case == "decode-close":
+            assert isinstance(caught.value, UnicodeDecodeError)
+        else:
+            assert caught.value is (release if case == "sole-close" else primary)
+        if case != "sole-close":
+            assert any(
+                item is release
+                for item in getattr(caught.value, "_transaction_secondary", ())
+            )
+        assert observed == list(files)[: fault_index + 1]
+        assert_released(ops)
+        closed_before = list(ops.closed)
+        ops.active = False
+        if case in {"nonregular-close", "decode-close"}:
+            damaged.unlink()
+            mcp_provenance.write(damaged, files[Path("/proc/self/cgroup")].encode())
+        observed.clear()
+        result = resolve_admission_capacity(workers=workers, system=system)
+        assert ops.closed[: len(closed_before)] == closed_before
+    else:
+        result = resolve_admission_capacity(workers=workers, system=system)
+    assert result.capacity == expected
+    assert result.reason.strip()
+    assert observed == expected_reads
+    if owned:
+        assert_released(ops)
+        previous = list(ops.closed)
+        observed.clear()
+        again = resolve_admission_capacity(workers=workers, system=system)
+        assert again.capacity == expected
+        assert observed == expected_reads
+        assert ops.closed[: len(previous)] == previous
+        assert len(ops.closed) == len(previous) + len(files)
+        assert_released(ops)
+
+
+def v1_observations(*, leaf="-1", parent="-1", root="-1"):
+    files = {
+        Path(
+            "/proc/self/cgroup"
+        ): "2:cpu,cpuacct:/slice/team/job\n3:cpuset:/elsewhere\n",
+        Path("/proc/self/mountinfo"): (
+            "30 20 0:28 / /cpuacct rw - cgroup cgroup rw,cpuacct\n"
+            "31 20 0:29 /slice /cpu\\040budgets rw - cgroup cgroup rw,cpu,cpuacct\n"
+        ),
+    }
+    for directory, quota in (("team/job", leaf), ("team", parent), ("", root)):
+        base = Path("/cpu budgets") / directory
+        files[base / "cpu.cfs_quota_us"] = quota + "\n"
+        files[base / "cpu.cfs_period_us"] = "100000\n"
+    return files
+
+
+@pytest.mark.parametrize(
+    ("case", "leaf", "parent", "root", "workers", "cpus", "expected"),
+    [
+        ("finite", "250000", "-1", "-1", 8, 6, 2),
+        ("sub-cpu", "50000", "-1", "-1", 8, 6, 1),
+        ("unlimited-leaf", "-1", "180000", "-1", 8, 6, 1),
+        ("ancestor-min", "450000", "250000", "-1", 8, 6, 2),
+        ("root-min", "-1", "-1", "150000", 8, 6, 1),
+        ("unlimited", "-1", "-1", "-1", 8, 6, 6),
+        ("workers", "-1", "-1", "-1", 3, 6, 3),
+        ("affinity", "-1", "-1", "-1", 8, 2, 2),
+        ("hybrid", "250000", "-1", "-1", 8, 6, 2),
+        *[
+            (fault, "250000", "-1", "-1", 8, 6, 2)
+            for fault in (
+                "owned-repeat",
+                "operation-close",
+                "sole-close",
+                "interruption",
+            )
+        ],
+    ],
+)
+def test_capacity_respects_v1_quota(
+    tmp_path, case, leaf, parent, root, workers, cpus, expected
+):
+    files = v1_observations(leaf=leaf, parent=parent, root=root)
+    if case == "hybrid":
+        files[Path("/proc/self/cgroup")] += "0::/unified\n"
+        files[Path("/proc/self/mountinfo")] += (
+            "32 20 0:30 / /unified-mount rw - cgroup2 cgroup rw\n"
+        )
+    owned = case in {"owned-repeat", "operation-close", "sole-close", "interruption"}
+    observations = []
+    primary = (
+        KeyboardInterrupt("v1 period interrupted")
+        if case == "interruption"
+        else OSError("v1 period metadata")
+    )
+    release = OSError("v1 period close")
+
+    class PeriodDescriptors(RecordingDescriptors):
+        active = True
+
+        def openat(self, directory_fd, name, flags, mode=0):
+            assert not self.live
+            return super().openat(directory_fd, name, flags, mode)
+
+        def fstat(self, fd):
+            info = super().fstat(fd)
+            if self.active and len(self.opened) == 4 and case != "owned-repeat":
+                self.release = release
+                if case != "sole-close":
+                    raise primary
+            return info
+
+    ops = PeriodDescriptors(tmp_path)
+    if owned:
+        for path, text in files.items():
+            real = tmp_path / str(path).lstrip("/")
+            real.parent.mkdir(parents=True, exist_ok=True)
+            mcp_provenance.write(real, text.encode())
+
+    class RawSystem(PosixCapacitySystem):
+        def affinity(self):
+            return frozenset(range(cpus))
+
+        def read_text(self, path):
+            observations.append(path)
+            assert path in files
+            return (
+                super().read_text(tmp_path / str(path).lstrip("/"))
+                if owned
+                else files[path]
+            )
+
+    system = RawSystem(descriptors=ops)
+    if owned and case != "owned-repeat":
+        with pytest.raises(BaseException) as caught:
+            resolve_admission_capacity(workers=workers, system=system)
+        assert caught.value is (release if case == "sole-close" else primary)
+        if case != "sole-close":
+            assert any(
+                item is release
+                for item in getattr(caught.value, "_transaction_secondary", ())
+            )
+        assert observations == list(files)[:4]
+        assert_released(ops)
+        ops.active = False
+        ops.release = None
+        observations.clear()
+    result = resolve_admission_capacity(workers=workers, system=system)
+    assert result.capacity == expected
+    assert result.reason.strip()
+    assert observations == list(files)
+    assert_released(ops)
+    if owned:
+        previous = list(ops.closed)
+        observations.clear()
+        assert (
+            resolve_admission_capacity(workers=workers, system=system).capacity
+            == expected
+        )
+        assert observations == list(files)
+        assert ops.closed[: len(previous)] == previous
+        assert len(ops.closed) == len(previous) + len(files)
+        assert_released(ops)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "finite",
+        "unlimited",
+        "at-root",
+        "no-cpu",
+        "missing-child",
+        "namespace-finite",
+        "namespace-at-root",
+        "namespace-missing",
+        "bind-finite",
+        "bind-at-root",
+        "bind-missing",
+        "root-access",
+        "root-read-enoent",
+        "type-access",
+        "type-read-enoent",
+        "root-close",
+        "type-close",
+        "controller-close",
+        "type-interruption",
+        "type-operation-close",
+    ],
+)
+def test_v2_hierarchy_root_without_cpu_max(tmp_path, case):
+    files = v2_observations(
+        leaf="250000 100000" if case == "finite" else "max 100000", mount_root="/"
+    )
+    membership = Path("/proc/self/cgroup")
+    root_quota = Path("/cpu budgets/cpu.max")
+    root_type = Path("/cpu budgets/cgroup.type")
+    controllers = Path("/cpu budgets/cgroup.controllers")
+    files[membership] = "0::/team/job\n"
+    if case.startswith("bind-"):
+        files = v2_observations()
+    if case in {"at-root", "namespace-at-root"}:
+        files[membership] = "0::/\n"
+    elif case == "bind-at-root":
+        files[membership] = "0::/slice\n"
+    files[controllers] = "memory pids\n" if case == "no-cpu" else "cpu memory pids\n"
+    if case in {"namespace-finite", "namespace-at-root", "bind-finite", "bind-at-root"}:
+        files[root_quota] = "250000 100000\n"
+    elif case not in {"root-read-enoent", "root-close"}:
+        del files[root_quota]
+    if case.startswith("namespace-") or case in {
+        "type-read-enoent",
+        "type-access",
+        "type-close",
+        "type-interruption",
+        "type-operation-close",
+    }:
+        files[root_type] = "domain\n"
+    if case == "missing-child":
+        del files[Path("/cpu budgets/team/job/cpu.max")]
+    for path, text in files.items():
+        real = tmp_path / str(path).lstrip("/")
+        real.parent.mkdir(parents=True, exist_ok=True)
+        mcp_provenance.write(real, text.encode())
+    primary = (
+        KeyboardInterrupt("root type interrupted")
+        if case == "type-interruption"
+        else FileNotFoundError(errno.ENOENT, "metadata failure, not absent leaf")
+        if case in {"root-read-enoent", "type-read-enoent"}
+        else PermissionError(errno.EACCES, "root observation denied")
+    )
+    release = PermissionError(errno.EACCES, "root observation close denied")
+    observed = []
+    operation_target = root_quota if case == "root-read-enoent" else root_type
+    close_target = (
+        root_quota
+        if case == "root-close"
+        else controllers
+        if case == "controller-close"
+        else root_type
+    )
+    real_operation = str(tmp_path / str(operation_target).lstrip("/"))
+    real_close = str(tmp_path / str(close_target).lstrip("/"))
+
+    class RootDescriptors(RecordingDescriptors):
+        enabled = True
+        current_name = ""
+
+        def openat(self, directory_fd, name, flags, mode=0):
+            assert not self.live
+            self.current_name = name
+            if (
+                self.enabled
+                and case == "root-access"
+                and name == str(tmp_path / str(root_quota).lstrip("/"))
+            ):
+                raise primary
+            return super().openat(directory_fd, name, flags, mode)
+
+        def fstat(self, fd):
+            info = super().fstat(fd)
+            if (
+                self.enabled
+                and self.current_name == real_operation
+                and case
+                in {
+                    "root-read-enoent",
+                    "type-read-enoent",
+                    "type-access",
+                    "type-interruption",
+                    "type-operation-close",
+                }
+            ):
+                raise primary
+            return info
+
+        def close(self, fd):
+            super().close(fd)
+            if (
+                self.enabled
+                and self.current_name == real_close
+                and case
+                in {
+                    "root-close",
+                    "type-close",
+                    "controller-close",
+                    "type-interruption",
+                    "type-operation-close",
+                }
+            ):
+                raise release
+
+    ops = RootDescriptors(tmp_path)
+
+    class RootSystem(PosixCapacitySystem):
+        def affinity(self):
+            return frozenset(range(6))
+
+        def read_text(self, path):
+            observed.append(path)
+            return super().read_text(tmp_path / str(path).lstrip("/"))
+
+    system = RootSystem(descriptors=ops)
+    errors = {
+        "root-close",
+        "type-close",
+        "controller-close",
+        "type-interruption",
+        "type-operation-close",
+    }
+    if case in errors:
+        with pytest.raises(BaseException) as caught:
+            resolve_admission_capacity(workers=8, system=system)
+        assert caught.value is (
+            primary
+            if case in {"type-interruption", "type-operation-close"}
+            else release
+        )
+        if case in {"type-interruption", "type-operation-close"}:
+            assert any(
+                item is release
+                for item in getattr(caught.value, "_transaction_secondary", ())
+            )
+    else:
+        result = resolve_admission_capacity(workers=8, system=system)
+        expected = (
+            2
+            if case
+            in {
+                "finite",
+                "namespace-finite",
+                "namespace-at-root",
+                "bind-finite",
+                "bind-at-root",
+            }
+            else 6
+            if case in {"unlimited", "at-root"}
+            else 1
+        )
+        assert result.capacity == expected
+        assert result.reason.strip()
+    assert root_quota in observed or case == "missing-child"
+    if case in {"finite", "unlimited", "at-root", "no-cpu", "controller-close"}:
+        assert observed[-2:] == [root_type, controllers]
+    if case in {
+        "namespace-missing",
+        "type-read-enoent",
+        "type-access",
+        "type-close",
+        "type-interruption",
+        "type-operation-close",
+    }:
+        assert observed[-1] == root_type
+    if case in {
+        "namespace-finite",
+        "namespace-at-root",
+        "bind-finite",
+        "bind-at-root",
+        "bind-missing",
+        "root-access",
+        "root-read-enoent",
+        "root-close",
+        "missing-child",
+    }:
+        assert root_type not in observed and controllers not in observed
+    assert_released(ops)
+    previous = list(ops.closed)
+    ops.enabled = False
+    again = resolve_admission_capacity(workers=8, system=system)
+    assert again.capacity > 0
+    assert ops.closed[: len(previous)] == previous
+    assert_released(ops)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unlimited-v2",
+        "unlimited-v1",
+        "affinity-unavailable",
+        "affinity-empty",
+        "affinity-negative",
+        "affinity-bool",
+        "affinity-interruption",
+        "affinity-exit",
+        "affinity-unexpected",
+        "read-unavailable",
+        "read-raw-io",
+        "read-unexpected",
+        "membership-malformed",
+        "membership-missing",
+        "membership-duplicate",
+        "membership-relative",
+        "membership-traversal",
+        "mount-malformed",
+        "mount-unresolved",
+        "mount-prefix",
+        "mount-relative",
+        "quota-empty",
+        "quota-zero",
+        "quota-negative",
+        "quota-nonnumeric",
+        "quota-extra",
+        "period-zero",
+        "v1-quota-negative",
+        "v1-period-zero",
+        "owned-missing",
+        "owned-unavailable",
+        "owned-operation-close",
+        "owned-sole-close",
+        "owned-interruption-close",
+        "owned-cleanup-interruption",
+        "owned-unexpected-close",
+        "owned-decode",
+        "owned-repeat",
+    ],
+)
+def test_capacity_reports_conservative_fallback(tmp_path, case):
+    files = (
+        v1_observations()
+        if case in {"unlimited-v1", "v1-quota-negative", "v1-period-zero"}
+        else v2_observations()
+    )
+    if case.startswith("owned-"):
+        files = v2_observations(leaf="250000 100000")
+    membership = Path("/proc/self/cgroup")
+    mounts = Path("/proc/self/mountinfo")
+    quota = Path("/cpu budgets/team/job/cpu.max")
+    replacements = {
+        "membership-malformed": (membership, "not membership"),
+        "membership-missing": (membership, ""),
+        "membership-duplicate": (
+            membership,
+            "0::/slice/team/job\n0::/slice/team/job\n",
+        ),
+        "membership-relative": (membership, "0::slice/team/job\n"),
+        "membership-traversal": (membership, "0::/slice/../team/job\n"),
+        "mount-malformed": (mounts, "not mountinfo"),
+        "mount-unresolved": (mounts, "32 20 0:29 /other /cpu rw - cgroup2 cgroup rw\n"),
+        "mount-prefix": (mounts, "32 20 0:29 /slic /cpu rw - cgroup2 cgroup rw\n"),
+        "mount-relative": (mounts, "32 20 0:29 /slice cpu rw - cgroup2 cgroup rw\n"),
+        "quota-empty": (quota, ""),
+        "quota-zero": (quota, "0 100000"),
+        "quota-negative": (quota, "-1 100000"),
+        "quota-nonnumeric": (quota, "bad 100000"),
+        "quota-extra": (quota, "max 100000 extra"),
+        "period-zero": (quota, "max 0"),
+        "v1-quota-negative": (Path("/cpu budgets/team/job/cpu.cfs_quota_us"), "-2"),
+        "v1-period-zero": (Path("/cpu budgets/team/job/cpu.cfs_period_us"), "0"),
+    }
+    if case in replacements:
+        path, text = replacements[case]
+        files[path] = text
+    primary = (
+        KeyboardInterrupt("CPU observation interrupted")
+        if case in {"affinity-interruption", "owned-interruption-close"}
+        else SystemExit("CPU observation exited")
+        if case == "affinity-exit"
+        else RuntimeError("unexpected observation")
+        if case in {"affinity-unexpected", "read-unexpected", "owned-unexpected-close"}
+        else OSError(errno.EIO, "unexpected read")
+        if case == "read-raw-io"
+        else PermissionError(errno.EACCES, "CPU observation denied")
+    )
+    release = (
+        KeyboardInterrupt("CPU close interrupted")
+        if case == "owned-cleanup-interruption"
+        else OSError(errno.EACCES, "CPU close denied")
+    )
+    unavailable = CapacityObservationUnavailable(
+        "raw CPU observation unavailable", cause=primary
+    )
+    observations = []
+    owned = case.startswith("owned-")
+    operation_cases = {
+        "owned-unavailable",
+        "owned-operation-close",
+        "owned-interruption-close",
+        "owned-cleanup-interruption",
+        "owned-unexpected-close",
+    }
+    close_cases = {
+        "owned-operation-close",
+        "owned-sole-close",
+        "owned-interruption-close",
+        "owned-cleanup-interruption",
+        "owned-unexpected-close",
+    }
+
+    class FaultDescriptors(RecordingDescriptors):
+        enabled = True
+
+        def openat(self, directory_fd, name, flags, mode=0):
+            assert not self.live
+            return super().openat(directory_fd, name, flags, mode)
+
+        def fstat(self, fd):
+            info = super().fstat(fd)
+            if self.enabled and case in operation_cases:
+                raise primary
+            return info
+
+        def close(self, fd):
+            super().close(fd)
+            if self.enabled and case in close_cases:
+                raise release
+
+    ops = FaultDescriptors(tmp_path)
+    if owned:
+        for path, text in files.items():
+            real = tmp_path / str(path).lstrip("/")
+            real.parent.mkdir(parents=True, exist_ok=True)
+            mcp_provenance.write(real, text.encode())
+        if case in {"owned-missing", "owned-decode"}:
+            real = tmp_path / "proc/self/cgroup"
+            real.unlink()
+            if case == "owned-decode":
+                mcp_provenance.write(real, b"\xff")
+
+    class RawSystem(PosixCapacitySystem):
+        def affinity(self):
+            observations.append("affinity")
+            if case == "affinity-unavailable":
+                raise unavailable
+            if case in {
+                "affinity-interruption",
+                "affinity-exit",
+                "affinity-unexpected",
+            }:
+                raise primary
+            return (
+                frozenset()
+                if case == "affinity-empty"
+                else frozenset({-1})
+                if case == "affinity-negative"
+                else frozenset({True})
+                if case == "affinity-bool"
+                else frozenset(range(6))
+            )
+
+        def read_text(self, path):
+            observations.append(path)
+            if case == "read-unavailable":
+                raise unavailable
+            if case in {"read-raw-io", "read-unexpected"}:
+                raise primary
+            assert path in files
+            return (
+                super().read_text(tmp_path / str(path).lstrip("/"))
+                if owned
+                else files[path]
+            )
+
+    system = RawSystem(descriptors=ops)
+    error_cases = {
+        "affinity-interruption",
+        "affinity-exit",
+        "affinity-unexpected",
+        "read-raw-io",
+        "read-unexpected",
+        *close_cases,
+    }
+    if case in error_cases:
+        expected = (
+            release
+            if case in {"owned-sole-close", "owned-cleanup-interruption"}
+            else primary
+        )
+        for _ in range(2):
+            with pytest.raises(BaseException) as caught:
+                resolve_admission_capacity(workers=8, system=system)
+            assert caught.value is expected
+            if case in close_cases and case != "owned-sole-close":
+                secondary = getattr(caught.value, "_transaction_secondary", ())
+                assert any(
+                    item
+                    is (primary if case == "owned-cleanup-interruption" else release)
+                    for item in secondary
+                )
+            assert_released(ops)
+    else:
+        result = resolve_admission_capacity(workers=8, system=system)
+        assert result.capacity == (
+            6 if case.startswith("unlimited-") else 2 if case == "owned-repeat" else 1
+        )
+        assert result.reason.strip()
+        assert_released(ops)
+        if case == "affinity-unavailable":
+            assert unavailable.cause is primary
+        if case in {"owned-missing", "owned-unavailable"}:
+            with pytest.raises(CapacityObservationUnavailable) as caught_unavailable:
+                system.read_text(membership)
+            cause = caught_unavailable.value.cause
+            assert isinstance(cause, OSError)
+            assert cause.errno == (
+                errno.ENOENT if case == "owned-missing" else errno.EACCES
+            )
+            if case == "owned-unavailable":
+                assert cause is primary
+            assert_released(ops)
+    if case.startswith("affinity-"):
+        assert set(observations) == {"affinity"}
+    if owned:
+        previous = list(ops.closed)
+        ops.enabled = False
+        if case in {"owned-missing", "owned-decode"}:
+            path = tmp_path / "proc/self/cgroup"
+            if case == "owned-decode":
+                path.unlink()
+            mcp_provenance.write(path, files[membership].encode())
+        assert resolve_admission_capacity(workers=8, system=system).capacity == 2
+        assert ops.closed[: len(previous)] == previous
+        assert len(ops.closed) == len(previous) + len(files)
+        assert_released(ops)

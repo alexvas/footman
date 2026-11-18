@@ -253,63 +253,63 @@ Acceptance: intermediate max(1, min(workers, len(affinity))) for valid affinity;
 Acceptance: real membership/mount-root/ancestor discovery caps capacity; workers=8/affinity=6/quota=2.5 yields 2, sub-CPU quota yields 1, known unlimited retains worker/affinity bound. Seam C; consumes P07.
 
 ### RED
-- [ ] 8.1 Freeze raw quota/ancestor/unlimited examples and owned-I/O companions; completion: independent expected results through resolver seam.
-- [ ] 8.2 Create `test_capacity_respects_v2_quota`; completion: finite/unlimited/ancestor/fractional real-discovery variants. Extend P07 fixtures with raw valid-unlimited v2 observations, retaining worker/affinity expectations.
-- [ ] 8.3 Execute R(test_capacity_respects_v2_quota); completion: missing v2 behavior explains failure.
+- [x] 8.1 Freeze raw quota/ancestor/unlimited examples and owned-I/O companions; completion: independent expected results through resolver seam.
+- [x] 8.2 Create `test_capacity_respects_v2_quota`; completion: finite/unlimited/ancestor/fractional real-discovery variants. Extend P07 fixtures with raw valid-unlimited v2 observations, retaining worker/affinity expectations.
+- [x] 8.3 Execute R(test_capacity_respects_v2_quota); completion: missing v2 behavior explains failure.
 
 ### GREEN
-- [ ] 8.4 Implement effective v2 discovery through C/owners; completion: applicable ancestor minimum respected, reads released once.
-- [ ] 8.5 Document v2 semantics; completion: known-unlimited and unknown classifications explicit.
-- [ ] 8.6 Execute T(test_capacity_respects_v2_quota)+G; completion: exit 0/E.
+- [x] 8.4 Implement effective v2 discovery through C/owners; completion: applicable ancestor minimum respected, reads released once.
+- [x] 8.5 Document v2 semantics; completion: known-unlimited and unknown classifications explicit.
+- [x] 8.6 Execute T(test_capacity_respects_v2_quota)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 8.7 Record discovery/lifecycle review; completion: raw observations, sole owners and released streams.
-- [ ] 8.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 8.7 Record discovery/lifecycle review; completion: raw observations, sole owners and released streams.
+- [x] 8.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 8.9 Independently execute T(test_capacity_respects_v2_quota)+G; completion: examples/companions pass.
+- [x] 8.9 Independently execute T(test_capacity_respects_v2_quota)+G; completion: examples/companions pass.
 
 ## 9. P09 — Effective cgroup v1 quota
 
 Acceptance: v1 quota/period, membership/mount roots and ancestor restrictions implement corresponding CPU-cap semantics. Seam C; consumes P08.
 
 ### RED
-- [ ] 9.1 Freeze raw v1 examples and new resource companions; completion: literal independent results.
-- [ ] 9.2 Create `test_capacity_respects_v1_quota`; completion: real discovery variants, including valid-unlimited observations for retained worker/affinity expectations.
-- [ ] 9.3 Execute R(test_capacity_respects_v1_quota); completion: missing v1 behavior explains failure.
+- [x] 9.1 Freeze raw v1 examples and new resource companions; completion: literal independent results.
+- [x] 9.2 Create `test_capacity_respects_v1_quota`; completion: real discovery variants, including valid-unlimited observations for retained worker/affinity expectations.
+- [x] 9.3 Execute R(test_capacity_respects_v1_quota); completion: missing v1 behavior explains failure.
 
 ### GREEN
-- [ ] 9.4 Implement v1 discovery; completion: finite/unlimited/fractional/ancestor cases satisfy contract.
-- [ ] 9.5 Document supported membership/mount discovery; completion: applicable layouts represented.
-- [ ] 9.6 Execute T(test_capacity_respects_v1_quota)+G; completion: exit 0/E.
+- [x] 9.4 Implement v1 discovery; completion: finite/unlimited/fractional/ancestor cases satisfy contract.
+- [x] 9.5 Document supported membership/mount discovery; completion: applicable layouts represented.
+- [x] 9.6 Execute T(test_capacity_respects_v1_quota)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 9.7 Record v1/v2 consistency/ownership review; completion: shared semantics and supported boundaries retained.
-- [ ] 9.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 9.7 Record v1/v2 consistency/ownership review; completion: shared semantics and supported boundaries retained.
+- [x] 9.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 9.9 Independently execute T(test_capacity_respects_v1_quota)+G; completion: both quota generations/prior phases pass.
+- [x] 9.9 Independently execute T(test_capacity_respects_v1_quota)+G; completion: both quota generations/prior phases pass.
 
 ## 10. P10 — Conservative unknown-budget fallback
 
 Acceptance: unknown/unsupported/malformed/inaccessible CPU observations yield capacity one and a diagnostic; interruption/release/unexpected failures propagate. Seam C; consumes P09.
 
 ### RED
-- [ ] 10.1 Freeze unavailable/unlimited classification and release precedence; completion: reason semantics and failure identities explicit.
-- [ ] 10.2 Create `test_capacity_reports_conservative_fallback`; completion: discovery limitations and lifecycle companions through C.
-- [ ] 10.3 Execute R(test_capacity_reports_conservative_fallback); completion: missing conservative result or failure propagation explains failure.
+- [x] 10.1 Freeze unavailable/unlimited classification and release precedence; completion: reason semantics and failure identities explicit.
+- [x] 10.2 Create `test_capacity_reports_conservative_fallback`; completion: discovery limitations and lifecycle companions through C.
+- [x] 10.3 Execute R(test_capacity_reports_conservative_fallback); completion: missing conservative result or failure propagation explains failure.
 
 ### GREEN
-- [ ] 10.4 Implement classified fallback; completion: unknown yields one, known-unlimited preserves bounded policy, interruptions/close faults propagate.
-- [ ] 10.5 Document limitations/diagnostics; completion: matches classification.
-- [ ] 10.6 Execute T(test_capacity_reports_conservative_fallback)+G; completion: exit 0/E.
+- [x] 10.4 Implement classified fallback; completion: unknown yields one, known-unlimited preserves bounded policy, interruptions/close faults propagate.
+- [x] 10.5 Document limitations/diagnostics; completion: matches classification.
+- [x] 10.6 Execute T(test_capacity_reports_conservative_fallback)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 10.7 Record exception review; completion: fallback limited to specified expected observation failures after clean cleanup.
-- [ ] 10.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 10.7 Record exception review; completion: fallback limited to specified expected observation failures after clean cleanup.
+- [x] 10.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 10.9 Independently execute T(test_capacity_reports_conservative_fallback)+G; completion: complete capacity policy/release semantics pass.
+- [x] 10.9 Independently execute T(test_capacity_reports_conservative_fallback)+G; completion: complete capacity policy/release semantics pass.
 
 ## 11. P11 — Shared session and replacement pool
 

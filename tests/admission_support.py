@@ -8,14 +8,17 @@ import errno
 import fcntl
 import math
 import os
+import re
 import stat
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 from typing import Protocol
 
+from footman.filesystem.cleanup import CleanupFailures
 from footman.filesystem.descriptors import (
     DirectoryDescriptor,
     OwnedDescriptor,
@@ -145,6 +148,10 @@ class CapacityObservationUnavailable(Exception):
             self.__cause__ = cause
 
 
+class _AbsentCapacityFile(CapacityObservationUnavailable):
+    """A clean ENOENT at leaf open, not a metadata/read/cleanup failure."""
+
+
 class CapacitySystem(Protocol):
     """Raw observations; discovery and parsing belong to the resolver."""
 
@@ -153,22 +160,76 @@ class CapacitySystem(Protocol):
     def read_text(self, path: Path) -> str: ...
 
 
+@dataclass(frozen=True, kw_only=True)
 class PosixCapacitySystem:
     """Resource-free default CPU observation adapter."""
 
+    descriptors: DescriptorOps = field(default_factory=PosixDescriptorOps)
+
     def affinity(self) -> frozenset[int]:
-        return frozenset(os.sched_getaffinity(0))
+        try:
+            observe = getattr(os, "sched_getaffinity", None)
+            if observe is None:
+                raise NotImplementedError("CPU affinity is unsupported")
+            return frozenset(observe(0))
+        except (OSError, NotImplementedError) as error:
+            _raise_expected_observation(error)
+            raise
 
     def read_text(self, path: Path) -> str:
-        raise NotImplementedError("P08 owned quota observation not implemented")
+        ops = self.descriptors
+        name = str(path)
+        label = "CPU capacity observation"
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+        try:
+            fd = ops.openat(None, name, flags)
+        except OSError as error:
+            if error.errno == errno.ENOENT:
+                raise _AbsentCapacityFile(
+                    "CPU observation leaf absent", cause=error
+                ) from error
+            _raise_expected_observation(error)
+            raise
+        owner = OwnedDescriptor(ops, fd, label=label)
+        try:
+            if not stat.S_ISREG(ops.fstat(owner.fd).st_mode):
+                raise UnsafeDescriptorError(
+                    "read-capacity", "CPU observation must be regular"
+                )
+            chunks = []
+            while chunk := os.read(owner.fd, 65536):
+                chunks.append(chunk)
+            text = b"".join(chunks).decode("utf-8")
+        except BaseException as error:
+            cleanup = CleanupFailures(error)
+            cleanup.run(owner.close, ordinary=(OSError,))
+            cleanup.complete()
+            # Only successful cleanup permits converting an expected observation
+            # error. Use the public accumulator, not exception-private evidence.
+            if not cleanup.ordinary_failures:
+                _raise_expected_observation(error)
+            raise
+        # A sole-close failure is never an unavailable observation.
+        owner.close()
+        return text
 
 
 @dataclass(frozen=True, kw_only=True)
 class CapacityDecision:
-    """Immutable resolved capacity and human-readable diagnostic."""
+    """Immutable positive capacity and nonblank human-readable diagnostic."""
 
     capacity: int
     reason: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.capacity, bool) or not isinstance(self.capacity, int):
+            raise TypeError("decision capacity must be an integer, not boolean")
+        if self.capacity <= 0:
+            raise ValueError("decision capacity must be positive")
+        if not isinstance(self.reason, str):
+            raise TypeError("decision reason must be a string")
+        if not self.reason.strip():
+            raise ValueError("decision reason must not be blank")
 
 
 def resolve_admission_capacity(
@@ -180,8 +241,164 @@ def resolve_admission_capacity(
     if workers <= 0:
         raise ValueError("worker count must be positive")
     observations = system if system is not None else PosixCapacitySystem()
-    affinity = observations.affinity()
+    try:
+        affinity = observations.affinity()
+        if not isinstance(affinity, frozenset):
+            raise TypeError("affinity adapter must return a frozenset")
+        if not affinity or any(
+            isinstance(cpu, bool) or not isinstance(cpu, int) or cpu < 0
+            for cpu in affinity
+        ):
+            raise _InvalidCapacityObservation("empty or invalid CPU affinity")
+        quota, hierarchy = _effective_quota(observations)
+    except (CapacityObservationUnavailable, _InvalidCapacityObservation) as error:
+        return CapacityDecision(capacity=1, reason=f"CPU capacity unknown: {error}")
+    bound = min(workers, len(affinity))
+    capacity = max(1, int(min(bound, quota))) if quota is not None else max(1, bound)
     return CapacityDecision(
-        capacity=max(1, min(workers, len(affinity))),
-        reason=f"provisional worker/affinity bound: workers={workers}, affinity={len(affinity)}",
+        capacity=capacity,
+        reason=f"workers={workers}, affinity={len(affinity)}, visible {hierarchy} quota={quota if quota is not None else 'unlimited'}",
     )
+
+
+class _InvalidCapacityObservation(ValueError):
+    """Recognized malformed/unresolved raw discovery, not known unlimited."""
+
+
+def _raise_expected_observation(error: BaseException) -> None:
+    if isinstance(error, UnicodeDecodeError):
+        raise _InvalidCapacityObservation(
+            "CPU observation is not valid UTF-8"
+        ) from error
+    if isinstance(error, NotImplementedError) or (
+        isinstance(error, OSError)
+        and error.errno
+        in {
+            errno.ENOENT,
+            errno.ENOTDIR,
+            errno.EACCES,
+            errno.EPERM,
+            errno.ENOSYS,
+            errno.ENODEV,
+            errno.EOPNOTSUPP,
+        }
+    ):
+        raise CapacityObservationUnavailable(
+            "CPU observation unavailable", cause=error
+        ) from error
+
+
+def _observation_path(value: str) -> Path:
+    if (
+        not value.startswith("/")
+        or "\0" in value
+        or any(part in {".", ".."} for part in value.split("/"))
+    ):
+        raise _InvalidCapacityObservation(
+            "CPU hierarchy path is not absolute/canonical"
+        )
+    return Path(value)
+
+
+def _mount_path(value: str) -> Path:
+    decoded = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
+    return _observation_path(decoded)
+
+
+def _positive_observation(value: str) -> int:
+    if not value.isascii() or not value.isdigit():
+        raise _InvalidCapacityObservation("CPU quota/period must be positive integers")
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise _InvalidCapacityObservation("CPU quota integer is unsupported") from error
+    if number <= 0:
+        raise _InvalidCapacityObservation("CPU quota/period must be positive")
+    return number
+
+
+def _effective_quota(system: CapacitySystem) -> tuple[Fraction | None, str]:
+    membership = system.read_text(Path("/proc/self/cgroup"))
+    mounts = system.read_text(Path("/proc/self/mountinfo"))
+    v1_members = []
+    v2_members = []
+    for line in membership.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) != 3:
+            raise _InvalidCapacityObservation("malformed cgroup membership")
+        if fields[0] == "0" and fields[1] == "":
+            v2_members.append(_observation_path(fields[2]))
+        elif "cpu" in fields[1].split(","):
+            _positive_observation(fields[0])
+            v1_members.append(_observation_path(fields[2]))
+    # A v1 CPU membership identifies its controller even in hybrid layouts;
+    # unified membership then does not imply a v2 CPU controller.
+    v1 = bool(v1_members)
+    members = v1_members if v1 else v2_members
+    hierarchy = "v1" if v1 else "v2"
+    if len(members) != 1:
+        raise _InvalidCapacityObservation("unresolved CPU cgroup membership")
+    member = members[0]
+    candidates = []
+    for line in mounts.splitlines():
+        left, separator, right = line.partition(" - ")
+        before, after = left.split(), right.split()
+        if not separator or len(before) < 6 or len(after) < 3:
+            raise _InvalidCapacityObservation("malformed mount discovery")
+        applicable = (
+            (after[0] == "cgroup" and "cpu" in after[2].split(","))
+            if v1
+            else after[0] == "cgroup2"
+        )
+        if applicable:
+            root, mount = _mount_path(before[3]), _mount_path(before[4])
+            if member.is_relative_to(root):
+                candidates.append((root, mount))
+    if not candidates:
+        raise _InvalidCapacityObservation("unresolved CPU cgroup mount root")
+    # Prefer the widest visible hierarchy, including restrictions above a
+    # narrower bind mount; path components, not textual prefixes, define scope.
+    root, mount = min(candidates, key=lambda pair: (len(pair[0].parts), str(pair[1])))
+    current = mount / member.relative_to(root)
+    quotas = []
+    while True:
+        if v1:
+            quota_text = system.read_text(current / "cpu.cfs_quota_us").split()
+            period_text = system.read_text(current / "cpu.cfs_period_us").split()
+            if len(quota_text) != 1 or len(period_text) != 1:
+                raise _InvalidCapacityObservation("malformed v1 quota/period")
+            fields = [quota_text[0], period_text[0]]
+            unlimited = fields[0] == "-1"
+        else:
+            try:
+                fields = system.read_text(current / "cpu.max").split()
+            except _AbsentCapacityFile:
+                # Only the actual v2 hierarchy root lacks CPU limit files.
+                # mount root '/' alone is insufficient in a cgroup namespace.
+                if (
+                    current == mount
+                    and root == Path("/")
+                    and _is_v2_hierarchy_root(system, mount)
+                ):
+                    return (min(quotas) if quotas else None), hierarchy
+                raise
+            if len(fields) != 2:
+                raise _InvalidCapacityObservation("malformed cpu.max")
+            unlimited = fields[0] == "max"
+        period = _positive_observation(fields[1])
+        if not unlimited:
+            quotas.append(Fraction(_positive_observation(fields[0]), period))
+        if current == mount:
+            return (min(quotas) if quotas else None), hierarchy
+        current = current.parent
+
+
+def _is_v2_hierarchy_root(system: CapacitySystem, mount: Path) -> bool:
+    # cgroup.type exists on every non-root cgroup, including namespace roots.
+    # Only clean leaf absence is evidence: read errors and close failures must
+    # not erase restrictions or turn unknown observations into unlimited quota.
+    try:
+        system.read_text(mount / "cgroup.type")
+    except _AbsentCapacityFile:
+        return "cpu" in system.read_text(mount / "cgroup.controllers").split()
+    return False

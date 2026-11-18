@@ -1730,16 +1730,60 @@ regular-slot UID after real `fstat`, retaining all other fields/precision and
 original directory observations, real ownership and release.
 
 P07 exports `resolve_admission_capacity(*, workers, system=None)` and immutable
-`CapacityDecision(capacity, reason)` from `tests.admission_support`. Its
-**provisional** calculation is `max(1, min(workers, len(affinity)))` for valid raw
-affinity: workers=8 and six allowed CPUs yields six. Worker count must be a
-positive integer excluding bool (`TypeError` for wrong type, `ValueError` for
-nonpositive values) before observations. `CapacitySystem` supplies raw affinity
-and file text; this intermediate resolver uses affinity only and propagates
-observation errors/interruption. Quota reads/discovery, known-unlimited policy
-and final conservative fallback belong to P08–P10; file reads remain explicitly
-unimplemented until their owning phase. Session wiring and caller migrations
-belong to subsequent phases. This provisional result is not yet used by callers.
+`CapacityDecision(capacity, reason)` from `tests.admission_support`. Direct
+construction also enforces decision invariants: capacity must be a positive
+integer excluding bool, and reason must be a nonblank string. Wrong types raise
+`TypeError`; nonpositive capacity or blank reason raises `ValueError`. Valid
+reason text is preserved unchanged. Worker count must be a positive integer
+excluding bool (`TypeError` for wrong type,
+`ValueError` for nonpositive values) before observations. P07's provisional
+worker/affinity-only bound is extended by P08's effective **visible cgroup v2**
+quota. `CapacitySystem` supplies raw affinity and file text; the resolver parses
+`/proc/self/cgroup` and `/proc/self/mountinfo`, decodes escaped mount fields,
+resolves membership relative to an applicable mount root and checks `cpu.max`
+from the leaf through the mounted root. Wider visible mounts take precedence
+over narrower bind views. Restrictions above an unlimited leaf still apply.
+The actual v2 hierarchy root has no `cpu.max`. Only a clean leaf-open `ENOENT`
+at a mount mapped from `/` can take this exception, and only when `cgroup.type`
+is also absent at leaf open (it exists on non-root cgroups) and
+`cgroup.controllers` confirms CPU support. A namespace root can also map from
+`/`, so that mapping alone never authorizes ignoring its quota. Bind-mount and
+namespace-root limits remain active; inaccessible files, metadata/read errors,
+missing non-root limits and failed cleanup are not evidence of an unlimited root.
+
+Known unlimited means every quota-bearing ancestor has valid `max <period>`
+(and a confirmed actual root may legitimately have no limit file);
+it leaves the worker/affinity bound unchanged. Finite quotas use exact integer
+ratios, floor the minimum bound and retain at least one slot: workers=8,
+affinity=6 and quota=2.5 yields two; a sub-CPU quota yields one. Unresolved or
+malformed discovery is unknown, never interpreted as unlimited. P09 adds v1 CPU
+membership and `cgroup` mounts declaring the `cpu` controller (including
+`cpu,cpuacct` co-mounts). It reads `cpu.cfs_quota_us` and `cpu.cfs_period_us` at
+every visible ancestor, with `-1` as unlimited quota and a positive period.
+The same exact minimum/floor policy applies. In hybrid layouts an explicit v1
+CPU membership selects that controller rather than assuming unified membership
+provides v2 CPU quotas; a `cpuacct`-only mount is not a CPU quota hierarchy.
+P10 completes conservative fallback: recognized malformed/unresolved discovery,
+empty/invalid CPU affinity and `CapacityObservationUnavailable` yield one slot
+with a diagnostic reason. Known unlimited retains the worker/affinity bound.
+Hidden ancestors outside the visible mount are not observed, so diagnostics do
+not claim host-wide quota discovery.
+
+`PosixCapacitySystem` accepts an optional `descriptors` adapter. Its default
+reader opens real regular files with no-follow/nonblocking/cloexec flags and
+one `OwnedDescriptor`, reads/decodes before release and finishes cleanup before
+returning text. Fault adapters keep this same reader and resolver active;
+operation/interruption precedence, sole-close visibility and once-only cleanup
+remain required. The adapter classifies missing/inaccessible/unsupported OS
+observations narrowly (`ENOENT`, `ENOTDIR`, `EACCES`, `EPERM`, `ENOSYS`, `ENODEV`,
+`EOPNOTSUPP`, unsupported affinity), retaining their cause. Invalid UTF-8 is a
+recognized malformed observation. Conversion happens only after successful
+cleanup, using the public `CleanupFailures` observations: an otherwise expected
+observation failure plus close failure remains a failure, and a sole-close error
+cannot become fallback. Interruptions, unexpected errors and unclassified I/O
+failures propagate rather than silently lowering capacity. Session wiring and
+caller migrations belong to subsequent phases; this result is not yet used by
+callers.
 
 Register this suite before its first RED recording and run the full accumulated
 suite in every admission-pool phase's VALIDATE, alongside the full green gate

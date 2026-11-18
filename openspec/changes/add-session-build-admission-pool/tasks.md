@@ -21,7 +21,7 @@ Before checked-code changes, store a self-contained baseline under `/tmp/gorshoc
 
 ### Suite registration before P01 RED
 
-- [ ] PRE.1 Register the new phase suite in docs/testing.md before recording P01 RED. Append exactly one fenced command `.venv/bin/python -m pytest tests/test_admission_pool.py -n 1 --dist worksteal --tb=short -q`. Completion: the document contains exactly one occurrence of the canonical mandated full-suite command, exactly one new suite command, and the queue table retains exactly rows 1..13 and their existing allocations; test_host_interfaces_are_registered_before_red remains satisfied. This registration is a prerequisite documentation task. The registered command is S below and runs in EVERY phase's VALIDATE, accumulating all delivered pool phases. Its validation obligation is independent of queue-row allocation; test_host_interfaces_are_registered_before_red pins queue rows to 1..13.
+- [x] PRE.1 Register the new phase suite in docs/testing.md before recording P01 RED. Append exactly one fenced command `.venv/bin/python -m pytest tests/test_admission_pool.py -n 1 --dist worksteal --tb=short -q`. Completion: the document contains exactly one occurrence of the canonical mandated full-suite command, exactly one new suite command, and the queue table retains exactly rows 1..13 and their existing allocations; test_host_interfaces_are_registered_before_red remains satisfied. This registration is a prerequisite documentation task. The registered command is S below and runs in EVERY phase's VALIDATE, accumulating all delivered pool phases. Its validation obligation is independent of queue-row allocation; test_host_interfaces_are_registered_before_red pins queue rows to 1..13.
 
 ### Exact verification procedures
 
@@ -104,149 +104,149 @@ Every phase also consumes the preceding phase's VALIDATE evidence. Functional de
 Acceptance: resource-free K=1 pool descriptions in arbitrary directories A/B; while A is held B admits; after release A admits again. Seam A+O. Scope: minimum acquisition/adapter and initial namespace isolation.
 
 ### RED
-- [ ] 1.1 Record exports, A/O signatures, validation, side effects, ownership and observation scope from design.md; completion: test contract identifies acquire/release and namespace observations.
-- [ ] 1.2 Add necessary callable unimplemented new-interface scaffolding; completion: imports/calls work and existing legacy behavior remains operational.
-- [ ] 1.3 Create `test_pool_admits_and_releases`; completion: hold A, observe real B entry, then A reacquisition, with lifecycle companions and external handshakes.
-- [ ] 1.4 Execute R(test_pool_admits_and_releases); completion: missing behavior explains the failed assertion and contract/E are frozen.
+- [x] 1.1 Record exports, A/O signatures, validation, side effects, ownership and observation scope from design.md; completion: test contract identifies acquire/release and namespace observations.
+- [x] 1.2 Add necessary callable unimplemented new-interface scaffolding; completion: imports/calls work and existing legacy behavior remains operational.
+- [x] 1.3 Create `test_pool_admits_and_releases`; completion: hold A, observe real B entry, then A reacquisition, with lifecycle companions and external handshakes.
+- [x] 1.4 Execute R(test_pool_admits_and_releases); completion: missing behavior explains the failed assertion and contract/E are frozen.
 
 ### GREEN
-- [ ] 1.5 Implement K=1 acquisition/release; completion: arbitrary valid namespace/deadline behavior satisfies the contract.
-- [ ] 1.6 Document construction, directory identity/isolation, stable slot-file identities, ownership and errors; completion: matches P01 contract.
-- [ ] 1.7 Execute T(test_pool_admits_and_releases)+G; completion: exit 0/E.
+- [x] 1.5 Implement K=1 acquisition/release; completion: arbitrary valid namespace/deadline behavior satisfies the contract.
+- [x] 1.6 Document construction, directory identity/isolation, stable slot-file identities, ownership and errors; completion: matches P01 contract.
+- [x] 1.7 Execute T(test_pool_admits_and_releases)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 1.8 Record common review findings/dispositions; completion: contract and lifecycle requirements satisfied.
-- [ ] 1.9 Apply justified internal refactoring or retain structure; run T after edits and G afterward; completion: passing E.
+- [x] 1.8 Record common review findings/dispositions; completion: contract and lifecycle requirements satisfied.
+- [x] 1.9 Apply justified internal refactoring or retain structure; run T after edits and G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 1.10 Independently execute T(test_pool_admits_and_releases)+G and audit deliverables; completion: all common gates/P01 acceptance pass.
+- [x] 1.10 Independently execute T(test_pool_admits_and_releases)+G and audit deliverables; completion: all common gates/P01 acceptance pass.
 
 ## 2. P02 — Configuration validation
 
 Acceptance: invalid capacity types/values raise specified TypeError/ValueError before I/O; valid descriptions remain immutable. Seam A+O; consumes P01.
 
 ### RED
-- [ ] 2.1 Record constructor/deadline types, values and errors; completion: literal examples match design.md.
-- [ ] 2.2 Create `test_pool_rejects_invalid_configuration`; completion: type/value parameters and zero-resource observations exercise validation.
-- [ ] 2.3 Execute R(test_pool_rejects_invalid_configuration); completion: absent validation explains failure.
+- [x] 2.1 Record constructor/deadline types, values and errors; completion: literal examples match design.md.
+- [x] 2.2 Create `test_pool_rejects_invalid_configuration`; completion: type/value parameters and zero-resource observations exercise validation.
+- [x] 2.3 Execute R(test_pool_rejects_invalid_configuration); completion: absent validation explains failure.
 
 ### GREEN
-- [ ] 2.4 Implement frozen validation; completion: invalid inputs fail before I/O and P01 behavior remains valid.
-- [ ] 2.5 Document accepted inputs/errors/immutability; completion: matches examples.
-- [ ] 2.6 Execute T(test_pool_rejects_invalid_configuration)+G; completion: exit 0/E.
+- [x] 2.4 Implement frozen validation; completion: invalid inputs fail before I/O and P01 behavior remains valid.
+- [x] 2.5 Document accepted inputs/errors/immutability; completion: matches examples.
+- [x] 2.6 Execute T(test_pool_rejects_invalid_configuration)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 2.7 Record validation review; completion: independent expected values and public observations.
-- [ ] 2.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 2.7 Record validation review; completion: independent expected values and public observations.
+- [x] 2.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 2.9 Independently execute T(test_pool_rejects_invalid_configuration)+G; completion: P01/P02 acceptance passes.
+- [x] 2.9 Independently execute T(test_pool_rejects_invalid_configuration)+G; completion: P01/P02 acceptance passes.
 
 ## 3. P03 — Bounded free-slot admission and release progress
 
 Acceptance: K=2 permits two overlapping holders; caller three positively observes contention and enters after release, with at most K holders throughout. Include K=1 exclusion/progress control. Seam A+O; consumes P01. Free-slot use, bound and progress form one tracer contract.
 
 ### RED
-- [ ] 3.1 Freeze ready/attempt/entry/release protocol and lifecycle companions, including busy-probe release faults; completion: positive O contention and real child handshakes establish observations.
-- [ ] 3.2 Create `test_pool_uses_available_capacity`; completion: K=2 overlap, saturated waiting, bounded release progress, K=1 control and helper lifecycle coverage.
-- [ ] 3.3 Execute R(test_pool_uses_available_capacity); completion: absent bounded free-slot behavior explains failure; freeze the complete contract.
+- [x] 3.1 Freeze ready/attempt/entry/release protocol and lifecycle companions, including busy-probe release faults; completion: positive O contention and real child handshakes establish observations.
+- [x] 3.2 Create `test_pool_uses_available_capacity`; completion: K=2 overlap, saturated waiting, bounded release progress, K=1 control and helper lifecycle coverage.
+- [x] 3.3 Execute R(test_pool_uses_available_capacity); completion: absent bounded free-slot behavior explains failure; freeze the complete contract.
 
 ### GREEN
-- [ ] 3.4 Implement bounded free-slot acquisition/progress; completion: one held slot per request, at most K holders, busy probes released once, failures propagated.
-- [ ] 3.5 Document free-slot use, saturated waiting and implementation-defined contender ordering; completion: original budget retained.
-- [ ] 3.6 Execute T(test_pool_uses_available_capacity)+G; completion: all variants/companions pass, exit 0/E.
+- [x] 3.4 Implement bounded free-slot acquisition/progress; completion: one held slot per request, at most K holders, busy probes released once, failures propagated.
+- [x] 3.5 Document free-slot use, saturated waiting and implementation-defined contender ordering; completion: original budget retained.
+- [x] 3.6 Execute T(test_pool_uses_available_capacity)+G; completion: all variants/companions pass, exit 0/E.
 
 ### INTROSPECT
-- [ ] 3.7 Record scan/bound/progress/lifecycle review; completion: sole owners, stable inode identities, external observations and configured bound retained.
-- [ ] 3.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 3.7 Record scan/bound/progress/lifecycle review; completion: sole owners, stable inode identities, external observations and configured bound retained.
+- [x] 3.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 3.9 Independently execute T(test_pool_uses_available_capacity)+G; completion: overlap, limit, waiting, progress, control and prior phases pass.
+- [x] 3.9 Independently execute T(test_pool_uses_available_capacity)+G; completion: overlap, limit, waiting, progress, control and prior phases pass.
 
 ## 4. P04 — Waiting consumes original deadline
 
 Acceptance: controlled elapsed time in a saturated pool exhausts the original allowance and raises TimeoutError before work. Seam A+O; consumes P03.
 
 ### RED
-- [ ] 4.1 Freeze monotonic/timeout contract, exact/past examples and interruption companions; completion: literal independent time examples.
-- [ ] 4.2 Create `test_pool_wait_uses_original_deadline`; completion: controlled O time drives real acquisition with external work observation.
-- [ ] 4.3 Execute R(test_pool_wait_uses_original_deadline); completion: missing original-deadline accounting explains failure.
+- [x] 4.1 Freeze monotonic/timeout contract, exact/past examples and interruption companions; completion: literal independent time examples.
+- [x] 4.2 Create `test_pool_wait_uses_original_deadline`; completion: controlled O time drives real acquisition with external work observation.
+- [x] 4.3 Execute R(test_pool_wait_uses_original_deadline); completion: missing original-deadline accounting explains failure.
 
 ### GREEN
-- [ ] 4.4 Implement waiting/scans against the same absolute deadline; completion: elapsed work spends the original allowance.
-- [ ] 4.5 Document waiting/timeout semantics; completion: existing production budgets preserved.
-- [ ] 4.6 Execute T(test_pool_wait_uses_original_deadline)+G; completion: exit 0/E.
+- [x] 4.4 Implement waiting/scans against the same absolute deadline; completion: elapsed work spends the original allowance.
+- [x] 4.5 Document waiting/timeout semantics; completion: existing production budgets preserved.
+- [x] 4.6 Execute T(test_pool_wait_uses_original_deadline)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 4.7 Record deadline/cleanup review; completion: controlled time provides the policy oracle.
-- [ ] 4.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 4.7 Record deadline/cleanup review; completion: controlled time provides the policy oracle.
+- [x] 4.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 4.9 Independently execute T(test_pool_wait_uses_original_deadline)+G; completion: timeout precedes work and prior phases pass.
+- [x] 4.9 Independently execute T(test_pool_wait_uses_original_deadline)+G; completion: timeout precedes work and prior phases pass.
 
 ## 5. P05 — Deadline expires during acquisition
 
 Acceptance: a lock obtained at/after deadline is released, with TimeoutError preceding protected entry. Seam A+O; consumes P04.
 
 ### RED
-- [ ] 5.1 Freeze final-boundary semantics and companion release faults; completion: literal exact/past cases.
-- [ ] 5.2 Create `test_pool_checks_deadline_before_entry`; completion: O advances time at the external lock boundary.
-- [ ] 5.3 Execute R(test_pool_checks_deadline_before_entry); completion: late protected entry explains failure.
+- [x] 5.1 Freeze final-boundary semantics and companion release faults; completion: literal exact/past cases.
+- [x] 5.2 Create `test_pool_checks_deadline_before_entry`; completion: O advances time at the external lock boundary.
+- [x] 5.3 Execute R(test_pool_checks_deadline_before_entry); completion: late protected entry explains failure.
 
 ### GREEN
-- [ ] 5.4 Implement final-boundary timeout/release; completion: expired acquisition releases and reports timeout before work.
-- [ ] 5.5 Document expiry during acquisition; completion: deadline covers entry.
-- [ ] 5.6 Execute T(test_pool_checks_deadline_before_entry)+G; completion: exit 0/E.
+- [x] 5.4 Implement final-boundary timeout/release; completion: expired acquisition releases and reports timeout before work.
+- [x] 5.5 Document expiry during acquisition; completion: deadline covers entry.
+- [x] 5.6 Execute T(test_pool_checks_deadline_before_entry)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 5.7 Record boundary/precedence review; completion: timeout retains precedence over ordinary close failure.
-- [ ] 5.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 5.7 Record boundary/precedence review; completion: timeout retains precedence over ordinary close failure.
+- [x] 5.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 5.9 Independently execute T(test_pool_checks_deadline_before_entry)+G; completion: final-boundary and earlier deadline cases pass.
+- [x] 5.9 Independently execute T(test_pool_checks_deadline_before_entry)+G; completion: final-boundary and earlier deadline cases pass.
 
 ## 6. P06 — Safe-node validation
 
 Acceptance: encountered symlink/nonregular/wrong-owner directory or slot terminates admission with a visible security error before protected entry. Seam A+O; consumes P03.
 
 ### RED
-- [ ] 6.1 Freeze unsafe-node/error observations. For foreign UID delegate real open/fstat, select a real regular slot by stat type, change only st_uid, preserve every other field/precision and directory observation, actual ownership/fd/release. Completion: trace establishes that admission's slot-owner validation consumed the supplied observation after DirectoryDescriptor's successful directory validation. Failure to establish the observation is a prerequisite error.
-- [ ] 6.2 Create `test_pool_rejects_unsafe_node`; completion: real validation variants and operation/close companions.
-- [ ] 6.3 Execute R(test_pool_rejects_unsafe_node); completion: missing security behavior explains failure. If behavior already satisfies the contract, agree a revised meaningful phase boundary before proceeding.
+- [x] 6.1 Freeze unsafe-node/error observations. For foreign UID delegate real open/fstat, select a real regular slot by stat type, change only st_uid, preserve every other field/precision and directory observation, actual ownership/fd/release. Completion: trace establishes that admission's slot-owner validation consumed the supplied observation after DirectoryDescriptor's successful directory validation. Failure to establish the observation is a prerequisite error.
+- [x] 6.2 Create `test_pool_rejects_unsafe_node`; completion: real validation variants and operation/close companions.
+- [x] 6.3 Execute R(test_pool_rejects_unsafe_node); completion: missing security behavior explains failure. If behavior already satisfies the contract, agree a revised meaningful phase boundary before proceeding.
 
 ### GREEN
-- [ ] 6.4 Implement current security refusal; completion: security errors propagate distinctly from contention.
-- [ ] 6.5 Document safe-node requirements/errors; completion: matches frozen contract.
-- [ ] 6.6 Execute T(test_pool_rejects_unsafe_node)+G; completion: exit 0/E.
+- [x] 6.4 Implement current security refusal; completion: security errors propagate distinctly from contention.
+- [x] 6.5 Document safe-node requirements/errors; completion: matches frozen contract.
+- [x] 6.6 Execute T(test_pool_rejects_unsafe_node)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 6.7 Record security/lifecycle review; completion: secure node checks and sole-release semantics retained.
-- [ ] 6.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 6.7 Record security/lifecycle review; completion: secure node checks and sole-release semantics retained.
+- [x] 6.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 6.9 Independently execute T(test_pool_rejects_unsafe_node)+G; completion: refusal/resource companions pass.
+- [x] 6.9 Independently execute T(test_pool_rejects_unsafe_node)+G; completion: refusal/resource companions pass.
 
 ## 7. P07 — Provisional worker/affinity capacity
 
 Acceptance: intermediate max(1, min(workers, len(affinity))) for valid affinity; workers=8/affinity=6 yields 6. Input scope is workers and raw affinity; quota discovery belongs to P08/P09, final fallback to P10, session integration to P11. Seam C; consumes P02.
 
 ### RED
-- [ ] 7.1 Record C signatures/result, workers validation, error classification and export path; completion: provisional calculation/observation scope explicit.
-- [ ] 7.2 Add necessary callable unimplemented resolver scaffolding; completion: missing behavior identified explicitly.
-- [ ] 7.3 Create `test_capacity_respects_workers_and_affinity`; completion: literal provisional examples, worker validation and relevant resource companions. P08/P09 extend raw fixtures to valid-unlimited quota as their discovery lands.
-- [ ] 7.4 Execute R(test_capacity_respects_workers_and_affinity); completion: missing provisional policy explains failure.
+- [x] 7.1 Record C signatures/result, workers validation, error classification and export path; completion: provisional calculation/observation scope explicit.
+- [x] 7.2 Add necessary callable unimplemented resolver scaffolding; completion: missing behavior identified explicitly.
+- [x] 7.3 Create `test_capacity_respects_workers_and_affinity`; completion: literal provisional examples, worker validation and relevant resource companions. P08/P09 extend raw fixtures to valid-unlimited quota as their discovery lands.
+- [x] 7.4 Execute R(test_capacity_respects_workers_and_affinity); completion: missing provisional policy explains failure.
 
 ### GREEN
-- [ ] 7.5 Implement worker/affinity policy/result; completion: calculation uses workers and affinity observations.
-- [ ] 7.6 Document intermediate contract/input errors and quota-phase handoff; completion: scope matches acceptance.
-- [ ] 7.7 Execute T(test_capacity_respects_workers_and_affinity)+G; completion: exit 0/E.
+- [x] 7.5 Implement worker/affinity policy/result; completion: calculation uses workers and affinity observations.
+- [x] 7.6 Document intermediate contract/input errors and quota-phase handoff; completion: scope matches acceptance.
+- [x] 7.7 Execute T(test_capacity_respects_workers_and_affinity)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 7.8 Record policy/seam review; completion: independent expected values and affinity-based bound.
-- [ ] 7.9 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 7.8 Record policy/seam review; completion: independent expected values and affinity-based bound.
+- [x] 7.9 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 7.10 Independently execute T(test_capacity_respects_workers_and_affinity)+G; completion: provisional resolver/pool phases pass.
+- [x] 7.10 Independently execute T(test_capacity_respects_workers_and_affinity)+G; completion: provisional resolver/pool phases pass.
 
 ## 8. P08 — Effective cgroup v2 quota
 

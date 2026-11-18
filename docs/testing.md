@@ -1685,6 +1685,71 @@ an intended detection. Real Docker execution remains exclusively operator task
 11.15. These controls are not real survivor, ownership or removal proof; full
 orchestrator integration remains task 11.10.1.
 
+## Session build admission pool suite
+
+`tests.admission_support.AdmissionPool` is an immutable, resource-free
+configuration: construction opens nothing. Acquisition uses an existing absolute
+directory and searches its configured number of stable slot files nonblockingly.
+A free slot admits even if an earlier slot is busy. Each request holds at most
+one slot, at most K requests hold admission, and a saturated request scans again
+after a polling wait. Busy-probe owners release before subsequent probes;
+non-contention and release failures propagate. Contender ordering is
+implementation-defined. Each acquire context
+securely opens that directory through `DirectoryDescriptor` and immediately
+adopts its slot fd into one `OwnedDescriptor`; the injected `AdmissionSystem`
+borrows descriptors for nonblocking locking. Entry yields `None`. Separate
+directories admit independently, and release permits a fresh acquisition in the
+same namespace. Slot files retain their inode identities and are not deleted on
+release. Ordinary cleanup failures remain visible; active operation failures or
+interruptions retain authority and independent releases are attempted once.
+
+Capacity must be a positive integer excluding bool: wrong types raise
+`TypeError`, zero/negative values raise `ValueError`, before any I/O. Acquisition
+requires a finite absolute monotonic integer/float deadline excluding bool;
+wrong types raise `TypeError` and NaN/infinity raise `ValueError`, before any
+resource operation. Large integers are validated without conversion to float.
+The description remains immutable; a rejected input creates no slot file.
+
+This is the initial migration slice, not the final session-wide pool. Legacy
+callers still use their existing admission. P03 adds bounded free-slot use and
+release progress; P04 checks the caller's same absolute deadline before probes
+and waiting, caps polling sleep at its remainder, and raises `TimeoutError` at
+exact/past exhaustion before protected work. Waiting never renews caller or
+production allowances. P05 rechecks time after successful locking, before entry:
+a lock obtained at or past the same deadline is released with `TimeoutError`,
+which retains precedence over ordinary cleanup failures. P06 rejects unsafe
+namespace directories through the filesystem capability, and symlink,
+nonregular or foreign-owned slot nodes with `UnsafeDescriptorError` before
+locking/protected entry. Socket slots can fail at open with `ENXIO`; a
+no-follow stat relative to the held namespace classifies a confirmed nonregular
+node as unsafe without opening another descriptor. A regular or inconclusive
+observation preserves the original open error; lookup interruptions propagate.
+Only lock contention permits retry; security and other operation/release failures
+propagate. Foreign-UID tests replace only the observed
+regular-slot UID after real `fstat`, retaining all other fields/precision and
+original directory observations, real ownership and release.
+
+P07 exports `resolve_admission_capacity(*, workers, system=None)` and immutable
+`CapacityDecision(capacity, reason)` from `tests.admission_support`. Its
+**provisional** calculation is `max(1, min(workers, len(affinity)))` for valid raw
+affinity: workers=8 and six allowed CPUs yields six. Worker count must be a
+positive integer excluding bool (`TypeError` for wrong type, `ValueError` for
+nonpositive values) before observations. `CapacitySystem` supplies raw affinity
+and file text; this intermediate resolver uses affinity only and propagates
+observation errors/interruption. Quota reads/discovery, known-unlimited policy
+and final conservative fallback belong to P08–P10; file reads remain explicitly
+unimplemented until their owning phase. Session wiring and caller migrations
+belong to subsequent phases. This provisional result is not yet used by callers.
+
+Register this suite before its first RED recording and run the full accumulated
+suite in every admission-pool phase's VALIDATE, alongside the full green gate
+and applicable registered-module regressions. This registration does not change
+the thirteen-row scheduling queue or existing worker allocations.
+
+```sh
+.venv/bin/python -m pytest tests/test_admission_pool.py -n 1 --dist worksteal --tb=short -q
+```
+
 ## Future implementation
 
 Follow the change's RED → GREEN → INTROSPECT → VALIDATE phase gates. Register each

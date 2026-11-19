@@ -37,7 +37,7 @@ COMMANDS = (
 
 
 def main(*, run=run_streaming, workers="8") -> int:
-    """Attempt every independent check; preserve scope and first failing status."""
+    """Run all fast checks; run full pytest only after a successful fast block."""
     try:
         worker_count = int(workers)
     except ValueError:
@@ -49,7 +49,10 @@ def main(*, run=run_streaming, workers="8") -> int:
     pytest_command[pytest_command.index("-n") + 1] = str(worker_count)
     commands = (*COMMANDS[:-1], tuple(pytest_command))
     status = 0
-    for argv in commands:
+    for index, argv in enumerate(commands):
+        if index == len(commands) - 1 and status:
+            print("Fast checks failed; pytest was not run.", file=sys.stderr)
+            break
         print("\n$ " + " ".join(argv), flush=True)
         result = run(argv, root=ROOT)
         code = result.returncode

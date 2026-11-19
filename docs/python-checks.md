@@ -114,6 +114,18 @@ points or the independently typed `src/` and `host_tests/` boundary.
 
 ## Permanent green gate (G)
 
+After changing Python code, format production, host support, tests and scripts
+before G:
+
+```sh
+.venv/bin/ruff format src tests host_tests scripts
+```
+
+Supply inventoried extensionless Python sources explicitly as well: Ruff's
+directory discovery does not select them. This is a separate write step, not a
+mode of G or permission to add mutation arguments to its entry points. The gate
+itself remains read-only over the complete deterministic inventory.
+
 Before delivering a GREEN/INTROSPECT/VALIDATE candidate state and before any
 commit, run:
 
@@ -123,9 +135,14 @@ scripts/check-green
 
 The gate runs `scripts/check-python-lint`, `scripts/check-python-format`,
 `scripts/check-python-compile`, `scripts/check-types`, and the exact full-suite
-parallel pytest command in [testing.md](testing.md). It attempts every
-independent check and returns the first failing status; an incomplete process
-cleanup also fails, and an interruption keeps its identity. No scope or fix
+parallel pytest command in [testing.md](testing.md). It attempts all four fast
+checks, even after an earlier fast failure, and preserves their first failing
+status. If any fast check fails, has no status or leaves incomplete process
+cleanup, the gate stops before pytest and remains unsuccessful. Only a fully
+successful fast block launches the complete mandated pytest command, whose
+failure status is also preserved. An interruption keeps its identity and stops
+execution. Tests not run are not passing verification; after correction rerun
+the complete G. No scope or fix
 arguments are supported: `scripts/check-green --fix` exits nonzero rather than
 narrowing the gate. `tests/test_green_gate.py` pins the commanded plan, the
 worker-count range and the preserved statuses.

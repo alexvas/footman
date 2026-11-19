@@ -4,8 +4,12 @@ Read and follow [docs/testing.md](docs/testing.md) for testing instructions.
 Run `scripts/check-green` from the repository root on the final candidate state;
 it runs the Ruff lint, Ruff format, syntax-compilation and `ty` checks over one
 deterministic Python inventory, then the mandated full-suite parallel pytest
-command. Attempt every independent check, preserve the first failing status, and
-never add scope or fix arguments to narrow it. See
+command. After Python code changes, format production, host support, tests and
+scripts with Ruff before G; formatting is a separate write step, never part of G.
+Attempt all four fast checks even after a failure, preserve the first failing
+status, and do not launch pytest unless the entire fast block passes. A failed
+fast block is unsuccessful G, not passing test verification. Never add scope or
+fix arguments to narrow G. See
 [docs/python-checks.md](docs/python-checks.md) for installation, source
 selection, parallelism and the reviewed suppressions.
 G applies to a delivered GREEN/INTROSPECT/VALIDATE candidate state and requires

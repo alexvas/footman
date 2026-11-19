@@ -323,7 +323,7 @@ def test_omitted_existing_command_is_detected(omitted):
 
 
 @pytest.mark.parametrize("failed", range(len(EXPECTED_COMMANDS)))
-def test_gate_preserves_failure_and_runs_independent_checks(failed):
+def test_gate_runs_all_fast_checks_and_stops_before_pytest_on_failure(failed):
     gate = load_gate()
     checks = load_check_module()
     calls = []
@@ -338,7 +338,12 @@ def test_gate_preserves_failure_and_runs_independent_checks(failed):
         )
 
     assert gate.main(run=run) == 7
-    assert tuple(calls) == EXPECTED_COMMANDS
+    expected = (
+        EXPECTED_COMMANDS
+        if failed == len(EXPECTED_COMMANDS) - 1
+        else EXPECTED_COMMANDS[:-1]
+    )
+    assert tuple(calls) == expected
 
 
 @pytest.mark.parametrize("workers", ["1", "2", "3", "8", "16", "1024", "0002"])
@@ -350,7 +355,10 @@ def test_worker_counts_preserve_full_scope_and_failure_status(workers, status):
 
     def run(argv, *, root):
         calls.append(tuple(argv))
-        return checks.CommandResult(status, b"", b"", True)
+        # A successful fast block must still run the complete configured suite,
+        # preserving its status independently of the worker-count spelling.
+        code = status if tuple(argv)[0] == ".venv/bin/python" else 0
+        return checks.CommandResult(code, b"", b"", True)
 
     assert gate.main(run=run, workers=workers) == status
     expected = list(EXPECTED_COMMANDS[-1])
@@ -394,6 +402,54 @@ def test_unsettled_cleanup_is_not_green():
         )
         != 0
     )
+
+
+@pytest.mark.parametrize("failed", range(4))
+@pytest.mark.parametrize(
+    ("code", "clean", "expected"),
+    [(7, True, 7), (-15, True, 143), (None, True, 1), (0, False, 1)],
+)
+def test_fast_failure_keeps_first_status_and_never_runs_slow_checks(
+    failed, code, clean, expected, capsys
+):
+    gate = load_gate()
+    checks = load_check_module()
+    calls = []
+
+    def run(argv, *, root):
+        index = len(calls)
+        calls.append(tuple(argv))
+        if index == failed:
+            return checks.CommandResult(
+                code, b"", b"", clean, () if clean else (OSError("cleanup failed"),)
+            )
+        # Every later fast check fails too: none can replace the first status.
+        return checks.CommandResult(9 if index > failed else 0, b"", b"", True)
+
+    assert gate.main(run=run) == expected
+    assert tuple(calls) == EXPECTED_COMMANDS[:-1]
+    diagnostic = capsys.readouterr().err
+    assert "Fast checks failed; pytest was not run." in diagnostic
+    if not clean:
+        assert "check lifecycle failure: cleanup failed" in diagnostic
+
+
+def test_fast_interruption_is_not_hidden_by_an_earlier_failure():
+    gate = load_gate()
+    checks = load_check_module()
+    calls = []
+    interruption = KeyboardInterrupt("fast block interrupted")
+
+    def run(argv, *, root):
+        calls.append(tuple(argv))
+        if len(calls) == 2:
+            raise interruption
+        return checks.CommandResult(7, b"", b"", True)
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        gate.main(run=run)
+    assert caught.value is interruption
+    assert tuple(calls) == EXPECTED_COMMANDS[:2]
 
 
 def test_entry_point_rejects_narrowing_and_mutation_arguments():
@@ -463,6 +519,26 @@ def test_isolated_type_failure_is_nonzero(tmp_path):
     assert result.clean
     assert result.returncode == 1, result.stderr + result.stdout
     assert b"invalid-assignment" in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("relative", ("docs/testing.md", "docs/python-checks.md"))
+def test_formatting_is_documented_as_a_separate_pre_gate_step(relative):
+    from tests import mcp_provenance as p
+
+    text = " ".join(p.read(REPO_ROOT / relative).decode().split())
+    assert ".venv/bin/ruff format src tests host_tests scripts" in text
+    assert "extensionless Python sources explicitly" in text
+    assert "read-only" in text
+    assert "before pytest" in text
+
+
+def test_agent_rules_require_the_fast_block_before_pytest():
+    from tests import mcp_provenance as p
+
+    text = " ".join(p.read(REPO_ROOT / "AGENTS.md").decode().split())
+    assert "before G" in text and "separate write step" in text
+    assert "Attempt all four fast checks even after a failure" in text
+    assert "do not launch pytest unless the entire fast block passes" in text
 
 
 @pytest.mark.parametrize("status", [0, 7])

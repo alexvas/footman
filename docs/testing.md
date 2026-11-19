@@ -5,12 +5,29 @@
 Run the whole gate from the repository root with `scripts/check-green`. It runs
 the Ruff lint, Ruff format, syntax-compilation and type checks recorded in
 [python-checks.md](python-checks.md), then the mandated full-suite parallel
-pytest command below. It attempts every independent check, keeps the first
-failing status, fails on incomplete process cleanup, and accepts no scope or fix
-arguments. `GREEN_CHECKS_WORKERS` changes only the pytest worker count (an
+pytest command below. All four fast checks (Ruff lint, Ruff format,
+syntax compilation and ty) run even if an earlier fast check fails. The gate
+keeps the first failing status and stops before pytest if any fast check fails,
+including missing status or incomplete process cleanup. Only a successful fast
+block permits the complete pytest suite to run. A failed fast block is an
+unsuccessful G; tests not run have no passing verification. The gate accepts no
+scope or fix arguments. `GREEN_CHECKS_WORKERS` changes only the pytest worker count (an
 integer from 1 to 1024); it never narrows the suite or the other checks.
 `tests/test_green_gate.py` pins that plan, the worker range and the preserved
 statuses.
+
+After changing Python code, format production, host support, tests and scripts
+before running G:
+
+```sh
+.venv/bin/ruff format src tests host_tests scripts
+```
+
+Pass any inventoried extensionless Python sources explicitly to Ruff as well;
+directory discovery alone does not include them. Formatting is a separate
+write operation. G remains read-only and checks the full deterministic inventory;
+it never formats or fixes code itself. After correcting a fast-check failure,
+rerun the complete G on the candidate, not just the previously failed check.
 
 A successful full pytest run requires no skips, xfails or xpasses, including
 collection and fixture-setup skips. `tests/green_skip_policy.py`, registered in
@@ -106,8 +123,11 @@ not waive any earlier-suite or full-gate requirement. Add future delivered suite
 to this scheduling policy when their commands are registered.
 
 Keep independent complete stdout/stderr logs, command/start/end observations
-and actual exit statuses for every invocation. Attempt every independent check,
-retain the first observed failing status as well as all individual statuses,
+and actual exit statuses for every invocation. Attempt every independently
+required invocation and retain the first observed failing status as well as all
+individual statuses. Inside G, run all fast checks but do not start its pytest
+command after a failed fast block. That boundary does not waive separately
+required specialised invocations. Record tests not run as not run, not passing;
 and wait for every launched command and owned cleanup before declaring the
 combined run complete. An unsettled cleanup is a failure, not free capacity for
 a replacement invocation. Do not stop the other checks on a test failure, hide

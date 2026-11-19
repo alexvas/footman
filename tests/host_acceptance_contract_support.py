@@ -20,6 +20,7 @@ from tests import mcp_attribution_support as attribution
 from tests import mcp_contract_support as service
 from tests import mcp_provenance as p
 from tests import mcp_wheel_support as wheel
+from tests.admission_support import AdmissionPool
 from tests.dispatcher_harness import write_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,14 +57,25 @@ def operation_record(value):
 
 
 def invoke(
-    root, name, args, *, cwd, evidence, env=None, label="operation", deadline=None
+    root,
+    name,
+    args,
+    *,
+    admission: AdmissionPool,
+    cwd,
+    evidence,
+    env=None,
+    label="operation",
+    deadline=None,
 ):
+    if not isinstance(admission, AdmissionPool):
+        raise ValueError("wrapper execution requires an AdmissionPool")
     deadline = time.monotonic() + 120 if deadline is None else deadline
     wrapper = required_surface(name, root)
     environment = wheel.clean_environment() if env is None else dict(env)
     # Both wrappers may provision/build. Admission waiting consumes this same
     # original envelope; no helper or subprocess receives a renewed 120 seconds.
-    with wheel.build_slot(wheel.BUILD_SLOT_PATH, deadline=deadline):
+    with admission.acquire(deadline=deadline):
         value = wheel.command(
             [wrapper, *args],
             cwd=cwd,
@@ -86,9 +98,21 @@ def invoke(
     return value
 
 
-def prepared_root(tmp):
-    # Bound new preparation/copy/Git work as well as the later uv invocation.
-    with wheel.build_slot(wheel.BUILD_SLOT_PATH, deadline=time.monotonic() + 120):
+def prepared_command(argv, *, admission: AdmissionPool, cwd, env, deadline):
+    """Parent admission covers all work in the unmodified prepared Python leg."""
+    if not isinstance(admission, AdmissionPool):
+        raise ValueError("prepared execution requires an AdmissionPool")
+    with admission.acquire(deadline=deadline):
+        return wheel.command(
+            argv, cwd=cwd, env=env, timeout_seconds=deadline - time.monotonic()
+        )
+
+
+def prepared_root(tmp, *, admission: AdmissionPool):
+    # Keep the original preparation envelope and complete protected region.
+    if not isinstance(admission, AdmissionPool):
+        raise ValueError("preparation requires an AdmissionPool")
+    with admission.acquire(deadline=time.monotonic() + 120):
         return _prepared_root(tmp)
 
 
@@ -214,9 +238,9 @@ def isolated_path(tmp, *, python=True, uv=True, git=True):
     return tools
 
 
-def build_case(tmp, case):
+def build_case(tmp, case, *, admission):
     candidate_dist = attribution.dist_identity(ROOT)
-    root, revision = prepared_root(tmp)
+    root, revision = prepared_root(tmp, admission=admission)
     (root / "dist").mkdir()
     p.write(root / "dist/unrelated.whl", b"unowned stale artifact")
     if not case.attempted:
@@ -237,6 +261,7 @@ def build_case(tmp, case):
         root,
         "build-acceptance-wheel",
         ["--manifest", str(manifest)],
+        admission=admission,
         cwd=neutral,
         env=environment,
         evidence=evidence,
@@ -312,6 +337,7 @@ def build_case(tmp, case):
             root,
             "build-acceptance-wheel",
             ["--manifest", str(evidence / "second.json")],
+            admission=admission,
             cwd=neutral,
             env=environment,
             evidence=evidence,
@@ -466,7 +492,9 @@ def git(root, *args):
     return result["stdout"]
 
 
-def bind(root, evidence, *, cwd=None, env=None, label="binding", deadline=None):
+def bind(
+    root, evidence, *, admission, cwd=None, env=None, label="binding", deadline=None
+):
     """Real uv only: the returned wheel may be used by isolated runner tests."""
     deadline = time.monotonic() + 120 if deadline is None else deadline
     evidence.mkdir()
@@ -477,6 +505,7 @@ def bind(root, evidence, *, cwd=None, env=None, label="binding", deadline=None):
         root,
         "build-acceptance-wheel",
         ["--manifest", str(path)],
+        admission=admission,
         cwd=root if cwd is None else cwd,
         evidence=evidence,
         env=env,
@@ -534,7 +563,7 @@ def build_operation(manifest, root):
     return operation
 
 
-def scripted_binding(root, evidence, tools, *, case=None):
+def scripted_binding(root, evidence, tools, *, admission, case=None):
     evidence.mkdir()
     tools.mkdir()
     executable, _, attempts = scripted_uv(
@@ -551,6 +580,7 @@ def scripted_binding(root, evidence, tools, *, case=None):
         root,
         "build-acceptance-wheel",
         ["--manifest", str(manifest)],
+        admission=admission,
         cwd=evidence,
         evidence=evidence,
         env=environment,
@@ -636,6 +666,7 @@ def runner(
     wheel_path,
     evidence,
     *,
+    admission,
     env=None,
     label="runner",
     image="d9e853e87e55",
@@ -655,6 +686,7 @@ def runner(
             "--evidence",
             str(evidence),
         ],
+        admission=admission,
         cwd=root if cwd is None else cwd,
         evidence=evidence.parent,
         env=env,
@@ -941,8 +973,8 @@ probe['run']()
     return result, records, bound
 
 
-def policy_root(tmp, case):
-    root, _ = prepared_root(tmp)
+def policy_root(tmp, case, *, admission):
+    root, _ = prepared_root(tmp, admission=admission)
     environment, records = configure_policy_suite(root, tmp, case)
     return root, environment, records
 

@@ -6,7 +6,6 @@ import os
 import sys
 import time
 import zipfile
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -16,15 +15,6 @@ import _footman_acceptance as build
 from tests import host_acceptance_contract_support as h
 from tests import mcp_provenance as p
 from tests import mcp_wheel_support as wheel
-
-
-def _prepared_command(argv, *, cwd, env, deadline):
-    # Parent admission covers ALL uv work inside the unmodified real Python leg.
-    assert wheel.BUILD_SLOT_PATH is not None, "missing shared admission fixture"
-    with wheel.build_slot(wheel.BUILD_SLOT_PATH, deadline=deadline):
-        return wheel.command(
-            argv, cwd=cwd, env=env, timeout_seconds=deadline - time.monotonic()
-        )
 
 
 def _implementation(name):
@@ -41,14 +31,14 @@ def _implementation(name):
 @pytest.mark.parametrize("status", [0, 17])
 @pytest.mark.parametrize("post_fault", ["none", "source", "readme", "interruption"])
 def test_public_build_retains_pre_and_post_artifacts_on_every_outcome(
-    tmp_path, status, post_fault
+    admission, tmp_path, status, post_fault
 ):
     from dataclasses import replace
 
     from tests.wheel_attribution_cases import CASES
 
     candidate = build.Tooling(h.ROOT).dist_inventory()
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     (root / "dist").mkdir()
     p.write(root / "dist/unrelated", b"unowned and unchanged")
     mutation = {"source": "src/footman/__init__.py", "readme": "README.md"}.get(
@@ -71,6 +61,7 @@ def test_public_build_retains_pre_and_post_artifacts_on_every_outcome(
         root,
         "build-acceptance-wheel",
         ["--manifest", str(manifest)],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment(
@@ -109,14 +100,14 @@ def test_public_build_retains_pre_and_post_artifacts_on_every_outcome(
 @pytest.mark.parametrize("status", [0, 17])
 @pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
 def test_post_build_dist_inventory_failure_is_independent_and_once_owned(
-    tmp_path, monkeypatch, status, fault
+    admission, tmp_path, monkeypatch, status, fault
 ):
     from dataclasses import replace
 
     from tests.wheel_attribution_cases import CASES
 
     module = _implementation("build_acceptance_wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     executable, _, _ = h.scripted_uv(tmp_path, replace(CASES[0], build_status=status))
     monkeypatch.setenv("PATH", str(executable.parent) + os.pathsep + os.environ["PATH"])
     evidence = tmp_path / "evidence"
@@ -385,14 +376,14 @@ def test_runner_preflight_failure_finalizes_outputs_status_and_report(
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_build_stream_failure_still_publishes_operation_once(
-    tmp_path, monkeypatch, status, stream, interrupted
+    admission, tmp_path, monkeypatch, status, stream, interrupted
 ):
     from dataclasses import replace
 
     from tests.wheel_attribution_cases import CASES
 
     module = _implementation("build_acceptance_wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     executable, _, _ = h.scripted_uv(tmp_path, replace(CASES[0], build_status=status))
     monkeypatch.setenv("PATH", str(executable.parent) + os.pathsep + os.environ["PATH"])
     evidence = tmp_path / "evidence"
@@ -457,96 +448,158 @@ def test_host_and_mcp_use_one_nonvacuous_admission_path(_wheel_build_slot_path):
 def test_prepared_root_and_call_admission_charge_original_envelope(
     tmp_path, monkeypatch
 ):
-    active, events = [], []
-    clock = [10.0]
+    from tests.admission_support import AdmissionPool
+    from tests.clock_support import ManualClock, module_clock
+    from tests.test_admission_pool import (
+        RecordingDescriptors,
+        RecordingSystem,
+        assert_released,
+    )
 
-    @contextmanager
-    def slot(path, *, deadline):
-        assert path == wheel.BUILD_SLOT_PATH and path is not None
-        events.append(deadline)
-        active.append(True)
-        clock[0] += 3
-        try:
-            yield
-        finally:
-            active.pop()
+    events, contexts, completed = [], [], []
+    clock = ManualClock(origin=10)
+    namespace = tmp_path / "pool"
+    namespace.mkdir()
+    ops = RecordingDescriptors(namespace)
 
-    def prepare(path):
-        assert active
-        return "prepared"
+    class System(RecordingSystem):
+        def monotonic(self):
+            return clock.monotonic()
+
+        def try_lock_exclusive(self, fd):
+            acquired = super().try_lock_exclusive(fd)
+            if acquired:
+                clock.advance(3, label="preparation admission spends original budget")
+            return acquired
+
+    class Pool(AdmissionPool):
+        def acquire(self, *, deadline):
+            # Observe the supported A argument without replacing its policy/owners.
+            events.append(deadline)
+            context = super().acquire(deadline=deadline)
+            contexts.append(context)
+            return context
+
+    pool = Pool(directory=namespace, capacity=1, system=System(descriptors=ops))
+    original_command = wheel.command
+
+    def preparation_command(argv, **kwargs):
+        assert any(token[2] == "slot" for token in ops.live.values())
+        assert clock.monotonic() == 13 and kwargs["timeout_seconds"] == 20
+        value = original_command(argv, **kwargs)
+        completed.append(value)
+        return value
+
+    with module_clock(h, clock), monkeypatch.context() as patch:
+        patch.setattr(wheel, "command", preparation_command)
+        root, revision = h.prepared_root(tmp_path, admission=pool)
+    assert root == tmp_path / "prepared" and len(revision) == 40
+    assert not (root / ".git/index").exists()
+    assert len(completed) == 7 and all(value["status"] == 0 for value in completed)
+    assert events == [130] and clock.elapsed() == 3
+    assert_released(ops)
+    before = list(ops.closed)
+    contexts[0].__exit__(None, None, None)
+    contexts[0].__exit__(None, None, None)
+    assert ops.closed == before
 
     def command(*args, **kwargs):
-        assert active and kwargs["timeout_seconds"] == 17
+        assert any(token[2] == "slot" for token in ops.live.values())
+        assert kwargs["timeout_seconds"] == 17
         return "collected"
 
-    monkeypatch.setattr(wheel, "build_slot", slot)
-    monkeypatch.setattr(h, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    monkeypatch.setattr(h, "_prepared_root", prepare)
-    assert h.prepared_root(tmp_path) == "prepared"
-    monkeypatch.setattr(
-        sys.modules[__name__], "time", SimpleNamespace(monotonic=lambda: clock[0])
-    )
-    monkeypatch.setattr(wheel, "command", command)
-    assert (
-        _prepared_command(["unused"], cwd=tmp_path, env={}, deadline=33) == "collected"
-    )
-    assert events == [130, 33] and not active
+    with module_clock(h, clock), monkeypatch.context() as patch:
+        patch.setattr(wheel, "command", command)
+        assert (
+            h.prepared_command(
+                ["unused"], admission=pool, cwd=tmp_path, env={}, deadline=33
+            )
+            == "collected"
+        )
+    assert events == [130, 33] and clock.monotonic() == 16
+    assert_released(ops)
+    before = list(ops.closed)
+    contexts[1].__exit__(None, None, None)
+    contexts[1].__exit__(None, None, None)
+    assert ops.closed == before
 
 
 @pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
 def test_wrapper_admission_release_preserves_primary_and_refuses_publication(
     tmp_path, monkeypatch, fault
 ):
-    wrapper = tmp_path / "wrapper"
-    p.write(wrapper, b"fixture wrapper bytes")
-    original_ops, original_owner = wheel.OPS, wheel.OwnedDescriptor
+    from tests.admission_support import AdmissionPool
+    from tests.test_admission_pool import (
+        RecordingDescriptors,
+        RecordingSystem,
+        assert_released,
+    )
+
+    (tmp_path / "scripts").mkdir()
+    wrapper = tmp_path / "scripts/run-host-acceptance"
+    p.write(wrapper, b"#!/bin/sh\nexit 0\n")
+    wrapper.chmod(0o700)
+    namespace = tmp_path / "pool"
+    namespace.mkdir()
     primary = (
         KeyboardInterrupt("wrapper interrupted")
         if fault == "interruption-close"
         else ValueError("wrapper operation failed")
     )
-    secondary = OSError("admission close failed")
-    targets, releases, owners, directories = set(), [], [], []
+    secondary, parent_release = (
+        OSError("admission close failed"),
+        OSError("independent directory close failed"),
+    )
+    ops = RecordingDescriptors(namespace, release=secondary)
+    ops.parent_release = parent_release
+    contexts, work = [], []
 
-    class Ops:
-        def __getattr__(self, name):
-            return getattr(original_ops, name)
+    class Pool(AdmissionPool):
+        def acquire(self, *, deadline):
+            context = super().acquire(deadline=deadline)
+            contexts.append(context)
+            return context
 
-        def close(self, fd):
-            directory = os.readlink(f"/proc/self/fd/{fd}") == str(
-                wheel.BUILD_SLOT_PATH.parent
-            )
-            original_ops.close(fd)
-            if directory:
-                directories.append(fd)
-            if fd in targets:
-                releases.append(fd)
-                raise secondary
-
-    def descriptor(ops, fd, **kwargs):
-        owner = original_owner(ops, fd, **kwargs)
-        targets.add(fd)
-        owners.append(owner)
-        return owner
+    pool = Pool(
+        directory=namespace, capacity=1, system=RecordingSystem(descriptors=ops)
+    )
 
     def command(*args, **kwargs):
+        assert any(token[2] == "slot" for token in ops.live.values())
+        work.append(True)
         if fault != "close":
             raise primary
         return {"status": 0, "stdout": b"out", "stderr": b"err"}
 
     publish = Mock()
-    monkeypatch.setattr(wheel, "OPS", Ops())
-    monkeypatch.setattr(wheel, "OwnedDescriptor", descriptor)
-    monkeypatch.setattr(h, "required_surface", lambda *args: wrapper)
     monkeypatch.setattr(wheel, "command", command)
     monkeypatch.setattr(p, "write", publish)
     with pytest.raises(BaseException) as caught:
-        h.invoke(tmp_path, "unused", [], cwd=tmp_path, evidence=tmp_path)
+        h.invoke(
+            tmp_path,
+            "run-host-acceptance",
+            [],
+            admission=pool,
+            cwd=tmp_path,
+            evidence=tmp_path,
+        )
     assert caught.value is (secondary if fault == "close" else primary)
-    assert len(owners) == len(releases) == len(directories) == 1
-    for owner in owners:
-        owner.close()
-    assert len(releases) == 1
+    assert len(contexts) == 1 and work == [True]
+    assert sum(token[2] == "slot" for token in ops.closed) == 1
+    assert sum(token[2] == "namespace" for token in ops.closed) == 1
+    cleanup = getattr(caught.value, "_transaction_secondary", ())
+    assert any(error is parent_release for error in cleanup)
+    if fault != "close":
+        assert any(error is secondary for error in cleanup)
+    assert_released(ops)
+    before = list(ops.closed)
+    contexts[0].__exit__(None, None, None)
+    contexts[0].__exit__(None, None, None)
+    assert ops.closed == before
+    ops.release = ops.parent_release = None
+    with pool.acquire(deadline=time.monotonic() + 5):
+        pass
+    assert_released(ops)
     publish.assert_not_called()
 
 
@@ -895,7 +948,7 @@ def test_command_sink_and_stream_close_failures_keep_owner_and_primary(
     ],
 )
 def test_real_prepared_failure_and_completion_recheck_authority(
-    tmp_path, fault, mutate
+    admission, tmp_path, fault, mutate
 ):
     # No execution/loader double: real build/install, copied fixture, SDK and
     # subprocess owners run. Faults enter only after real report publication.
@@ -904,9 +957,16 @@ def test_real_prepared_failure_and_completion_recheck_authority(
         wheel.inventory(h.ROOT)[0],
         build.Tooling(h.ROOT).dist_inventory(),
     )
-    root, environment, _ = h.policy_root(tmp_path, "pass")
+    root, environment, _ = h.policy_root(
+        tmp_path, "pass", admission=admission.shared_pool
+    )
     deadline = time.monotonic() + 120
-    manifest, binding = h.bind(root, tmp_path / "build-evidence", deadline=deadline)
+    manifest, binding = h.bind(
+        root,
+        tmp_path / "build-evidence",
+        admission=admission.shared_pool,
+        deadline=deadline,
+    )
     workspace, evidence = tmp_path / "workspace", tmp_path / "evidence"
     workspace.mkdir()
     (workspace / "host_tests").mkdir()
@@ -965,8 +1025,9 @@ except BaseException as error:
 else:
     raise AssertionError("prepared failure was accepted")
 """
-    result = _prepared_command(
+    result = h.prepared_command(
         [sys.executable, "-P", "-c", source],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         env=environment,
         deadline=deadline,
@@ -995,9 +1056,11 @@ else:
 
 @pytest.mark.parametrize("profile", ["normal", "negative"])
 def test_real_sibling_loader_calls_prepared_function_without_cli_or_global_leak(
-    tmp_path, profile
+    admission, tmp_path, profile
 ):
-    root, environment, _ = h.policy_root(tmp_path, "pass")
+    root, environment, _ = h.policy_root(
+        tmp_path, "pass", admission=admission.shared_pool
+    )
     if profile == "negative":
         p.write(
             root / "host_tests/test_negative_expectations.py",
@@ -1010,7 +1073,12 @@ def test_negative():
 """,
         )
     deadline = time.monotonic() + 120
-    manifest, binding = h.bind(root, tmp_path / "build-evidence", deadline=deadline)
+    manifest, binding = h.bind(
+        root,
+        tmp_path / "build-evidence",
+        admission=admission.shared_pool,
+        deadline=deadline,
+    )
     with zipfile.ZipFile(io.BytesIO(p.read(binding["wheel_path"]))) as archive:
         assert "footman/acceptance_build.py" not in archive.namelist()
         assert not any("_footman_acceptance" in name for name in archive.namelist())
@@ -1056,8 +1124,9 @@ core.write(Path(OBSERVATION), module._canonical({"status": result.pytest_status,
     }
     for key, value in values.items():
         source = source.replace(key, repr(value))
-    result = _prepared_command(
+    result = h.prepared_command(
         [sys.executable, "-P", "-c", source],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         env=environment,
         deadline=deadline,

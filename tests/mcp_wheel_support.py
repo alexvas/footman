@@ -62,12 +62,13 @@ def build_slot(path, *, deadline):
         # Closing the sole descriptor releases the lock; no retry/unlock owner.
 
 
-def provision_workspace(workspace, wheel, wheel_sha256, *, interpreter):
+def provision_workspace(
+    workspace, wheel, wheel_sha256, *, admission: AdmissionPool | None, interpreter
+):
     """Test-only admission; the borrowed workspace keeps its original deadline/owners."""
-    p.require(
-        BUILD_SLOT_PATH is not None, "missing shared workspace provisioning admission"
-    )
-    with build_slot(BUILD_SLOT_PATH, deadline=workspace.deadline):
+    if not isinstance(admission, AdmissionPool):
+        raise ValueError("missing shared workspace provisioning admission")
+    with admission.acquire(deadline=workspace.deadline):
         return workspace.provision(wheel, wheel_sha256, interpreter=interpreter)
 
 

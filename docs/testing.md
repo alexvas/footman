@@ -587,19 +587,20 @@ clones, not new installs or general-purpose relocatable venvs; activation and
 unrelated dependency CLI launchers are not used. Direct fixture/attribution and
 wheel-swap boundary tests still exercise their own public build surface.
 
-One fixture-owned `mcp-build.lock` per pytest invocation admits the provisioning
-and native clone-copy helpers in `test_mcp_transport.py`, `test_mcp_server.py`,
+One fixture-owned `mcp-build.lock` per pytest invocation admits the remaining
+legacy provisioning and native clone-copy helpers in `test_mcp_transport.py`, `test_mcp_server.py`,
 `test_host_acceptance_contracts.py`, `test_host_build_tooling.py`,
 `test_host_provenance.py` and `test_host_workspace.py`. Selecting the path alone
-is not admission: actual heavy-work callers must enter `build_slot`. Host
-preparation copies, actual wrapper calls and real by-path Python prepared legs
-use that same file, not a separate host-only lock. Direct real `_Workspace`
-provisioning in the provenance/workspace collectors goes through the test-only
-`provision_workspace` adapter, which holds admission across the unmodified
-`provision` call, including uv venv and pip. During the admission-pool migration,
+is not admission: remaining legacy callers must enter `build_slot`. Direct
+real `_Workspace` provisioning in the provenance/workspace collectors goes through the test-only
+`provision_workspace` adapter, which requires an explicit session pool and holds
+admission across the unmodified `provision` call, including uv venv and pip. During the admission-pool migration,
 P13 moves build/install and initial worker-wheel session setup to the explicit
-session pool, even when setup precedes function autouse fixtures. The other
-regions above retain this legacy lock until their P14–P19 migrations. Pool slot
+session pool, even when setup precedes function autouse fixtures. P14 also moves
+host preparation copies, inventory and synthetic Git setup to that pool. P15
+moves wrapper calls and real by-path Python prepared execution to the same pool.
+P16 also moves direct workspace provisioning to the explicit pool. Other
+regions retain this legacy lock until their P17–P19 migrations. Pool slot
 files and the legacy lock are separate exclusion domains: pool K and legacy one
 can overlap, so the intermediate aggregate can exceed K and the CPU budget.
 
@@ -1879,10 +1880,88 @@ serialization/original timeout and original setup remainder through real
 pool/O owners and public external-work observations. They no longer intercept
 private owner constructors or the private installation implementation.
 
-Only R4 installation has migrated at P13. Workspace, private-support/clone copies,
-host preparation/wrapper/prepared command and standalone policy provisioning
-retain their existing one-slot legacy protection until P14–P19. The session pool
-and legacy lock remain distinct domains and can overlap: each is bounded, but
+P14 makes `prepared_root(tmp, *, admission: AdmissionPool)` require a configured
+pool, rejecting missing configuration before preparation. One acquisition covers
+the complete existing repository/support/scripts/lock-file copies, inventory
+checks and synthetic Git setup. Its original `monotonic() + 120` admission
+deadline and each native Git command's 20-second allowance remain unchanged.
+Seven local Git processes create/verify a disposable resolvable synthetic HEAD
+without an index or network access; they all run within the same acquisition.
+No Git cache, production timeout or cleanup-policy change is introduced.
+`build_case` and `policy_root`, and all affected collectors, explicitly forward
+the supplied session pool; isolated prepared roots and return values are retained.
+
+P14 direct probes observe actual O contention and release/progress rather than
+waiting out the fixed preparation allowance. Cross-caller coverage uses that
+same capacity-one pool for actual preparation and installation, with matching
+installation inputs prepared before admission is held. The real-provider nested
+variant establishes prerequisites before ready, holds only its inner namespace,
+and observes the child's actual O busy-file receipt before releasing and
+checking successful real preparation. Gates are bounded to five seconds;
+helper execution/cleanup remain bounded to 20/two seconds. C12's prepared-root
+half now observes public acquisition deadline 130 from origin 10, three modeled
+seconds spent at the real lock boundary, and actual Git work while admitted.
+P15 completes its prepared-command half through the same actual pool/O: supplied
+deadline 33, three further modeled seconds and remaining command allowance 17,
+with the original returned result and once-only repeated cleanup retained.
+
+P15 requires `admission: AdmissionPool` for `invoke` and the supported
+`tests.host_acceptance_contract_support.prepared_command`. The latter replaces
+the collector-local private helper. Both reject missing configuration before
+external execution. `invoke` acquires across the original native wrapper call,
+using its supplied absolute deadline or original `monotonic() + 120` default;
+`prepared_command` acquires inside its own supported boundary using its supplied
+absolute deadline across the complete unchanged prepared Python leg. Each passes only
+`deadline - monotonic()` to the external command and returns its original
+result, including nonzero statuses and binary streams. Wrapper evidence is
+published only after admission releases successfully: operation, interruption
+or sole-close failure cannot publish a successful return. `bind`,
+`scripted_binding`, `runner` and build-case forwarders pass the same pool without
+an extra acquisition. Existing installation attribution-only bypasses remain
+explicit; host scripted build/wrapper probes still acquire admission, and inert
+artifacts are never installed.
+
+P15 isolated capacity-one probes cover both callers, actual busy-lock timeout
+under a short supplied deadline, separate post-release native execution, and
+cross-caller exclusion/progress with preparation. Their controlled native
+payload's status 17 and binary streams establish caller result propagation,
+not production-wrapper semantics. Nested variants pass the real provider into
+actual bootstrap-help and prepared sibling-loader collector function bodies.
+A transparent observer at the supported public target establishes that preceding
+preparation/build prerequisites have completed before the outer hold; it still
+delegates actual acquisition and execution. These are collector-body/provider
+integration checks, not separately collected full-module runs. Target readiness
+is bounded to 15 seconds, attempt/busy/release gates to five seconds, helper
+execution/cleanup to 45/two seconds and the hold to less than 47 seconds. A
+call-finished receipt permits reporting early failure; it never substitutes for
+positive contention, work entry, status or success. C13 retains all three
+operation-close/sole-close/interruption cases, independent directory/slot
+release, repeat cleanup and publication refusal through real pool/O paths rather
+than private owner-constructor interception.
+
+P16 requires the keyword-only `admission: AdmissionPool | None` at
+`provision_workspace`; explicit None is a configuration error before acquisition
+or provisioning, not a bypass. The adapter borrows the original workspace,
+absolute `workspace.deadline` and existing process owners. One acquisition
+covers the unchanged native uv venv/pip, verification and original return or
+exception; it never renews the workspace allowance or takes over its owners.
+Actual provenance/workspace collectors explicitly forward `admission.shared_pool`.
+The lazy `_mcp_worker_wheel` prerequisite completes its admitted R4 setup before
+isolated holds. The literal elapsed oracle constructs the workspace at 100,
+retains deadline 220, spends seven seconds at admission, and observes command plus
+cleanup allowance 113. C07–C10 retain missing-pool, original remainder, all four
+success/failure/close/interruption ids, independent and repeat release, contention
+and fresh-acquisition controls through real pool/O rather than legacy globals or
+private owner interception. The phase suite additionally runs actual native uv
+provisioning after timeout/release and across preparation, plus actual copied-profile
+collector/provider integration using P15's bounded child/gate ownership protocol.
+Its serialized region entry contains both actual native provisioning commands;
+no absent command timestamps or return-object success is invented. C06 collector
+legacy-identity coverage remains P19-owned.
+
+At P16, workspace R1, installation R4, preparation R6, wrapper R5 and prepared
+execution R8 use the session pool. Private-support R2/clone R3 copies and standalone
+policy provisioning R7 retain existing one-slot legacy protection until P17–P19. The session pool and legacy lock remain distinct domains and can overlap: each is bounded, but
 aggregate admitted work can exceed K/the CPU budget. Full session-wide K
 acceptance and removal of legacy identity guards belong to P19. Controlled
 contract probes use their own per-test pools rather than unrelated outer resources.

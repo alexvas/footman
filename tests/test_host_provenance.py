@@ -29,7 +29,7 @@ def runner():
 
 
 @pytest.fixture
-def workspace(tmp_path, runner, _mcp_worker_wheel):
+def workspace(tmp_path, runner, _mcp_worker_wheel, admission):
     root = tmp_path / "source"
     root.mkdir()
     (root / "host_tests").mkdir()
@@ -51,6 +51,7 @@ def workspace(tmp_path, runner, _mcp_worker_wheel):
         value,
         _mcp_worker_wheel.wheel,
         _mcp_worker_wheel.wheel_sha256,
+        admission=admission.shared_pool,
         interpreter=sys.executable,
     )
     binding = tmp_path / "build-manifest.json"
@@ -461,7 +462,9 @@ def test_command_execution_and_cleanup_fit_original_envelope(
         assert plan["deadline_seconds"] > remaining - 10
 
 
-def test_missing_python_prerequisite_is_a_real_failure(workspace, runner, tmp_path):
+def test_missing_python_prerequisite_is_a_real_failure(
+    workspace, runner, tmp_path, admission
+):
     base, bound, _ = workspace
     directory = tmp_path / "missing-prerequisite"
     directory.mkdir()
@@ -471,6 +474,7 @@ def test_missing_python_prerequisite_is_a_real_failure(workspace, runner, tmp_pa
             value,
             bound.wheel,
             bound.wheel_sha256,
+            admission=admission.shared_pool,
             interpreter=tmp_path / "absent-python",
         )
     assert len(value.commands) == 1

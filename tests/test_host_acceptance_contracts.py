@@ -56,9 +56,9 @@ def test_phase11_real_base_serialization_is_explicit_without_changing_commands()
     "location", ["checkout", "identity", "symlink", "noncanonical"]
 )
 def test_generated_output_path_refusal_precedes_all_managed_acquisition(
-    tmp_path, name, location
+    admission, tmp_path, name, location
 ):
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     h.install_acquisition_guard(root)
     records = tmp_path / "records"
     records.mkdir()
@@ -93,7 +93,14 @@ def test_generated_output_path_refusal_precedes_all_managed_acquisition(
             str(target),
         ]
     )
-    result = h.invoke(root, name, args, cwd=tmp_path, evidence=records)
+    result = h.invoke(
+        root,
+        name,
+        args,
+        admission=admission.shared_pool,
+        cwd=tmp_path,
+        evidence=records,
+    )
     assert result["status"] != 0
     text = result["stderr"].decode("utf-8", "replace")
     assert (
@@ -238,9 +245,11 @@ def test_bootstrap_implementation_uses_normal_explicit_foundation_imports(name):
 
 @pytest.mark.parametrize("name", h.SURFACES)
 @pytest.mark.parametrize("missing", ["python3.14", "uv"])
-def test_bootstrap_missing_tool_has_diagnostic_and_status_127(tmp_path, name, missing):
+def test_bootstrap_missing_tool_has_diagnostic_and_status_127(
+    admission, tmp_path, name, missing
+):
     h.required_surface(name)
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     tools = h.isolated_path(
         tmp_path, python=missing != "python3.14", uv=missing != "uv"
     )
@@ -250,6 +259,7 @@ def test_bootstrap_missing_tool_has_diagnostic_and_status_127(tmp_path, name, mi
         root,
         name,
         ["--help"],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment({"PATH": str(tools)}),
@@ -261,14 +271,23 @@ def test_bootstrap_missing_tool_has_diagnostic_and_status_127(tmp_path, name, mi
 
 
 @pytest.mark.parametrize("name", h.SURFACES)
-def test_bootstrap_help_works_without_checkout_venv_from_unrelated_cwd(tmp_path, name):
+def test_bootstrap_help_works_without_checkout_venv_from_unrelated_cwd(
+    admission, tmp_path, name
+):
     h.required_surface(name)
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     neutral = tmp_path / "unrelated"
     neutral.mkdir()
-    result = h.invoke(root, name, ["--help"], cwd=neutral, evidence=evidence)
+    result = h.invoke(
+        root,
+        name,
+        ["--help"],
+        admission=admission.shared_pool,
+        cwd=neutral,
+        evidence=evidence,
+    )
     assert result["status"] == 0, result
     assert b"usage" in result["stdout"].lower()
     assert not (root / ".venv").exists()
@@ -277,7 +296,7 @@ def test_bootstrap_help_works_without_checkout_venv_from_unrelated_cwd(tmp_path,
 
 @pytest.mark.parametrize("name", h.SURFACES)
 def test_missing_checkout_foundation_cannot_fall_back_to_ambient_install(
-    tmp_path, name
+    admission, tmp_path, name
 ):
     wrapper = h.required_surface(name)
     root = tmp_path / "missing-foundation"
@@ -301,6 +320,7 @@ def test_missing_checkout_foundation_cannot_fall_back_to_ambient_install(
         root,
         name,
         ["--help"],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env={**wheel.clean_environment(), "PYTHONPATH": str(poison)},
@@ -314,11 +334,11 @@ def test_missing_checkout_foundation_cannot_fall_back_to_ambient_install(
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.case_id)
 def test_production_build_wrapper_attributes_shared_cases_without_installing(
-    tmp_path, case
+    admission, tmp_path, case
 ):
     from tests import acceptance_attribution_support as phase10
 
-    record = h.build_case(tmp_path, case)
+    record = h.build_case(tmp_path, case, admission=admission.shared_pool)
     earlier = []
     for name, driver in (("phase9", attribution), ("phase10", phase10)):
         scratch = tmp_path / name
@@ -343,10 +363,10 @@ def test_production_build_wrapper_attributes_shared_cases_without_installing(
 )
 @pytest.mark.parametrize("kind", ["file", "directory", "dangling-link"])
 def test_build_refuses_either_unowned_destination_without_invoking_uv(
-    tmp_path, artifact, kind
+    admission, tmp_path, artifact, kind
 ):
     h.required_surface("build-acceptance-wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     (root / "dist").mkdir()
     target = root / "dist" / artifact
     if kind == "file":
@@ -364,6 +384,7 @@ def test_build_refuses_either_unowned_destination_without_invoking_uv(
         root,
         "build-acceptance-wheel",
         ["--manifest", str(evidence / "manifest.json")],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment(
@@ -390,9 +411,9 @@ def test_build_refuses_either_unowned_destination_without_invoking_uv(
     ],
     ids=["name", "noncanonical-version", "unsupported-readme", "package-profile"],
 )
-def test_unsupported_build_profile_is_rejected_before_uv(tmp_path, old, new):
+def test_unsupported_build_profile_is_rejected_before_uv(admission, tmp_path, old, new):
     h.required_surface("build-acceptance-wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     profile = p.read(root / "pyproject.toml")
     assert old in profile, "contract fixture no longer matches reviewed static profile"
     h.replace(root / "pyproject.toml", profile.replace(old, new))
@@ -403,6 +424,7 @@ def test_unsupported_build_profile_is_rejected_before_uv(tmp_path, old, new):
         root,
         "build-acceptance-wheel",
         ["--manifest", str(evidence / "manifest.json")],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment(
@@ -418,9 +440,11 @@ def test_unsupported_build_profile_is_rejected_before_uv(tmp_path, old, new):
 @pytest.mark.parametrize(
     "setting", ["UV_BUILD_OUT_DIR", "UV_CONFIG_FILE", "HATCH_BUILD_HOOKS_ENABLE"]
 )
-def test_output_changing_environment_is_rejected_before_uv(tmp_path, setting):
+def test_output_changing_environment_is_rejected_before_uv(
+    admission, tmp_path, setting
+):
     h.required_surface("build-acceptance-wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     executable, call = attribution.scripted_uv(tmp_path, CASES[0])
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -428,6 +452,7 @@ def test_output_changing_environment_is_rejected_before_uv(tmp_path, setting):
         root,
         "build-acceptance-wheel",
         ["--manifest", str(evidence / "manifest.json")],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env={
@@ -441,16 +466,19 @@ def test_output_changing_environment_is_rejected_before_uv(tmp_path, setting):
     assert not (evidence / "manifest.json").exists()
 
 
-def test_real_uv_repeat_build_preserves_both_outputs_and_candidate_dist(tmp_path):
+def test_real_uv_repeat_build_preserves_both_outputs_and_candidate_dist(
+    admission, tmp_path
+):
     h.required_surface("build-acceptance-wheel")
     before_candidate = attribution.dist_identity(h.ROOT)
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     first = h.invoke(
         root,
         "build-acceptance-wheel",
         ["--manifest", str(evidence / "first.json")],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         label="real-first",
@@ -467,6 +495,7 @@ def test_real_uv_repeat_build_preserves_both_outputs_and_candidate_dist(tmp_path
         root,
         "build-acceptance-wheel",
         ["--manifest", str(evidence / "second.json")],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         label="real-second",
@@ -608,9 +637,11 @@ def test_mandated_development_collection_contains_no_host_items(tmp_path):
 
 
 @pytest.mark.parametrize("image", ["tag:latest", "sha256:abcd", "0" * 11, "0" * 65])
-def test_host_runner_rejects_invalid_image_before_install_or_docker(tmp_path, image):
+def test_host_runner_rejects_invalid_image_before_install_or_docker(
+    admission, tmp_path, image
+):
     h.required_surface("run-host-acceptance")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     tools = h.isolated_path(tmp_path)
@@ -634,6 +665,7 @@ def test_host_runner_rejects_invalid_image_before_install_or_docker(tmp_path, im
             "--evidence",
             str(evidence),
         ],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment({"PATH": str(tools)}),
@@ -995,14 +1027,14 @@ def inert_profile_candidate(tmp_path):
 
 
 def test_prepared_profile_driver_has_valid_common_inputs_and_revision(
-    tmp_path, monkeypatch, inert_profile_candidate
+    admission, tmp_path, monkeypatch, inert_profile_candidate
 ):
     candidate = inert_profile_candidate
     monkeypatch.setattr(h, "ROOT", candidate)
     scratch = tmp_path / "profile"
     scratch.mkdir()
     before = attribution.dist_identity(candidate)
-    root, revision = h.prepared_root(scratch)
+    root, revision = h.prepared_root(scratch, admission=admission.shared_pool)
     assert h.root_names(root) == sorted((*h.IDENTITY_ROOTS, "README.md", ".git"))
     assert wheel.inventory(root)[0] == wheel.inventory(candidate)[0]
     assert re.fullmatch(r"[0-9a-f]{40}", revision)
@@ -1012,7 +1044,7 @@ def test_prepared_profile_driver_has_valid_common_inputs_and_revision(
 
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_wrapper_driver_preserves_collection_failure_and_never_publishes_success(
-    tmp_path, monkeypatch, interrupted
+    admission, tmp_path, monkeypatch, interrupted
 ):
     from unittest.mock import Mock
 
@@ -1030,7 +1062,12 @@ def test_wrapper_driver_preserves_collection_failure_and_never_publishes_success
     monkeypatch.setattr(p, "write", publish)
     with pytest.raises(type(primary)) as caught:
         h.invoke(
-            tmp_path, "build-acceptance-wheel", [], cwd=tmp_path, evidence=tmp_path
+            tmp_path,
+            "build-acceptance-wheel",
+            [],
+            admission=admission.shared_pool,
+            cwd=tmp_path,
+            evidence=tmp_path,
         )
     assert caught.value is primary
     surface.assert_called_once_with("build-acceptance-wheel", tmp_path)
@@ -1126,13 +1163,24 @@ def test_isolated_runner_probe_itself_has_executable_wheel_controls(
 
 
 @pytest.mark.parametrize("case", ["pass", "skip", "xfail", "xpass", "fail", "empty"])
-def test_public_runner_isolates_host_suite_and_preserves_policy_status(tmp_path, case):
+def test_public_runner_isolates_host_suite_and_preserves_policy_status(
+    admission, tmp_path, case
+):
     h.required_surface("run-host-acceptance")
     before = attribution.dist_identity(h.ROOT)
-    root, env, docker_records = h.policy_root(tmp_path, case)
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, docker_records = h.policy_root(
+        tmp_path, case, admission=admission.shared_pool
+    )
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert (result["status"] == 0) is (case == "pass"), result
     report = p.load(tmp_path / "host-evidence/report.json")
@@ -1184,13 +1232,22 @@ def test_public_runner_isolates_host_suite_and_preserves_policy_status(tmp_path,
         if not fault.startswith("shadow-") and fault != "retag-image"
     ],
 )
-def test_public_runner_rejects_install_attestation_and_evidence_faults(tmp_path, fault):
+def test_public_runner_rejects_install_attestation_and_evidence_faults(
+    admission, tmp_path, fault
+):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
     env["FOOTMAN_HOST_CONTRACT_FAULT"] = fault
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0, (fault, result)
     report = p.load(tmp_path / "host-evidence/report.json")
@@ -1279,13 +1336,18 @@ def test_scripted_tool_attempt_records_detect_a_second_execution(tmp_path):
         ("permission-nonexec", False),
     ],
 )
-def test_build_manifest_source_identity_has_exact_scope(tmp_path, scope, changed):
+def test_build_manifest_source_identity_has_exact_scope(
+    admission, tmp_path, scope, changed
+):
     h.required_surface("build-acceptance-wheel")
     before_candidate = attribution.dist_identity(h.ROOT)
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     (root / "tests/fixture-link").symlink_to("first-target")
     _, before = h.scripted_binding(
-        root, tmp_path / "first-evidence", tmp_path / "first-tool"
+        root,
+        tmp_path / "first-evidence",
+        tmp_path / "first-tool",
+        admission=admission.shared_pool,
     )
     # Recorded fixture-owned output remedy, outside the helper, never a scan or
     # implicit deletion by a new build invocation. Preserve bytes/digests first.
@@ -1350,7 +1412,10 @@ def test_build_manifest_source_identity_has_exact_scope(tmp_path, scope, changed
         directory.mkdir(exist_ok=True)
         p.write(directory / "unrelated.dat", b"excluded output/planning/documentation")
     _, after = h.scripted_binding(
-        root, tmp_path / "second-evidence", tmp_path / "second-tool"
+        root,
+        tmp_path / "second-evidence",
+        tmp_path / "second-tool",
+        admission=admission.shared_pool,
     )
     assert (before["source_identity"] != after["source_identity"]) is changed
     assert (before["build_input_identity"] != after["build_input_identity"]) is (
@@ -1361,9 +1426,11 @@ def test_build_manifest_source_identity_has_exact_scope(tmp_path, scope, changed
 
 
 @pytest.mark.parametrize("name", h.SURFACES)
-def test_wrapper_root_disagreement_precedes_all_managed_acquisition(tmp_path, name):
+def test_wrapper_root_disagreement_precedes_all_managed_acquisition(
+    admission, tmp_path, name
+):
     h.required_surface(name)
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     h.install_acquisition_guard(root)
     foreign = h.relocate(root, tmp_path / "foreign-root")
     implementation = name.replace("-", "_") + ".py"
@@ -1385,7 +1452,14 @@ def test_wrapper_root_disagreement_precedes_all_managed_acquisition(tmp_path, na
             str(evidence),
         ]
     )
-    result = h.invoke(root, name, args, cwd=foreign, evidence=evidence)
+    result = h.invoke(
+        root,
+        name,
+        args,
+        admission=admission.shared_pool,
+        cwd=foreign,
+        evidence=evidence,
+    )
     assert result["status"] != 0
     text = result["stderr"].decode("utf-8", "replace")
     assert "root" in text.lower()
@@ -1439,21 +1513,26 @@ except (ValueError, OSError):
 
 
 def test_build_selects_wrapper_root_not_foreign_caller_cwd_and_relocation_matches(
+    admission,
     tmp_path,
 ):
     h.required_surface("build-acceptance-wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     caller = tmp_path / "unrelated caller"
     caller.mkdir()
     p.write(caller / "pyproject.toml", b"not the build input")
     (caller / "dist").mkdir()
     p.write(caller / "dist/sentinel", b"must survive")
-    _, binding = h.bind(root, tmp_path / "first-build", cwd=caller)
+    _, binding = h.bind(
+        root, tmp_path / "first-build", admission=admission.shared_pool, cwd=caller
+    )
     assert binding["repository_root"] == str(root)
     assert binding["wrapper_path"] == str(root / "scripts/build-acceptance-wheel")
     assert binding["caller_cwd"] == str(caller)
     moved = h.relocate(root, tmp_path / "relocated matching root")
-    _, other = h.bind(moved, tmp_path / "second-build", cwd=root)
+    _, other = h.bind(
+        moved, tmp_path / "second-build", admission=admission.shared_pool, cwd=root
+    )
     for field in ("revision", "source_identity", "build_input_identity"):
         assert binding[field] == other[field]
     assert p.read(caller / "dist/sentinel") == b"must survive"
@@ -1461,9 +1540,11 @@ def test_build_selects_wrapper_root_not_foreign_caller_cwd_and_relocation_matche
 
 
 @pytest.mark.parametrize("name", h.SURFACES)
-def test_host_interfaces_do_not_accept_caller_selected_root_override(tmp_path, name):
+def test_host_interfaces_do_not_accept_caller_selected_root_override(
+    admission, tmp_path, name
+):
     h.required_surface(name)
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     executable, _, attempts = h.scripted_uv(tmp_path, CASES[0])
@@ -1485,6 +1566,7 @@ def test_host_interfaces_do_not_accept_caller_selected_root_override(tmp_path, n
             ]
         )
         + ["--root", str(tmp_path)],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment(
@@ -1524,11 +1606,13 @@ def test_host_interfaces_do_not_accept_caller_selected_root_override(tmp_path, n
     ],
 )
 def test_runner_rejects_missing_malformed_stale_or_swapped_binding_before_install(
-    tmp_path, field, invalid
+    admission, tmp_path, field, invalid
 ):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     malformed = dict(binding)
     if invalid is None:
         malformed.pop(field)
@@ -1538,7 +1622,12 @@ def test_runner_rejects_missing_malformed_stale_or_swapped_binding_before_instal
     executable, _, attempts = h.scripted_uv(tmp_path, CASES[0])
     env["PATH"] = str(executable.parent) + os.pathsep + env["PATH"]
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     assert field.encode() in result["stderr"], result
@@ -1558,11 +1647,13 @@ def test_runner_rejects_missing_malformed_stale_or_swapped_binding_before_instal
     ],
 )
 def test_runner_independently_compares_both_identities_and_exact_wheel_before_install(
-    tmp_path, fault
+    admission, tmp_path, fault
 ):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     if fault in {"readme", "source", "support"}:
         path = (
             root
@@ -1583,7 +1674,12 @@ def test_runner_independently_compares_both_identities_and_exact_wheel_before_in
     executable, _, attempts = h.scripted_uv(tmp_path, CASES[0])
     env["PATH"] = str(executable.parent) + os.pathsep + env["PATH"]
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     assert not h.root_names(attempts)
@@ -1597,16 +1693,23 @@ def test_runner_independently_compares_both_identities_and_exact_wheel_before_in
     "fault", ["source-readme-during", "source-support-during", "copied-support-during"]
 )
 def test_runner_completion_rechecks_readme_source_and_copied_support_independently(
-    tmp_path, fault
+    admission, tmp_path, fault
 ):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
     env.update(
         FOOTMAN_HOST_CONTRACT_FAULT=fault, FOOTMAN_HOST_CONTRACT_SOURCE_ROOT=str(root)
     )
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     report = p.load(tmp_path / "host-evidence/report.json")
@@ -1632,16 +1735,19 @@ def test_runner_completion_rechecks_readme_source_and_copied_support_independent
 
 @pytest.mark.parametrize("image", ["d9e853e87e55", "a" * 64, "sha256:" + "a" * 64])
 def test_runner_preserves_literal_configured_image_and_diagnostic_observed_identity(
-    tmp_path, image
+    admission, tmp_path, image
 ):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     result = h.runner(
         root,
         manifest,
         binding["wheel_path"],
         tmp_path / "host-evidence",
+        admission=admission.shared_pool,
         env=env,
         image=image,
     )
@@ -1662,13 +1768,22 @@ def test_runner_preserves_literal_configured_image_and_diagnostic_observed_ident
     ]
 
 
-def test_runner_retains_configured_image_launch_error_without_copy_or_exec(tmp_path):
+def test_runner_retains_configured_image_launch_error_without_copy_or_exec(
+    admission, tmp_path
+):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
     env["FOOTMAN_HOST_CONTRACT_FAULT"] = "image-launch-failure"
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     records = Path(env["FOOTMAN_HOST_CONTRACT_RECORDS"])
@@ -1795,16 +1910,23 @@ def test_install_proxy_mutates_an_actual_private_install_before_expectations(
     "fault", ["stale-module", "stale-entry", "self-consistent-stale", "swapped-copy"]
 )
 def test_runner_cannot_derive_self_matching_expectations_from_installed_bytes_or_record(
-    tmp_path, fault
+    admission, tmp_path, fault
 ):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     executable, extra, records = h.install_proxy(tmp_path, fault)
     env.update(extra)
     env["PATH"] = str(executable.parent) + os.pathsep + env["PATH"]
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     observed = [p.load(records / name) for name in h.root_names(records)]
@@ -1818,11 +1940,15 @@ def test_runner_cannot_derive_self_matching_expectations_from_installed_bytes_or
     assert report["cleanup_complete"] is True
 
 
-def test_runner_bootstrap_poison_is_replaced_and_never_reaches_wheel_children(tmp_path):
+def test_runner_bootstrap_poison_is_replaced_and_never_reaches_wheel_children(
+    admission, tmp_path
+):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
     p.write(root / "src/sitecustomize.py", h.BOOTSTRAP_ENV_GUARD.encode())
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     executable, extra, tool_records = h.install_proxy(tmp_path, "none")
     env.update(extra)
     poison = tmp_path / "poison"
@@ -1835,7 +1961,12 @@ def test_runner_bootstrap_poison_is_replaced_and_never_reaches_wheel_children(tm
         PYTHONPATH=str(poison), PATH=str(executable.parent) + os.pathsep + env["PATH"]
     )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] == 0, result
     bootstrap = [
@@ -1917,11 +2048,13 @@ def test_runner_bootstrap_poison_is_replaced_and_never_reaches_wheel_children(tm
 
 @pytest.mark.parametrize("missing", ["git", "docker"])
 def test_runner_missing_host_prerequisite_fails_before_provisioning_without_skip(
-    tmp_path, missing
+    admission, tmp_path, missing
 ):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     tools = h.isolated_path(tmp_path, git=missing != "git")
     if missing != "docker":
         extra_tools = tmp_path / "extra-tools"
@@ -1931,7 +2064,12 @@ def test_runner_missing_host_prerequisite_fails_before_provisioning_without_skip
     else:
         env["PATH"] = str(tools)
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     assert missing.encode() in result["stderr"].lower()
@@ -1939,9 +2077,11 @@ def test_runner_missing_host_prerequisite_fails_before_provisioning_without_skip
 
 
 @pytest.mark.parametrize("kind", ["symlink", "dangling-link", "file"])
-def test_build_refuses_unsafe_dist_ancestry_without_acquiring_outputs(tmp_path, kind):
+def test_build_refuses_unsafe_dist_ancestry_without_acquiring_outputs(
+    admission, tmp_path, kind
+):
     h.required_surface("build-acceptance-wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     target = tmp_path / "unowned-dist"
     target.mkdir()
     p.write(target / "sentinel", b"unrelated bytes")
@@ -1958,6 +2098,7 @@ def test_build_refuses_unsafe_dist_ancestry_without_acquiring_outputs(tmp_path, 
         root,
         "build-acceptance-wheel",
         ["--manifest", str(evidence / "manifest.json")],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment(
@@ -2126,10 +2267,10 @@ def test_readme_fault_instrumentation_is_executable_and_releases_once(tmp_path, 
     ["operation", "operation-close", "close", "interruption", "close-interruption"],
 )
 def test_public_build_readme_input_faults_keep_primary_and_never_retry_close(
-    tmp_path, fault
+    admission, tmp_path, fault
 ):
     h.required_surface("build-acceptance-wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     h.install_readme_guard(root, fault)
     executable, _, attempts = h.scripted_uv(tmp_path, CASES[0])
     evidence = tmp_path / "evidence"
@@ -2138,6 +2279,7 @@ def test_public_build_readme_input_faults_keep_primary_and_never_retry_close(
         root,
         "build-acceptance-wheel",
         ["--manifest", str(evidence / "manifest.json")],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment(
@@ -2225,12 +2367,16 @@ def test_development_collection_boundary_is_nonvacuous_with_populated_host_fixtu
         "source-extra-root",
     ],
 )
-def test_runner_binding_validation_changes_only_the_selected_field(tmp_path, scope):
+def test_runner_binding_validation_changes_only_the_selected_field(
+    admission, tmp_path, scope
+):
     import copy
 
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     changed = copy.deepcopy(binding)
     if scope == "manifest-version":
         changed["schema_version"] = True
@@ -2252,24 +2398,34 @@ def test_runner_binding_validation_changes_only_the_selected_field(tmp_path, sco
     executable, _, attempts = h.scripted_uv(tmp_path, CASES[0])
     env["PATH"] = str(executable.parent) + os.pathsep + env["PATH"]
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     assert not h.root_names(attempts)
     assert not h.root_names(Path(env["FOOTMAN_HOST_CONTRACT_RECORDS"]))
 
 
-def test_runner_accepts_matching_relocation_and_selects_its_own_wrapper_root(tmp_path):
+def test_runner_accepts_matching_relocation_and_selects_its_own_wrapper_root(
+    admission, tmp_path
+):
     h.required_surface("run-host-acceptance")
     before_candidate = attribution.dist_identity(h.ROOT)
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     moved = h.relocate(root, tmp_path / "matching relocated runner")
     result = h.runner(
         moved,
         manifest,
         binding["wheel_path"],
         tmp_path / "host-evidence",
+        admission=admission.shared_pool,
         env=env,
         cwd=root,
     )
@@ -2285,14 +2441,21 @@ def test_runner_accepts_matching_relocation_and_selects_its_own_wrapper_root(tmp
 
 @pytest.mark.parametrize("fault", ["shadow-script", "shadow-cwd"])
 def test_runner_shadow_controls_do_not_execute_script_directory_or_cwd_sources(
-    tmp_path, fault
+    admission, tmp_path, fault
 ):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
     env["FOOTMAN_HOST_CONTRACT_FAULT"] = fault
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     records = Path(env["FOOTMAN_HOST_CONTRACT_RECORDS"])
     observation = p.load(records / "service-observation.json")
@@ -2375,7 +2538,7 @@ def test_acquisition_guard_failed_handoff_also_releases_independent_parent(
     ],
 )
 def test_invalid_prepared_profile_is_setup_failure_not_expected_attribution_rejection(
-    tmp_path, monkeypatch, inert_profile_candidate, fault
+    admission, tmp_path, monkeypatch, inert_profile_candidate, fault
 ):
     from tests import mcp_contract_support as service
 
@@ -2404,7 +2567,7 @@ def test_invalid_prepared_profile_is_setup_failure_not_expected_attribution_reje
     if fault == "unresolved-head":
         monkeypatch.setattr(h, "synthetic_head", lambda *_: "0" * 40)
     with pytest.raises((AssertionError, FileNotFoundError)):
-        h.prepared_root(scratch)
+        h.prepared_root(scratch, admission=admission.shared_pool)
     assert not (scratch / "prepared/dist").exists()
 
 
@@ -2459,16 +2622,20 @@ def test_archive_negative_control_setup_is_readable_and_rejected_independently(
 
 @pytest.mark.parametrize("fault", ARCHIVE_FAULTS)
 def test_runner_rejects_unsafe_or_ambiguous_archive_before_install(
-    request, tmp_path, fault
+    admission, request, tmp_path, fault
 ):
     from dataclasses import replace
 
     h.required_surface("run-host-acceptance")
     base = request.getfixturevalue("_mcp_worker_wheel")
-    root, env, _ = h.policy_root(tmp_path, "pass")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
     case = replace(CASES[0], wheel_bytes=h.malformed_archive(p.read(base.wheel), fault))
     manifest, binding = h.scripted_binding(
-        root, tmp_path / "build-evidence", tmp_path / "build-tool", case=case
+        root,
+        tmp_path / "build-evidence",
+        tmp_path / "build-tool",
+        admission=admission.shared_pool,
+        case=case,
     )
     executable, extra, records = h.install_proxy(tmp_path, "none")
     env.update(extra)
@@ -2477,7 +2644,12 @@ def test_runner_rejects_unsafe_or_ambiguous_archive_before_install(
         FOOTMAN_HOST_TOOL_BLOCK_INSTALL="1",
     )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     attempts = [p.load(records / name) for name in h.root_names(records)]
@@ -2488,10 +2660,14 @@ def test_runner_rejects_unsafe_or_ambiguous_archive_before_install(
 
 
 @pytest.mark.parametrize("where", ["top", "build-input"])
-def test_runner_rejects_duplicate_binding_keys_even_when_values_match(tmp_path, where):
+def test_runner_rejects_duplicate_binding_keys_even_when_values_match(
+    admission, tmp_path, where
+):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     encoded = p.canonical(binding)
     if where == "top":
         encoded = b'{"schema_version":1,' + encoded[1:]
@@ -2505,7 +2681,12 @@ def test_runner_rejects_duplicate_binding_keys_even_when_values_match(tmp_path, 
     executable, _, attempts = h.scripted_uv(tmp_path, CASES[0])
     env["PATH"] = str(executable.parent) + os.pathsep + env["PATH"]
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] != 0
     assert not h.root_names(attempts)
@@ -2591,16 +2772,25 @@ def test_install_proxy_blocks_scripted_artifacts_before_native_tool_launch(tmp_p
     assert observed[0]["native_attempted"] is False and observed[0]["status"] is None
 
 
-def test_runner_keeps_available_configured_id_when_operator_tag_is_retargeted(tmp_path):
+def test_runner_keeps_available_configured_id_when_operator_tag_is_retargeted(
+    admission, tmp_path
+):
     h.required_surface("run-host-acceptance")
-    root, env, _ = h.policy_root(tmp_path, "pass")
+    root, env, _ = h.policy_root(tmp_path, "pass", admission=admission.shared_pool)
     h.configure_retag_loader(
         root / "host_tests/contract_support/tests/relocated_docker_child.py"
     )
     env["FOOTMAN_HOST_CONTRACT_FAULT"] = "retag-image"
-    manifest, binding = h.bind(root, tmp_path / "build-evidence")
+    manifest, binding = h.bind(
+        root, tmp_path / "build-evidence", admission=admission.shared_pool
+    )
     result = h.runner(
-        root, manifest, binding["wheel_path"], tmp_path / "host-evidence", env=env
+        root,
+        manifest,
+        binding["wheel_path"],
+        tmp_path / "host-evidence",
+        admission=admission.shared_pool,
+        env=env,
     )
     assert result["status"] == 0, result
     records = Path(env["FOOTMAN_HOST_CONTRACT_RECORDS"])
@@ -2696,10 +2886,10 @@ def test_unattempted_build_record_exposes_no_observed_empty_streams(tmp_path):
 
 @pytest.mark.parametrize("post_fault", ["missing-readme", "interruption"])
 def test_failed_build_keeps_real_status_and_streams_when_postcheck_also_fails(
-    tmp_path, post_fault
+    admission, tmp_path, post_fault
 ):
     h.required_surface("build-acceptance-wheel")
-    root, _ = h.prepared_root(tmp_path)
+    root, _ = h.prepared_root(tmp_path, admission=admission.shared_pool)
     case = CASES[1]
     assert case.build_status == 17
     executable, call, attempts = h.scripted_uv(tmp_path, case)
@@ -2723,6 +2913,7 @@ def test_failed_build_keeps_real_status_and_streams_when_postcheck_also_fails(
         root,
         "build-acceptance-wheel",
         ["--manifest", str(manifest)],
+        admission=admission.shared_pool,
         cwd=tmp_path,
         evidence=evidence,
         env=wheel.clean_environment(

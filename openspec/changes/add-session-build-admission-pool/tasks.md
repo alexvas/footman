@@ -381,66 +381,66 @@ Acceptance: installation acquires the explicit pool, including early worker-sess
 Acceptance: prepared_root consumes the supplied pool across its existing copy/git/inventory work and original 120-second envelope. Seams prepared_root/A/S; consumes P13.
 
 ### RED
-- [ ] 14.1 Freeze signature/deadline, complete prerequisites before hold, and record bounded ready/attempt/O-busy/entry/release observations; completion: isolated K=1, supported cross-caller and real-wiring variants specified.
-- [ ] 14.2 Create `test_host_preparation_uses_session_admission`; completion: actual contention while held and valid prepared root after release within the safeguard; include lifecycle companions.
-- [ ] 14.3 Execute R(test_host_preparation_uses_session_admission); completion: missing common-pool use explains failure.
+- [x] 14.1 Freeze signature/deadline, complete prerequisites before hold, and record bounded ready/attempt/O-busy/entry/release observations; completion: isolated K=1, supported cross-caller and real-wiring variants specified.
+- [x] 14.2 Create `test_host_preparation_uses_session_admission`; completion: actual contention while held and valid prepared root after release within the safeguard; include lifecycle companions.
+- [x] 14.3 Execute R(test_host_preparation_uses_session_admission); completion: missing common-pool use explains failure.
 
 ### GREEN
-- [ ] 14.4 Migrate preparation admission; completion: original envelope, admitted region and isolated roots preserved with required admission keyword.
-- [ ] 14.4.1 Migrate the prepared_root half of C12 test_prepared_root_and_call_admission_charge_original_envelope in the registered host-build-tooling module. Completion: the original 120-second envelope, admission-held work and elapsed-time observation remain explicit through the pool/O seam; retain a working prepared-command half until P15, with both portions/dispositions and passing T+M(tooling)+G recorded in E; VALIDATE additionally runs S and applicable registered regression procedures.
-- [ ] 14.5 Document preparation boundaries; completion: copy/git/inventory admission explicit.
-- [ ] 14.6 Execute T(test_host_preparation_uses_session_admission)+G; completion: exit 0/E.
+- [x] 14.4 Migrate preparation admission; completion: original envelope, admitted region and isolated roots preserved with required admission keyword.
+- [x] 14.4.1 Migrate the prepared_root half of C12 test_prepared_root_and_call_admission_charge_original_envelope in the registered host-build-tooling module. Completion: the original 120-second envelope, admission-held work and elapsed-time observation remain explicit through the pool/O seam; retain a working prepared-command half until P15, with both portions/dispositions and passing T+M(tooling)+G recorded in E; VALIDATE additionally runs S and applicable registered regression procedures.
+- [x] 14.5 Document preparation boundaries; completion: copy/git/inventory admission explicit.
+- [x] 14.6 Execute T(test_host_preparation_uses_session_admission)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 14.7 Record preparation review; completion: public outcome observations and original region retained.
-- [ ] 14.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 14.7 Record preparation review; completion: public outcome observations and original region retained.
+- [x] 14.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 14.9 Independently execute T(test_host_preparation_uses_session_admission)+G; completion: output/admission/prior phases pass.
+- [x] 14.9 Independently execute T(test_host_preparation_uses_session_admission)+G; completion: output/admission/prior phases pass.
 
 ## 15. P15 — Host wrapper and prepared execution
 
 Acceptance: invoke R5 and promoted supported prepared_command R8 acquire the supplied pool with original deadlines/results. Consumes P14; seams supported callers/A/S.
 
 ### RED
-- [ ] 15.1 Freeze R5/R8 contracts and every collector/helper/guard call in inventory, including tests/test_host_build_tooling.py:24. Promote _prepared_command to tests.host_acceptance_contract_support.prepared_command; record non-None pool, supplied absolute deadline and deadline-minus-now/result observations. Completion: supported import and external execution observations specified.
-- [ ] 15.2 Create `test_host_wrapper_uses_session_admission`; completion: direct local K=1 recording-O, supported cross-caller and nested actual collector/provider wiring for both R5/R8; short supplied deadlines, original result/remainder and lifecycle companions.
-- [ ] 15.3 Execute R(test_host_wrapper_uses_session_admission); completion: missing pool use explains failure.
+- [x] 15.1 Freeze R5/R8 contracts and every collector/helper/guard call in inventory, including tests/test_host_build_tooling.py:24. Promote _prepared_command to tests.host_acceptance_contract_support.prepared_command; record non-None pool, supplied absolute deadline and deadline-minus-now/result observations. Completion: supported import and external execution observations specified.
+- [x] 15.2 Create `test_host_wrapper_uses_session_admission`; completion: direct local K=1 recording-O, supported cross-caller and nested actual collector/provider wiring for both R5/R8; short supplied deadlines, original result/remainder and lifecycle companions.
+- [x] 15.3 Execute R(test_host_wrapper_uses_session_admission); completion: missing pool use explains failure.
 
 ### GREEN
-- [ ] 15.4 Migrate both regions, promote/import supported prepared_command and update all calls/guards. R8 acquires inside the caller and returns wheel.command(timeout_seconds=deadline - time.monotonic()) result. Completion: original envelopes/arguments/results and two distinct live boundaries/evidence retained.
-- [ ] 15.4.1 Complete C12's prepared-command half and migrate C13 test_wrapper_admission_release_preserves_primary_and_refuses_publication in the registered host-build-tooling module. Completion: supported prepared_command retains supplied deadline/remainder/results, invoke retains operation-close/sole-close/interruption precedence, independent/repeat release and publication refusal, observed via explicit pool/O and public outputs; per-function/portion dispositions and passing T+M(tooling)+G results are in E; VALIDATE additionally runs S and applicable registered regression procedures. C11 shared-session identity remains owned by P19.
-- [ ] 15.5 Document execution admission and existing attribution-only cases; completion: existing bypass scope retained.
-- [ ] 15.6 Execute T(test_host_wrapper_uses_session_admission)+G; completion: exit 0/E.
+- [x] 15.4 Migrate both regions, promote/import supported prepared_command and update all calls/guards. R8 acquires inside the caller and returns wheel.command(timeout_seconds=deadline - time.monotonic()) result. Completion: original envelopes/arguments/results and two distinct live boundaries/evidence retained.
+- [x] 15.4.1 Complete C12's prepared-command half and migrate C13 test_wrapper_admission_release_preserves_primary_and_refuses_publication in the registered host-build-tooling module. Completion: supported prepared_command retains supplied deadline/remainder/results, invoke retains operation-close/sole-close/interruption precedence, independent/repeat release and publication refusal, observed via explicit pool/O and public outputs; per-function/portion dispositions and passing T+M(tooling)+G results are in E; VALIDATE additionally runs S and applicable registered regression procedures. C11 shared-session identity remains owned by P19.
+- [x] 15.5 Document execution admission and existing attribution-only cases; completion: existing bypass scope retained.
+- [x] 15.6 Execute T(test_host_wrapper_uses_session_admission)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 15.7 Record wrapper/deadline review; completion: original command allowance and sequential ownership retained.
-- [ ] 15.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 15.7 Record wrapper/deadline review; completion: original command allowance and sequential ownership retained.
+- [x] 15.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 15.9 Independently execute T(test_host_wrapper_uses_session_admission)+G; completion: both execution regions/prior phases pass.
+- [x] 15.9 Independently execute T(test_host_wrapper_uses_session_admission)+G; completion: both execution regions/prior phases pass.
 
 ## 16. P16 — Mandatory workspace envelope
 
 Acceptance: provision_workspace requires pool admission, holds it across provision and passes the original remaining allowance. Functional dependencies P11 provider/P05 deadline; execution follows P15 VALIDATE. Seams workspace caller/A/O/S.
 
 ### RED
-- [ ] 16.1 Resolve actual lazy wheel-base prerequisite and complete setup admission before hold; supply isolated K=1 recording-O pool explicitly. Freeze missing-pool error and original-envelope observations; include actual-wiring/cross-caller variants. Completion: valid prerequisites and intentional missing-admission case distinguished.
-- [ ] 16.2 Create `test_workspace_preserves_admission_envelope`; completion: literal elapsed-time example, before-work refusal for missing pool and lifecycle companions.
-- [ ] 16.3 Execute R(test_workspace_preserves_admission_envelope); completion: missing integration explains failure.
+- [x] 16.1 Resolve actual lazy wheel-base prerequisite and complete setup admission before hold; supply isolated K=1 recording-O pool explicitly. Freeze missing-pool error and original-envelope observations; include actual-wiring/cross-caller variants. Completion: valid prerequisites and intentional missing-admission case distinguished.
+- [x] 16.2 Create `test_workspace_preserves_admission_envelope`; completion: literal elapsed-time example, before-work refusal for missing pool and lifecycle companions.
+- [x] 16.3 Execute R(test_workspace_preserves_admission_envelope); completion: missing integration explains failure.
 
 ### GREEN
-- [ ] 16.4 Migrate required keyword-only admission: AdmissionPool | None and actual provider forwarding; completion: borrowed deadline/owners preserved, None rejected before work, direct/wiring observations pass.
-- [ ] 16.4.1 Migrate C07–C10 workspace guards in the registered host-workspace module: missing pool, original command remainder, operation/close/interruption/repeat/independent release, and real contention timeout followed by fresh acquisition. Completion: explicit admission=None establishes before-work refusal; capacity-one pool/O drives the real workspace caller, original deadline and launch allowance survive elapsed acquisition, original fault/result assertions remain, and per-function dispositions and passing T+M(workspace)+G results are in E; VALIDATE additionally runs S and applicable registered regression procedures. C06 collector coverage remains owned by P19.
-- [ ] 16.5 Document mandatory pool/original allowance; completion: matches contract.
-- [ ] 16.6 Execute T(test_workspace_preserves_admission_envelope)+G; completion: existing contention/deadline/failure assertions retained with capacity-one pools/E.
+- [x] 16.4 Migrate required keyword-only admission: AdmissionPool | None and actual provider forwarding; completion: borrowed deadline/owners preserved, None rejected before work, direct/wiring observations pass.
+- [x] 16.4.1 Migrate C07–C10 workspace guards in the registered host-workspace module: missing pool, original command remainder, operation/close/interruption/repeat/independent release, and real contention timeout followed by fresh acquisition. Completion: explicit admission=None establishes before-work refusal; capacity-one pool/O drives the real workspace caller, original deadline and launch allowance survive elapsed acquisition, original fault/result assertions remain, and per-function dispositions and passing T+M(workspace)+G results are in E; VALIDATE additionally runs S and applicable registered regression procedures. C06 collector coverage remains owned by P19.
+- [x] 16.5 Document mandatory pool/original allowance; completion: matches contract.
+- [x] 16.6 Execute T(test_workspace_preserves_admission_envelope)+G; completion: existing contention/deadline/failure assertions retained with capacity-one pools/E.
 
 ### INTROSPECT
-- [ ] 16.7 Record workspace compatibility review; completion: production behavior and old guard strength retained.
-- [ ] 16.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 16.7 Record workspace compatibility review; completion: production behavior and old guard strength retained.
+- [x] 16.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 16.9 Independently execute T(test_workspace_preserves_admission_envelope)+G; completion: mandatory admission/original remainder/prior phases pass.
+- [x] 16.9 Independently execute T(test_workspace_preserves_admission_envelope)+G; completion: mandatory admission/original remainder/prior phases pass.
 
 ## 17. P17 — Clone admission and required forwarding
 

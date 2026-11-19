@@ -2644,3 +2644,887 @@ def test_worker_installation_uses_session_admission(
     context.__exit__(None, None, None)
     assert ops.closed == previous
     assert_released(ops)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "direct",
+        "cross-installation",
+        "missing",
+        "metadata-operation-close",
+        "flock-interruption",
+        "body-operation-close",
+        "sole-close",
+        "repeat",
+        "nested",
+        "nested-operation-close",
+        "nested-sole-close",
+        "nested-interruption",
+        "nested-repeat",
+    ],
+)
+def test_host_preparation_uses_session_admission(
+    tmp_path, tmp_path_factory, monkeypatch, admission, case
+):
+    from typing import cast
+
+    from tests import admission_installation_support as installation
+    from tests import admission_preparation_support as preparation
+    from tests import admission_session_support as session
+    from tests import host_acceptance_contract_support as h
+    from tests import mcp_contract_support as support
+
+    storage = tmp_path_factory.mktemp("ap14")
+    assert admission.shared_pool.directory != tmp_path
+    primary = (
+        KeyboardInterrupt("preparation interrupted")
+        if "interruption" in case
+        else OSError("preparation operation")
+    )
+    release = OSError("preparation slot close")
+    parent_release = OSError("preparation directory close")
+    if case.startswith("nested"):
+        inputs = session.prepare(tmp_path, mode=["-n", "1"])
+        source = preparation.SOURCE.replace(
+            "Path('__PREPARATION_ROOT__')", f"Path({str(storage)!r})"
+        )
+        if case != "nested":
+            source = source[: source.index("def test_work(")]
+        conftest = session.CONFTEST.replace(
+            "def initialized(admission, tmp_path_factory, request):",
+            "def initialized(admission, tmp_path_factory, request, preparation_inputs):",
+        )
+        for path, text in (
+            (inputs["workspace"] / "test_session.py", source),
+            (inputs["workspace"] / "conftest.py", conftest),
+        ):
+            path.unlink()
+            mcp_provenance.write(path, text.encode())
+        events, errors, contexts, adapters, owners, results = [], [], [], [], [], []
+        streams = {stream: bytearray() for stream in ProcessStream}
+        partial, starts, elapsed = bytearray(), [], []
+
+        def run():
+            with ExitStack() as holds:
+
+                def chunk(stream, data):
+                    streams[stream].extend(data)
+                    if stream is not ProcessStream.STDOUT:
+                        return
+                    partial.extend(data)
+                    while b"\n" in partial:
+                        raw, _, rest = partial.partition(b"\n")
+                        partial[:] = rest
+                        if not raw.startswith(b"ADMISSION_EVENT "):
+                            continue
+                        event = json.loads(raw.removeprefix(b"ADMISSION_EVENT "))
+                        events.append(event)
+                        if errors:
+                            continue
+                        try:
+                            if event["kind"] == "ready":
+                                assert event["directory"] == str(inputs["base"])
+                                assert event["capacity"] == 1
+                                ops = RecordingDescriptors(inputs["base"])
+                                adapters.append(ops)
+                                pool = AdmissionPool(
+                                    directory=inputs["base"],
+                                    capacity=1,
+                                    system=RecordingSystem(descriptors=ops),
+                                )
+                                context = pool.acquire(deadline=time.monotonic() + 5)
+                                holds.enter_context(context)
+                                contexts.append(context)
+                                starts.append(time.monotonic())
+                                if case in {
+                                    "nested-operation-close",
+                                    "nested-sole-close",
+                                    "nested-interruption",
+                                }:
+                                    ops.release, ops.parent_release = (
+                                        release,
+                                        parent_release,
+                                    )
+                                if case == "nested-interruption":
+                                    raise primary
+                                if case == "nested":
+                                    mcp_provenance.write_observation(
+                                        inputs["workspace"]
+                                        / ("attempt-" + event["worker"]),
+                                        b"go",
+                                    )
+                                    # Worker stdout is captured by pytest. Observe
+                                    # the real O receipt through the bounded file
+                                    # channel instead of waiting for a call report
+                                    # that cannot arrive until this hold releases.
+                                    receipt = inputs["workspace"] / (
+                                        "busy-" + event["worker"]
+                                    )
+                                    limit = time.monotonic() + 5
+                                    while True:
+                                        if receipt.exists():
+                                            observed = mcp_provenance.read(receipt)
+                                            assert b"busy".startswith(observed)
+                                            if observed == b"busy":
+                                                break
+                                        if time.monotonic() >= limit:
+                                            raise AssertionError(
+                                                "preparation busy handshake exhausted"
+                                            )
+                                        time.sleep(0.01)
+                                    events.append(
+                                        {
+                                            "kind": "busy-observed",
+                                            "worker": event["worker"],
+                                        }
+                                    )
+                                    contexts[-1].__exit__(None, None, None)
+                                    assert_released(adapters[-1])
+                                    elapsed.append(time.monotonic() - starts[-1])
+                                    events.append(
+                                        {"kind": "released", "worker": event["worker"]}
+                                    )
+                                    mcp_provenance.write_observation(
+                                        inputs["workspace"]
+                                        / ("released-" + event["worker"]),
+                                        b"go",
+                                    )
+                        except Exception as error:
+                            errors.append(error)
+
+                with OwnedProcess.launch(
+                    inputs["argv"],
+                    deadline_seconds=20,
+                    grace_seconds=2,
+                    popen_kwargs={
+                        "cwd": str(inputs["repository"]),
+                        "env": inputs["env"],
+                    },
+                ) as owner:
+                    owners.append(owner)
+                    results.append(owner.stream(chunk))
+                    if errors:
+                        raise errors[0]
+                    if case == "nested-operation-close":
+                        raise primary
+
+        if case in {
+            "nested-operation-close",
+            "nested-sole-close",
+            "nested-interruption",
+        }:
+            with pytest.raises(BaseException) as caught:
+                run()
+            assert caught.value is (release if case == "nested-sole-close" else primary)
+            secondary = getattr(caught.value, "_transaction_secondary", ())
+            assert any(error is parent_release for error in secondary)
+            if case != "nested-sole-close":
+                assert any(error is release for error in secondary)
+        else:
+            run()
+        for owner in owners:
+            expected = (
+                (
+                    FailureInfo(
+                        primary,
+                        FailureKind.INTERRUPTION,
+                        FailurePhase.CALLBACK,
+                        ProcessStream.STDOUT,
+                    ),
+                )
+                if case == "nested-interruption"
+                else ()
+            )
+            assert owner.wait_cleanup(0).complete and owner.shutdown().complete
+            assert owner.cleanup_status.failures == expected
+        for stream in ProcessStream:
+            mcp_provenance.write(
+                tmp_path / ("child-" + stream.name.lower()), bytes(streams[stream])
+            )
+        mcp_provenance.write(
+            tmp_path / "child-observation.json",
+            mcp_provenance.canonical(
+                {
+                    "case": case,
+                    "argv": inputs["argv"],
+                    "cwd": str(inputs["repository"]),
+                    "W": str(inputs["workspace"]),
+                    "I": str(inputs["ini"]),
+                    "B": str(inputs["base"]),
+                    "events": events,
+                    "statuses": [result.returncode for result in results],
+                    "interrupted_capture": case == "nested-interruption",
+                    "hold_seconds": elapsed,
+                    "execution_seconds": 20,
+                    "cleanup_seconds": 2,
+                    "gate_seconds": 5,
+                    "cleanup_complete": all(
+                        owner.cleanup_status.complete for owner in owners
+                    ),
+                }
+            ),
+        )
+        for context, ops in zip(contexts, adapters, strict=True):
+            assert_released(ops)
+            before = list(ops.closed)
+            context.__exit__(None, None, None)
+            context.__exit__(None, None, None)
+            assert ops.closed == before
+            ops.release = ops.parent_release = None
+            with AdmissionPool(
+                directory=inputs["base"],
+                capacity=1,
+                system=RecordingSystem(descriptors=ops),
+            ).acquire(deadline=time.monotonic() + 5):
+                pass
+            assert_released(ops)
+        assert len(owners) == len(contexts) == 1 and not errors
+        for result in results:
+            assert result.returncode == 0, bytes(streams[ProcessStream.STDOUT]).decode(
+                "utf-8", "replace"
+            )
+            assert (
+                not result.timed_out
+                and result.lifecycle.complete
+                and not result.lifecycle.failures
+            )
+            assert all(
+                outcome is StreamOutcome.EOF for _, outcome in result.stream_outcomes
+            )
+        assert results or case == "nested-interruption"
+        if case == "nested":
+            assert len(elapsed) == 1 and 0 < elapsed[0] < 22
+            assert (
+                mcp_provenance.read(inputs["workspace"] / "entered-gw0") == b"prepared"
+            )
+            assert (
+                len(
+                    mcp_provenance.load(inputs["workspace"] / "preparation.json")[
+                        "commands"
+                    ]
+                )
+                == 7
+            )
+        else:
+            assert len(starts) == 1 and 0 < time.monotonic() - starts[0] < 22
+        return
+
+    namespace = tmp_path / "pool"
+    namespace.mkdir()
+    ops = RecordingDescriptors(namespace)
+    original_command, original_copy = mcp_wheel_support.command, support.copy_tree
+    completed, copies, busy = [], [], []
+    holder = None
+
+    class System(RecordingSystem):
+        def try_lock_exclusive(self, fd):
+            acquired = super().try_lock_exclusive(fd)
+            if not acquired:
+                busy.append(True)
+                if holder is not None:
+                    holder.__exit__(None, None, None)
+            return acquired
+
+    pool = AdmissionPool(
+        directory=namespace, capacity=1, system=System(descriptors=ops)
+    )
+    if case == "missing":
+        with pytest.raises(ValueError):
+            # Deliberate runtime misconfiguration; the public type forbids None.
+            h.prepared_root(storage, admission=cast(AdmissionPool, None))
+        assert not (storage / "prepared").exists() and not ops.events
+        return
+    install_inputs = (
+        support.prepare_inputs(h.ROOT, storage / "installation-inputs")
+        if case == "cross-installation"
+        else None
+    )
+    install_evidence = storage / "installation"
+    if install_inputs is not None:
+        install_evidence.mkdir()
+    cross = []
+
+    def active():
+        assert any(token[2] == "slot" for token in ops.live.values())
+
+    def copy(source, destination):
+        active()
+        copies.append(str(destination))
+        return original_copy(source, destination)
+
+    def command(argv, **kwargs):
+        active()
+        if case == "body-operation-close":
+            raise primary
+        if case == "cross-installation" and not cross:
+            cross.append(True)
+            assert install_inputs is not None
+            with pytest.raises(TimeoutError):
+                mcp_wheel_support.build_and_install_contract_wheel(
+                    install_inputs,
+                    admission=pool,
+                    evidence_directory=install_evidence,
+                    timeout_seconds=0.2,
+                )
+            assert ("busy", "slot") in ops.events
+            assert not (install_inputs / "dist").exists() and not list(
+                install_evidence.iterdir()
+            )
+        value = original_command(argv, **kwargs)
+        completed.append(value)
+        return value
+
+    with monkeypatch.context() as patch:
+        patch.setattr(support, "copy_tree", copy)
+        patch.setattr(mcp_wheel_support, "command", command)
+        if case in {"direct", "repeat"}:
+            holder = pool.acquire(deadline=time.monotonic() + 5)
+            with holder:
+                root, revision = h.prepared_root(storage, admission=pool)
+            assert busy
+        elif case == "cross-installation":
+            root, revision = h.prepared_root(storage, admission=pool)
+            assert cross == [True] and busy and install_inputs is not None
+            assert_released(ops)
+            bound = mcp_wheel_support.build_and_install_contract_wheel(
+                install_inputs, admission=pool, evidence_directory=install_evidence
+            )
+            assert bound.environment is not None and bound.environment.is_dir()
+            assert bound.command["status"] == 0
+        else:
+            ops.release, ops.parent_release = release, parent_release
+            if case.startswith("metadata"):
+                ops.point, ops.primary = "metadata", primary
+            elif case.startswith("flock"):
+                ops.point, ops.primary = "flock", primary
+            with pytest.raises(BaseException) as caught:
+                h.prepared_root(storage, admission=pool)
+            assert caught.value is (release if case == "sole-close" else primary)
+            secondary = getattr(caught.value, "_transaction_secondary", ())
+            assert any(error is parent_release for error in secondary)
+            if case != "sole-close":
+                assert any(error is release for error in secondary)
+            if case.startswith(("metadata", "flock")):
+                assert (
+                    not copies and not completed and not (storage / "prepared").exists()
+                )
+            root, revision = storage / "prepared", None
+    if case in {"direct", "repeat", "cross-installation", "sole-close"}:
+        assert root == storage / "prepared" and not (root / ".git/index").exists()
+        assert mcp_provenance.read(root / ".git/HEAD") == b"ref: refs/heads/fixture\n"
+        assert sum(value["argv"][0] == "git" for value in completed) == 7
+        assert copies and all(value["status"] == 0 for value in completed)
+        if case != "sole-close":
+            assert revision is not None and len(revision) == 40
+    mcp_provenance.write(
+        storage / "preparation.json",
+        mcp_provenance.canonical(
+            {
+                "case": case,
+                "root": str(root),
+                "revision": revision,
+                "copies": copies,
+                "commands": installation.commands(completed),
+            }
+        ),
+    )
+    assert_released(ops)
+    ops.point = ops.primary = ops.release = ops.parent_release = None
+    context = pool.acquire(deadline=time.monotonic() + 5)
+    with context:
+        pass
+    before = list(ops.closed)
+    context.__exit__(None, None, None)
+    context.__exit__(None, None, None)
+    assert ops.closed == before
+    assert_released(ops)
+
+
+@pytest.mark.parametrize("kind", ["invoke", "prepared"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "direct",
+        "missing",
+        "metadata-operation-close",
+        "flock-interruption",
+        "body-operation-close",
+        "sole-close",
+        "repeat",
+        "cross-preparation",
+        "nested",
+        "nested-operation-close",
+        "nested-sole-close",
+        "nested-interruption",
+        "nested-repeat",
+    ],
+)
+def test_host_wrapper_uses_session_admission(
+    tmp_path, tmp_path_factory, monkeypatch, admission, kind, case
+):
+    from typing import cast
+
+    from tests import admission_execution_support as execution
+    from tests import admission_installation_support as installation
+    from tests import admission_session_support as session
+    from tests import host_acceptance_contract_support as h
+    from tests.clock_support import ManualClock, module_clock
+
+    storage = tmp_path_factory.mktemp("ap15")
+    assert admission.shared_pool.directory != tmp_path
+    primary = (
+        KeyboardInterrupt("execution interrupted")
+        if "interruption" in case
+        else OSError("execution operation")
+    )
+    release, parent_release = (
+        OSError("execution slot close"),
+        OSError("execution parent close"),
+    )
+    if case.startswith("nested"):
+        inputs = session.prepare(tmp_path, mode=["-n", "1"])
+        source = execution.SOURCE.replace(
+            "Path('__EXECUTION_ROOT__')", f"Path({str(storage)!r})"
+        ).replace("'__EXECUTION_KIND__'", repr(kind))
+        if case != "nested":
+            source = source[: source.index("def test_work(")]
+        conftest = session.CONFTEST.replace(
+            "def initialized(admission, tmp_path_factory, request):",
+            "def initialized(admission, tmp_path_factory, request, execution_inputs):",
+        ).replace(
+            "if hasattr(CONFIG, 'workerinput'):\n        return",
+            execution.FINISHED_HOOK,
+        )
+        for path, text in (
+            (inputs["workspace"] / "test_session.py", source),
+            (inputs["workspace"] / "conftest.py", conftest),
+        ):
+            path.unlink()
+            mcp_provenance.write(path, text.encode())
+        events, errors, contexts, adapters, owners, results, starts, elapsed = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        streams = {stream: bytearray() for stream in ProcessStream}
+        partial = bytearray()
+
+        def wait_marker(name, expected, seconds, *, finished=False):
+            limit = time.monotonic() + seconds
+            while time.monotonic() < limit:
+                path = inputs["workspace"] / name
+                if path.exists():
+                    value = mcp_provenance.read(path)
+                    assert expected.startswith(value)
+                    if value == expected:
+                        return True
+                if finished and (inputs["workspace"] / "call-finished").exists():
+                    return False
+                time.sleep(0.01)
+            raise AssertionError("execution handshake exhausted: " + name)
+
+        def run():
+            with ExitStack() as holds:
+
+                def chunk(stream, data):
+                    streams[stream].extend(data)
+                    if stream is not ProcessStream.STDOUT:
+                        return
+                    partial.extend(data)
+                    while b"\n" in partial:
+                        raw, _, rest = partial.partition(b"\n")
+                        partial[:] = rest
+                        if not raw.startswith(b"ADMISSION_EVENT "):
+                            continue
+                        event = json.loads(raw.removeprefix(b"ADMISSION_EVENT "))
+                        events.append(event)
+                        if errors or event["kind"] != "ready":
+                            continue
+                        try:
+                            assert (
+                                event["directory"] == str(inputs["base"])
+                                and event["capacity"] == 1
+                            )
+                            if case == "nested":
+                                assert wait_marker(
+                                    "target-ready", b"ready", 15, finished=True
+                                )
+                            ops = RecordingDescriptors(inputs["base"])
+                            adapters.append(ops)
+                            pool = AdmissionPool(
+                                directory=inputs["base"],
+                                capacity=1,
+                                system=RecordingSystem(descriptors=ops),
+                            )
+                            context = pool.acquire(deadline=time.monotonic() + 5)
+                            holds.enter_context(context)
+                            contexts.append(context)
+                            starts.append(time.monotonic())
+                            if case in {
+                                "nested-operation-close",
+                                "nested-sole-close",
+                                "nested-interruption",
+                            }:
+                                ops.release, ops.parent_release = (
+                                    release,
+                                    parent_release,
+                                )
+                            if case == "nested-interruption":
+                                raise primary
+                            if case == "nested":
+                                mcp_provenance.write_observation(
+                                    inputs["workspace"]
+                                    / ("attempt-" + event["worker"]),
+                                    b"go",
+                                )
+                                busy = wait_marker(
+                                    "busy-" + event["worker"], b"busy", 5, finished=True
+                                )
+                                events.append(
+                                    {"kind": "target-contention", "observed": busy}
+                                )
+                                context.__exit__(None, None, None)
+                                assert_released(ops)
+                                elapsed.append(time.monotonic() - starts[-1])
+                                mcp_provenance.write_observation(
+                                    inputs["workspace"]
+                                    / ("released-" + event["worker"]),
+                                    b"go",
+                                )
+                        except Exception as error:
+                            errors.append(error)
+
+                with OwnedProcess.launch(
+                    inputs["argv"],
+                    deadline_seconds=45,
+                    grace_seconds=2,
+                    popen_kwargs={
+                        "cwd": str(inputs["repository"]),
+                        "env": inputs["env"],
+                    },
+                ) as owner:
+                    owners.append(owner)
+                    results.append(owner.stream(chunk))
+                    if errors:
+                        raise errors[0]
+                    if case == "nested-operation-close":
+                        raise primary
+
+        if case in {
+            "nested-operation-close",
+            "nested-sole-close",
+            "nested-interruption",
+        }:
+            with pytest.raises(BaseException) as caught:
+                run()
+            assert caught.value is (release if case == "nested-sole-close" else primary)
+            secondary = getattr(caught.value, "_transaction_secondary", ())
+            assert any(error is parent_release for error in secondary)
+            if case != "nested-sole-close":
+                assert any(error is release for error in secondary)
+        else:
+            run()
+        for owner in owners:
+            expected = (
+                (
+                    FailureInfo(
+                        primary,
+                        FailureKind.INTERRUPTION,
+                        FailurePhase.CALLBACK,
+                        ProcessStream.STDOUT,
+                    ),
+                )
+                if case == "nested-interruption"
+                else ()
+            )
+            assert owner.wait_cleanup(0).complete and owner.shutdown().complete
+            assert owner.cleanup_status.failures == expected
+        for stream in ProcessStream:
+            mcp_provenance.write(
+                tmp_path / ("child-" + stream.name.lower()), bytes(streams[stream])
+            )
+        mcp_provenance.write(
+            tmp_path / "child-observation.json",
+            mcp_provenance.canonical(
+                {
+                    "kind": kind,
+                    "case": case,
+                    "argv": inputs["argv"],
+                    "cwd": str(inputs["repository"]),
+                    "W": str(inputs["workspace"]),
+                    "I": str(inputs["ini"]),
+                    "B": str(inputs["base"]),
+                    "events": events,
+                    "statuses": [result.returncode for result in results],
+                    "interrupted_capture": case == "nested-interruption",
+                    "hold_seconds": elapsed,
+                    "execution_seconds": 45,
+                    "cleanup_seconds": 2,
+                    "target_ready_seconds": 15,
+                    "gate_seconds": 5,
+                    "cleanup_complete": all(
+                        owner.cleanup_status.complete for owner in owners
+                    ),
+                }
+            ),
+        )
+        for context, ops in zip(contexts, adapters, strict=True):
+            assert_released(ops)
+            before = list(ops.closed)
+            context.__exit__(None, None, None)
+            context.__exit__(None, None, None)
+            assert ops.closed == before
+            ops.release = ops.parent_release = None
+            with AdmissionPool(
+                directory=inputs["base"],
+                capacity=1,
+                system=RecordingSystem(descriptors=ops),
+            ).acquire(deadline=time.monotonic() + 5):
+                pass
+            assert_released(ops)
+        assert len(owners) == len(contexts) == 1 and not errors
+        for result in results:
+            assert result.returncode == 0, bytes(streams[ProcessStream.STDOUT]).decode(
+                "utf-8", "replace"
+            )
+            assert (
+                not result.timed_out
+                and result.lifecycle.complete
+                and not result.lifecycle.failures
+            )
+            assert all(
+                outcome is StreamOutcome.EOF for _, outcome in result.stream_outcomes
+            )
+        assert results or case == "nested-interruption"
+        if case == "nested":
+            assert [
+                event["observed"]
+                for event in events
+                if event["kind"] == "target-contention"
+            ] == [True]
+            assert (
+                mcp_provenance.read(inputs["workspace"] / "entered-gw0") == b"executed"
+            )
+            assert (
+                len(
+                    mcp_provenance.load(inputs["workspace"] / "execution.json")[
+                        "commands"
+                    ]
+                )
+                == 1
+            )
+        assert len(starts) == 1 and 0 < time.monotonic() - starts[0] < 47
+        return
+
+    namespace = tmp_path / "pool"
+    namespace.mkdir()
+    ops = RecordingDescriptors(namespace)
+    holder = None
+    busy, completed, allowances, cross = [], [], [], []
+    root_running = False
+    clock: ManualClock | None = None
+
+    class System(RecordingSystem):
+        def monotonic(self):
+            return super().monotonic() if clock is None else clock.monotonic()
+
+        def sleep(self, seconds):
+            if clock is None:
+                super().sleep(seconds)
+
+        def try_lock_exclusive(self, fd):
+            acquired = super().try_lock_exclusive(fd)
+            if not acquired:
+                busy.append(True)
+                if clock is not None:
+                    clock.advance(
+                        3, label="execution admission consumes original budget"
+                    )
+                    assert holder is not None
+                    holder.__exit__(None, None, None)
+            return acquired
+
+    pool = AdmissionPool(
+        directory=namespace, capacity=1, system=System(descriptors=ops)
+    )
+    root = storage / "fixture"
+    (root / "scripts").mkdir(parents=True)
+    payload = "import sys\nsys.stdout.buffer.write(b'out\\x00\\xff')\nsys.stderr.buffer.write(b'err\\x00\\xfe')\nsys.exit(17)\n"
+    wrapper = root / "scripts/build-acceptance-wheel"
+    mcp_provenance.write(wrapper, ("#!" + sys.executable + "\n" + payload).encode())
+    wrapper.chmod(0o700)
+    evidence = storage / "evidence"
+    evidence.mkdir()
+    env = mcp_wheel_support.clean_environment()
+
+    def execute(selected, *, end, label="operation"):
+        if kind == "invoke":
+            return h.invoke(
+                root,
+                "build-acceptance-wheel",
+                [],
+                admission=selected,
+                cwd=storage,
+                evidence=evidence,
+                env=env,
+                deadline=end,
+                label=label,
+            )
+        return h.prepared_command(
+            [sys.executable, "-P", "-c", payload],
+            admission=selected,
+            cwd=storage,
+            env=env,
+            deadline=end,
+        )
+
+    if case == "missing":
+        with pytest.raises(ValueError):
+            execute(cast(AdmissionPool, None), end=time.monotonic() + 5)
+        assert not ops.events and not list(evidence.iterdir())
+        return
+    original_command = mcp_wheel_support.command
+
+    def command(argv, **kwargs):
+        assert any(token[2] == "slot" for token in ops.live.values())
+        if root_running:
+            if not cross:
+                cross.append(True)
+                with pytest.raises(TimeoutError):
+                    execute(pool, end=time.monotonic() + 0.2)
+                assert busy and not completed and not list(evidence.iterdir())
+        else:
+            if clock is None:
+                assert 0 < kwargs["timeout_seconds"] <= 5
+            else:
+                assert kwargs["timeout_seconds"] == 17
+            allowances.append(kwargs["timeout_seconds"])
+            if case == "body-operation-close":
+                raise primary
+        value = original_command(argv, **kwargs)
+        completed.append(value)
+        return value
+
+    with monkeypatch.context() as patch:
+        patch.setattr(mcp_wheel_support, "command", command)
+        if case in {"direct", "repeat"}:
+            holder = pool.acquire(deadline=time.monotonic() + 5)
+            with holder:
+                started = time.monotonic()
+                with pytest.raises(TimeoutError):
+                    execute(pool, end=started + 0.2)
+                assert time.monotonic() - started < 2
+                assert busy and not completed and not list(evidence.iterdir())
+            assert_released(ops)
+            value = execute(pool, end=time.monotonic() + 5)
+        elif case == "cross-preparation":
+            work = storage / "preparation"
+            work.mkdir()
+            root_running = True
+            prepared, revision = h.prepared_root(work, admission=pool)
+            root_running = False
+            assert len(revision) == 40 and prepared.is_dir() and cross == [True]
+            assert_released(ops)
+            value = execute(pool, end=time.monotonic() + 5)
+        else:
+            ops.release, ops.parent_release = release, parent_release
+            if case.startswith("metadata"):
+                ops.point, ops.primary = "metadata", primary
+            elif case.startswith("flock"):
+                ops.point, ops.primary = "flock", primary
+            with pytest.raises(BaseException) as caught:
+                execute(pool, end=time.monotonic() + 5)
+            assert caught.value is (release if case == "sole-close" else primary)
+            secondary = getattr(caught.value, "_transaction_secondary", ())
+            assert any(error is parent_release for error in secondary)
+            if case != "sole-close":
+                assert any(error is release for error in secondary)
+            assert not list(evidence.iterdir())
+            if case.startswith(("metadata", "flock")):
+                assert not completed and not allowances
+            value = None
+    if case in {"direct", "repeat", "cross-preparation", "sole-close"}:
+        actual = completed[-1]
+        assert (
+            actual["status"] == 17
+            and actual["stdout"] == b"out\x00\xff"
+            and actual["stderr"] == b"err\x00\xfe"
+        )
+        assert actual["cwd"] == str(storage) and len(allowances) == 1
+        if value is not None:
+            assert value is actual
+            assert list(evidence.iterdir()) == (
+                [evidence / "operation.json"] if kind == "invoke" else []
+            )
+    if case == "direct":
+        holder = pool.acquire(deadline=time.monotonic() + 5)
+        with holder, monkeypatch.context() as patch:
+            clock = ManualClock(origin=13)
+            patch.setattr(mcp_wheel_support, "command", command)
+            with module_clock(h, clock):
+                remainder_result = execute(pool, end=33, label="remainder")
+            assert clock.monotonic() == 16 and clock.elapsed() == 3
+            assert allowances[-1] == 17 and remainder_result is completed[-1]
+            assert remainder_result["status"] == 17
+            assert remainder_result["stdout"] == b"out\x00\xff"
+            assert remainder_result["stderr"] == b"err\x00\xfe"
+            clock = None
+        assert_released(ops)
+    mcp_provenance.write(
+        storage / "execution.json",
+        mcp_provenance.canonical(
+            {
+                "kind": kind,
+                "case": case,
+                "commands": installation.commands(completed),
+                "allowances": allowances,
+            }
+        ),
+    )
+    assert_released(ops)
+    ops.point = ops.primary = ops.release = ops.parent_release = None
+    context = pool.acquire(deadline=time.monotonic() + 5)
+    with context:
+        pass
+    before = list(ops.closed)
+    context.__exit__(None, None, None)
+    context.__exit__(None, None, None)
+    assert ops.closed == before
+    assert_released(ops)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "direct",
+        "elapsed",
+        "repeat",
+        "cross-preparation",
+        "metadata-operation-close",
+        "metadata-interruption",
+        "flock-operation-close",
+        "flock-interruption",
+        "body-operation-close",
+        "body-interruption",
+        "sole-close",
+        "nested",
+        "nested-operation-close",
+        "nested-sole-close",
+        "nested-interruption",
+    ],
+)
+def test_workspace_preserves_admission_envelope(
+    tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+):
+    from tests.admission_workspace_support import run_case
+
+    run_case(
+        tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+    )

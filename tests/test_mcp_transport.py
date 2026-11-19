@@ -33,7 +33,11 @@ def test_phase9_build_failure_precedes_postcheck_failure(tmp_path, fault):
         tmp_path,
         wheel,
         lambda root, evidence: wheel.build_and_install_contract_wheel(
-            root, evidence_directory=evidence, timeout_seconds=30, attribution_only=True
+            root,
+            admission=None,
+            evidence_directory=evidence,
+            timeout_seconds=30,
+            attribution_only=True,
         ),
         fault,
     )
@@ -369,8 +373,10 @@ def test_exact_wheel_bootstrap_lifecycle_contract(tmp_path, case):
         "poisoned-environment",
     ],
 )
-def test_expected_origin_archive_authority_controls(tmp_path, fault):
-    support("mcp_contract_support").exercise_origin_control(ROOT, tmp_path, fault)
+def test_expected_origin_archive_authority_controls(tmp_path, fault, admission):
+    support("mcp_contract_support").exercise_origin_control(
+        ROOT, tmp_path, fault, admission=admission.shared_pool
+    )
 
 
 def test_server_borrowed_stdio_facades_never_own_inherited_handles():
@@ -713,18 +719,16 @@ def test_real_child_hostile_ascii_locale(tmp_path, context):
     "fault", ["operation-close", "sole-close", "interruption", "repeat"]
 )
 @pytest.mark.parametrize("point", ["metadata", "flock", "body"])
-def test_build_admission_sole_owner_faults(tmp_path, monkeypatch, fault, point):
+def test_build_admission_sole_owner_faults(tmp_path, fault, point):
     import time
 
-    from footman.filesystem.descriptors import DirectoryDescriptor, OwnedDescriptor
-    from tests import mcp_wheel_support as wheel
+    from tests.admission_support import AdmissionPool
+    from tests.test_admission_pool import (
+        RecordingDescriptors,
+        RecordingSystem,
+        assert_released,
+    )
 
-    original_init = OwnedDescriptor.__init__
-    original_close = type(wheel.OPS).close
-    original_stat = wheel.os.fstat
-    original_flock = wheel.fcntl.flock
-    acquired = []
-    closes = []
     primary = (
         KeyboardInterrupt("admission interrupted")
         if fault == "interruption"
@@ -732,77 +736,45 @@ def test_build_admission_sole_owner_faults(tmp_path, monkeypatch, fault, point):
         if fault == "operation-close"
         else None
     )
-    release = OSError("admission close")
-    parent_error = OSError("independent parent close")
-    parent_releases = []
-    original_parent_close = DirectoryDescriptor.close
-
-    def parent_close(directory):
-        try:
-            live = directory.fd
-        except Exception:
-            return original_parent_close(directory)
-        selected = directory.label == str(tmp_path)
-        original_parent_close(directory)
-        if selected:
-            parent_releases.append(live)
-            raise parent_error
-
-    def initialize(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        if kwargs.get("label") == "MCP build admission":
-            acquired.append((self, self.fd))
-
-    def close(ops, fd):
-        original_close(ops, fd)
-        if acquired and fd == acquired[0][1]:
-            closes.append(fd)
-            raise release
-
-    def metadata(fd):
-        if (
-            primary is not None
-            and point == "metadata"
-            and acquired
-            and fd == acquired[0][1]
-        ):
-            raise primary
-        return original_stat(fd)
-
-    def flock(fd, flags):
-        if primary is not None and point == "flock":
-            raise primary
-        return original_flock(fd, flags)
-
-    with monkeypatch.context() as scoped:
-        scoped.setattr(OwnedDescriptor, "__init__", initialize)
-        scoped.setattr(DirectoryDescriptor, "close", parent_close)
-        scoped.setattr(type(wheel.OPS), "close", close)
-        scoped.setattr(wheel.os, "fstat", metadata)
-        scoped.setattr(wheel.fcntl, "flock", flock)
-        with pytest.raises(BaseException) as caught:
-            with wheel.build_slot(tmp_path / "slot", deadline=time.monotonic() + 5):
-                if primary is not None:
-                    raise primary
-        assert caught.value is (primary or release)
-        assert len(parent_releases) == 1
-        assert any(
-            item is parent_error
-            for item in getattr(caught.value, "_transaction_secondary", ())
-        )
-        if primary is not None:
-            assert any(
-                item is release
-                for item in getattr(primary, "_transaction_secondary", ())
-            )
-        before = list(closes)
-        for owner, _ in acquired:
-            owner.close()
-            owner.close()
-        assert closes == before and len(closes) == 1
-    # A separate acquisition succeeds: release failure did not retain the flock.
-    with wheel.build_slot(tmp_path / "slot", deadline=time.monotonic() + 5):
+    release, parent_error = (
+        OSError("admission close"),
+        OSError("independent parent close"),
+    )
+    ops = RecordingDescriptors(
+        tmp_path,
+        point=point if primary is not None else None,
+        primary=primary,
+        release=release,
+    )
+    ops.parent_release = parent_error
+    pool = AdmissionPool(
+        directory=tmp_path, capacity=1, system=RecordingSystem(descriptors=ops)
+    )
+    context = pool.acquire(deadline=time.monotonic() + 5)
+    entered = []
+    with pytest.raises(BaseException) as caught:
+        with context:
+            entered.append(True)
+            if primary is not None:
+                raise primary
+    assert caught.value is (primary or release)
+    assert entered == ([] if primary is not None and point != "body" else [True])
+    secondary = getattr(caught.value, "_transaction_secondary", ())
+    assert any(item is parent_error for item in secondary)
+    if primary is not None:
+        assert any(item is release for item in secondary)
+    assert sum(token[2] == "slot" for token in ops.closed) == 1
+    assert sum(token[2] == "namespace" for token in ops.closed) == 1
+    assert_released(ops)
+    before = list(ops.closed)
+    context.__exit__(None, None, None)
+    context.__exit__(None, None, None)
+    assert ops.closed == before
+    ops.point = ops.primary = ops.release = ops.parent_release = None
+    with pool.acquire(deadline=time.monotonic() + 5):
         pass
+    assert ops.closed[: len(before)] == before
+    assert_released(ops)
 
 
 @pytest.mark.parametrize("kind", ["symlink", "directory", "fifo"])
@@ -810,54 +782,83 @@ def test_build_admission_rejects_unsafe_nodes(tmp_path, kind):
     import os
     import time
 
-    from tests.mcp_wheel_support import build_slot
+    from footman.filesystem.descriptors import UnsafeDescriptorError
+    from tests.admission_support import AdmissionPool
+    from tests.test_admission_pool import (
+        RecordingDescriptors,
+        RecordingSystem,
+        assert_released,
+    )
 
-    path = tmp_path / "slot"
+    ops = RecordingDescriptors(tmp_path)
+    pool = AdmissionPool(
+        directory=tmp_path, capacity=1, system=RecordingSystem(descriptors=ops)
+    )
+    with pool.acquire(deadline=time.monotonic() + 5):
+        pass
+    assert_released(ops)
+    path = tmp_path / ops.slot_names[-1]
+    path.unlink()
     if kind == "symlink":
         path.symlink_to(tmp_path / "absent")
     elif kind == "directory":
         path.mkdir()
     else:
         os.mkfifo(path)
-    with pytest.raises((OSError, ValueError)):
-        with build_slot(path, deadline=time.monotonic() + 5):
-            pytest.fail("unsafe admission node entered")
+    before = len(ops.events)
+    with pytest.raises(UnsafeDescriptorError):
+        with pool.acquire(deadline=time.monotonic() + 5):
+            raise AssertionError("unsafe admission node entered")
+    assert not any(event[0] == "attempt" for event in ops.events[before:])
+    assert not (tmp_path / "absent").exists()
+    assert_released(ops)
 
 
-def test_build_admission_serializes_and_preserves_original_timeout(
-    tmp_path, monkeypatch
-):
+def test_build_admission_serializes_and_preserves_original_timeout(tmp_path):
     import concurrent.futures
     import threading
-    from types import SimpleNamespace
 
-    from tests import mcp_wheel_support as wheel
+    from tests.admission_support import AdmissionPool
     from tests.clock_support import ManualClock
+    from tests.test_admission_pool import (
+        RecordingDescriptors,
+        RecordingSystem,
+        assert_released,
+    )
 
     clock = ManualClock(origin=0.0)
-    monkeypatch.setattr(
-        wheel,
-        "time",
-        SimpleNamespace(monotonic=clock.monotonic, sleep=lambda seconds: None),
-    )
-    entered = threading.Event()
-    release = threading.Event()
-    blocked = threading.Event()
+    entered, release, blocked = threading.Event(), threading.Event(), threading.Event()
     order = []
-    original = wheel.fcntl.flock
 
-    def flock(fd, flags):
-        try:
-            return original(fd, flags)
-        except BlockingIOError:
-            clock.advance(1.0, label="admission contention exhausts original allowance")
-            blocked.set()
-            raise
+    class System(RecordingSystem):
+        def monotonic(self):
+            return clock.monotonic()
 
-    monkeypatch.setattr(wheel.fcntl, "flock", flock)
+        def sleep(self, seconds):
+            pass
+
+        def try_lock_exclusive(self, fd):
+            acquired = super().try_lock_exclusive(fd)
+            if not acquired:
+                clock.advance(
+                    1, label="admission contention exhausts original allowance"
+                )
+                blocked.set()
+            return acquired
+
+    first_ops, second_ops = (
+        RecordingDescriptors(tmp_path),
+        RecordingDescriptors(tmp_path),
+    )
+    first_pool = AdmissionPool(
+        directory=tmp_path, capacity=1, system=System(descriptors=first_ops)
+    )
+    second_pool = AdmissionPool(
+        directory=tmp_path, capacity=1, system=System(descriptors=second_ops)
+    )
 
     def first():
-        with wheel.build_slot(tmp_path / "slot", deadline=10.0):
+        with first_pool.acquire(deadline=10):
             order.append("first-enter")
             entered.set()
             if not release.wait(5):
@@ -865,53 +866,102 @@ def test_build_admission_serializes_and_preserves_original_timeout(
             order.append("first-exit")
 
     def second():
-        with wheel.build_slot(tmp_path / "slot", deadline=1.0):
+        with second_pool.acquire(deadline=1):
             raise AssertionError("concurrent build admitted")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        one = pool.submit(first)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as threads:
+        one = threads.submit(first)
         try:
             assert entered.wait(5)
-            two = pool.submit(second)
+            two = threads.submit(second)
             assert blocked.wait(5)
             with pytest.raises(TimeoutError, match="original|admission"):
                 two.result(timeout=5)
         finally:
             release.set()
         one.result(timeout=5)
-    assert order == ["first-enter", "first-exit"]
-    assert clock.elapsed() == 1.0
+    assert order == ["first-enter", "first-exit"] and clock.elapsed() == 1
+    assert ("busy", "slot") in second_ops.events
+    with second_pool.acquire(deadline=2):
+        order.append("after-release")
+    assert order == ["first-enter", "first-exit", "after-release"]
+    assert_released(first_ops)
+    assert_released(second_ops)
 
 
 def test_build_admission_does_not_renew_setup_deadline(monkeypatch, tmp_path):
-    from contextlib import contextmanager
-    from types import SimpleNamespace
+    import os
+    import time
 
+    from tests import mcp_attribution_support as attribution
+    from tests import mcp_contract_support as support
     from tests import mcp_wheel_support as wheel
+    from tests.admission_support import AdmissionPool, PosixAdmissionSystem
+    from tests.clock_support import ManualClock, module_clock
+    from tests.test_admission_pool import RecordingDescriptors, assert_released
+    from tests.wheel_attribution_cases import case
 
-    clock = [100.0]
-    observed = []
-
-    @contextmanager
-    def admission(path, *, deadline):
-        observed.append(deadline)
-        clock[0] = 107.0
-        yield
-
-    def build(*args, **kwargs):
-        observed.append(kwargs["deadline"])
-        return "bound"
-
-    monkeypatch.setattr(wheel, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    monkeypatch.setattr(wheel, "build_slot", admission)
-    monkeypatch.setattr(wheel, "_build_and_install_contract_wheel", build)
-    assert (
-        wheel.build_and_install_contract_wheel(
-            tmp_path, evidence_directory=tmp_path, timeout_seconds=10
-        )
-        == "bound"
+    prepared = support.prepare_inputs(ROOT, tmp_path / "inputs")
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    namespace = tmp_path / "pool"
+    namespace.mkdir()
+    scenario = case("build-status-failure")
+    executable, call = attribution.scripted_uv(tmp_path, scenario)
+    env = wheel.clean_environment(
+        {"PATH": str(executable.parent) + os.pathsep + os.environ["PATH"]}
     )
-    assert observed == [110.0, 110.0]
+    clock = ManualClock(origin=100.0)
+    holder = AdmissionPool(directory=namespace, capacity=1).acquire(
+        deadline=time.monotonic() + 5
+    )
+    ops = RecordingDescriptors(namespace)
+    busy = []
+
+    class System(PosixAdmissionSystem):
+        def monotonic(self):
+            return clock.monotonic()
+
+        def sleep(self, seconds):
+            pass
+
+        def try_lock_exclusive(self, fd):
+            acquired = super().try_lock_exclusive(fd)
+            if not acquired:
+                assert not busy
+                busy.append(True)
+                clock.advance(7, label="original installation admission wait")
+                holder.__exit__(None, None, None)
+            return acquired
+
+    pool = AdmissionPool(
+        directory=namespace, capacity=1, system=System(descriptors=ops)
+    )
+    real_command, allowances = wheel.command, []
+
+    def command(argv, **kwargs):
+        allowances.append(kwargs["timeout_seconds"])
+        return real_command(argv, **kwargs)
+
+    with holder, module_clock(wheel, clock), monkeypatch.context() as patch:
+        patch.setattr(wheel, "command", command)
+        with pytest.raises(wheel.BuildFailure) as caught:
+            wheel.build_and_install_contract_wheel(
+                prepared,
+                admission=pool,
+                evidence_directory=evidence,
+                timeout_seconds=10,
+                env=env,
+            )
+    assert busy == [True] and allowances == [3.0]
+    assert clock.monotonic() == 107 and clock.elapsed() == 7
+    # Origin100 + original duration10 is end110, not a renewed end117:
+    # public external work receives110-107=3 after the real busy probe releases.
+    assert caught.value.observation["status"] == 17 and call.is_file()
+    assert caught.value.observation["stdout"] == scenario.stdout_bytes
+    assert caught.value.observation["stderr"] == scenario.stderr_bytes
+    assert not (evidence / "venv").exists()
+    assert_released(ops)
 
 
 def test_real_builds_use_invocation_shared_admission(request, tmp_path_factory):
@@ -920,6 +970,202 @@ def test_real_builds_use_invocation_shared_admission(request, tmp_path_factory):
     base = tmp_path_factory.getbasetemp()
     expected = base.parent if hasattr(request.config, "workerinput") else base
     assert wheel.BUILD_SLOT_PATH == expected / "mcp-build.lock"
+
+
+@pytest.mark.parametrize(
+    "operation", ["launch", "inspect", "mkdir", "copy", "command", "remove", "confirm"]
+)
+def test_mcp_stub_observations_do_not_wait_for_durability(tmp_path, operation):
+    import sys
+
+    from tests import mcp_provenance as p
+    from tests.mcp_wheel_support import clean_environment, command
+
+    identity = "d" * 64
+    calls = {
+        "launch": [
+            "run",
+            "--detach=true",
+            "--pull=never",
+            "--",
+            "image-id",
+            "sleep",
+            "infinity",
+        ],
+        "inspect": [
+            "container",
+            "inspect",
+            "--format",
+            "{{.Id}}|{{.State.Status}}|{{.Image}}",
+            identity,
+        ],
+        "mkdir": ["exec", "-u", "root", identity, "mkdir", "--", "/workspace/source"],
+        "copy": ["cp", "/prepared/.", identity + ":/workspace/source/"],
+        "command": [
+            "exec",
+            "-u",
+            "root",
+            "-w",
+            "/workspace/source",
+            identity,
+            "image-tool",
+            "two words",
+            "; $literal",
+        ],
+        "remove": ["rm", "-f", identity],
+        "confirm": [
+            "container",
+            "ls",
+            "--all",
+            "--no-trunc",
+            "--filter",
+            "id=" + identity,
+            "--format",
+            "{{.ID}}",
+        ],
+    }
+    records = tmp_path / "records"
+    records.mkdir()
+    code = f"""
+import os, sys
+sys.path.insert(0, {str(ROOT)!r})
+from tests.mcp_docker_child import main
+def barrier(fd):
+    raise OSError('synchronous diagnostic barrier on MCP CLI critical path')
+os.fsync = barrier
+sys.argv = ['docker', *{calls[operation]!r}]
+main()
+"""
+    result = command(
+        [sys.executable, "-P", "-c", code],
+        cwd=tmp_path,
+        env=clean_environment(
+            {
+                "FOOTMAN_MCP_STUB": json.dumps(
+                    {
+                        "records": str(records),
+                        "failure": operation,
+                        "status": 17,
+                        "delay": 0,
+                    }
+                )
+            }
+        ),
+        timeout_seconds=5,
+    )
+    assert result["status"] == 17, result["stderr"]
+    observed = list(records.iterdir())
+    assert len(observed) == 1
+    assert p.load(observed[0]) == {"operation": operation, "argv": calls[operation]}
+    if operation == "command":
+        assert result["stdout"] == b"command stdout\x00\xff\n"
+        assert result["stderr"] == b"command stderr\x00\xfe\n"
+    else:
+        assert result["stderr"] == b""
+        if operation == "launch":
+            assert len(result["stdout"]) == 65 and result["stdout"][-1:] == b"\n"
+            assert all(byte in b"0123456789abcdef" for byte in result["stdout"][:-1])
+        elif operation == "inspect":
+            assert (
+                result["stdout"]
+                == (identity + "|running|sha256:" + "b" * 64 + "\n").encode()
+            )
+        else:
+            assert result["stdout"] == b""
+
+
+@pytest.mark.parametrize(
+    "fault", ["operation-close", "sole-close", "interruption-close", "repeat"]
+)
+def test_mcp_stub_observation_failures_remain_authoritative(
+    tmp_path, monkeypatch, capsysbinary, fault
+):
+    import os
+    import stat
+    import sys
+
+    from tests import mcp_docker_child as child
+    from tests import mcp_provenance as p
+
+    original_ops, original_write = p.OPS, os.write
+    namespace = tmp_path.stat()
+    slot_closes, directory_closes = [], []
+    primary = (
+        KeyboardInterrupt("stub record interrupted")
+        if fault == "interruption-close"
+        else OSError("stub record write failed")
+    )
+    release, parent_release = (
+        OSError("stub record close failed"),
+        OSError("stub record directory close failed"),
+    )
+
+    class Ops:
+        def __getattr__(self, name):
+            return getattr(original_ops, name)
+
+        def close(self, fd):
+            info = os.fstat(fd)
+            regular = stat.S_ISREG(info.st_mode)
+            parent = (info.st_dev, info.st_ino) == (namespace.st_dev, namespace.st_ino)
+            original_ops.close(fd)
+            if regular:
+                slot_closes.append((fd, info.st_dev, info.st_ino))
+                if fault != "repeat":
+                    raise release
+            if parent:
+                directory_closes.append(fd)
+                if fault != "repeat":
+                    raise parent_release
+
+    def write(fd, data):
+        if fault in {"operation-close", "interruption-close"}:
+            raise primary
+        return original_write(fd, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(p, "OPS", Ops())
+        patch.setattr(os, "write", write)
+        patch.setenv(
+            "FOOTMAN_MCP_STUB",
+            json.dumps(
+                {
+                    "records": str(tmp_path),
+                    "failure": "command",
+                    "status": 17,
+                    "delay": 0,
+                }
+            ),
+        )
+        patch.setattr(sys, "argv", ["docker", "exec", "d" * 64, "image-tool"])
+        if fault == "repeat":
+            for count in (1, 2):
+                with pytest.raises(SystemExit) as caught:
+                    child.main()
+                assert caught.value.code == 17
+                assert len(slot_closes) == len(directory_closes) == count
+        else:
+            with pytest.raises(BaseException) as caught:
+                child.main()
+            assert caught.value is (release if fault == "sole-close" else primary)
+            secondary = getattr(caught.value, "_transaction_secondary", ())
+            assert any(error is parent_release for error in secondary)
+            if fault != "sole-close":
+                assert any(error is release for error in secondary)
+            assert len(slot_closes) == len(directory_closes) == 1
+    output = capsysbinary.readouterr()
+    if fault == "repeat":
+        assert len(set(slot_closes)) == len(slot_closes) == 2
+        assert len(list(tmp_path.iterdir())) == 2
+        for path in tmp_path.iterdir():
+            assert p.load(path) == {
+                "operation": "command",
+                "argv": ["exec", "d" * 64, "image-tool"],
+            }
+        assert output.out == b"command stdout\x00\xff\n" * 2
+        assert output.err == b"command stderr\x00\xfe\n" * 2
+    else:
+        assert output.out == output.err == b""
 
 
 def test_docker_stub_recording_imports_no_process_or_sdk(tmp_path):

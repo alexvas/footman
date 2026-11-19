@@ -113,7 +113,7 @@ def world(root, tmp, context="development", **options):
         if WHEEL_PROVIDER is None:
             prepared = prepare_inputs(root, tmp / "build-root")
             bound = build_and_install_contract_wheel(
-                prepared, evidence_directory=install
+                prepared, admission=options.get("admission"), evidence_directory=install
             )
         else:
             from tests.mcp_wheel_support import inventory, reuse_for_test
@@ -877,7 +877,7 @@ def exercise_package_control(root, tmp, fault):
     )
 
 
-def exercise_origin_control(root, tmp, fault):
+def exercise_origin_control(root, tmp, fault, *, admission):
     if fault == "wheel-binding":
         from unittest.mock import patch
 
@@ -899,7 +899,7 @@ def exercise_origin_control(root, tmp, fault):
         with patch.object(wheel, "command", swap):
             try:
                 wheel.build_and_install_contract_wheel(
-                    build, evidence_directory=evidence
+                    build, admission=admission, evidence_directory=evidence
                 )
             except ValueError as error:
                 check(
@@ -916,6 +916,7 @@ def exercise_origin_control(root, tmp, fault):
         root,
         tmp,
         "wheel",
+        admission=admission,
         mutable_wheel=fault in {"stale", "swapped-install", "launcher"},
         private_support=fault == "script-shadow",
     )
@@ -1183,7 +1184,11 @@ def exercise_build_control(root, tmp, fault):
         (prepared / "README.md").unlink()
     try:
         wheel.build_and_install_contract_wheel(
-            prepared, evidence_directory=evidence, attribution_only=True, env=env
+            prepared,
+            admission=None,
+            evidence_directory=evidence,
+            attribution_only=True,
+            env=env,
         )
     except wheel.BuildFailure, ValueError, OSError:
         pass

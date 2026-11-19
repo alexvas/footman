@@ -8,7 +8,7 @@ import pytest
 
 from tests.clock_support import ManualClock, module_clock, stage_pause
 
-pytest_plugins = ("tests.green_skip_policy",)
+pytest_plugins = ("tests.green_skip_policy", "tests.admission_plugin")
 
 
 def pytest_configure(config):
@@ -31,7 +31,7 @@ def _wheel_build_slot_path(request, tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def _mcp_worker_wheel(request, tmp_path_factory, _wheel_build_slot_path):
+def _mcp_worker_wheel(request, tmp_path_factory, admission):
     from pathlib import Path
 
     from tests import mcp_contract_support as support
@@ -46,11 +46,9 @@ def _mcp_worker_wheel(request, tmp_path_factory, _wheel_build_slot_path):
     evidence.mkdir(mode=0o700)
     # Session setup can precede function-scoped autouse fixtures. Admit it too,
     # without an outer lock (the build/install routine takes its own slot).
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(wheel, "BUILD_SLOT_PATH", _wheel_build_slot_path)
-        bound = wheel.build_and_install_contract_wheel(
-            prepared, evidence_directory=evidence
-        )
+    bound = wheel.build_and_install_contract_wheel(
+        prepared, admission=admission.shared_pool, evidence_directory=evidence
+    )
     p.write(
         root / "setup.json",
         p.canonical(

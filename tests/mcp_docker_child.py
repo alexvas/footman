@@ -29,7 +29,9 @@ def main():
         else "command"
     )
     record = Path(value["records"]) / f"{time.time_ns()}-{os.getpid()}.json"
-    p.write(record, p.canonical({"operation": operation, "argv": argv}))
+    # Call records are ephemeral observations, not durable provenance. File and
+    # directory fsync must not consume the native helper's cleanup allowance.
+    p.write_observation(record, p.canonical({"operation": operation, "argv": argv}))
     status = value["status"] if value["failure"] == operation else 0
     if operation == "launch":
         data = (uuid.uuid7().hex * 2 + "\n").encode()

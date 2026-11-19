@@ -138,6 +138,13 @@ class AdmissionPool:
                 system.sleep(delay)
 
 
+@dataclass(frozen=True, kw_only=True)
+class SessionAdmission:
+    """Resource-free, immutable session provider with one stable pool description."""
+
+    shared_pool: AdmissionPool
+
+
 class CapacityObservationUnavailable(Exception):
     """An expected missing/inaccessible raw CPU observation, with its cause."""
 

@@ -576,8 +576,12 @@ preparation copies, actual wrapper calls and real by-path Python prepared legs
 use that same file, not a separate host-only lock. Direct real `_Workspace`
 provisioning in the provenance/workspace collectors goes through the test-only
 `provision_workspace` adapter, which holds admission across the unmodified
-`provision` call, including uv venv and pip. Initial worker-wheel session setup
-is admitted even when it precedes function autouse fixtures.
+`provision` call, including uv venv and pip. During the admission-pool migration,
+P13 moves build/install and initial worker-wheel session setup to the explicit
+session pool, even when setup precedes function autouse fixtures. The other
+regions above retain this legacy lock until their P14–P19 migrations. Pool slot
+files and the legacy lock are separate exclusion domains: pool K and legacy one
+can overlap, so the intermediate aggregate can exceed K and the CPU budget.
 
 Waiting consumes each caller's original deadline. Build and prepared execution
 share their original 120-second fixture envelope; direct workspace provisioning
@@ -740,8 +744,9 @@ substitute. Only fixture-owned disposable build outputs may be created; existing
 candidate dist artifacts must remain untouched. Validation also requires every
 earlier registered suite, the unscoped gate and build/help/exact-wheel smoke.
 
-Relocated CLI origin records are ephemeral stub observations, not confirmed
-provenance evidence or power-loss-durable journals. They use exclusive no-follow
+Relocated CLI origin records and MCP Docker-peer call records are ephemeral
+stub observations, not confirmed provenance evidence or power-loss-durable
+journals. They use exclusive no-follow
 complete writes and sole-owner closes through `write_observation`, without file
 or directory fsync on the short CLI critical path. Write/close failures still
 fail the child; argv/status/stdin-EOF records, native outcomes and descendant
@@ -750,7 +755,11 @@ results retain their required synchronization. A real-wheel CLI probe makes any
 fsync on the diagnostic path fail deterministically; separate owner/collision
 and synchronization controls preserve the two distinct writer contracts. This
 removes an unnecessary latency source, not a guarantee of cold-child startup or
-proof that fsync caused any historical timeout. No budgets or two-dispatch case
+proof that fsync caused any historical timeout. The MCP peer has its own
+seven-operation real-child fsync-rejection regression, preserving exact argv,
+scripted status and binary streams. Its operation-plus-close, sole-close,
+interruption and repeated-invocation controls retain real owners and independent
+parent release; the shared writer's repeat-cleanup contract remains unchanged. No budgets or two-dispatch case
 profiles change. Post-dispatch parser/result/evidence controls additionally
 require two retained successful code-zero dispatches AND the existing
 `before-evidence` checkpoint. That receipt is emitted only after successful MCP
@@ -1781,9 +1790,82 @@ recognized malformed observation. Conversion happens only after successful
 cleanup, using the public `CleanupFailures` observations: an otherwise expected
 observation failure plus close failure remains a failure, and a sole-close error
 cannot become fallback. Interruptions, unexpected errors and unclassified I/O
-failures propagate rather than silently lowering capacity. Session wiring and
-caller migrations belong to subsequent phases; this result is not yet used by
-callers.
+failures propagate rather than silently lowering capacity.
+
+P11 registers `tests.admission_plugin` once through repository `pytest_plugins`.
+Its session-scoped `admission` fixture returns frozen, resource-free
+`SessionAdmission(shared_pool=AdmissionPool(...))` from `tests.admission_support`.
+The pool description is stable for that worker; acquisition still owns all live
+resources. The controller resolves one decision in public
+`pytest_xdist_setupnodes` using the final local spec count, after numeric,
+automatic/logical selection and `--maxprocesses` caps. Initial and replacement
+workers receive that same versioned decision and diagnostic; they do not resolve
+CPU capacity again. Serial/no-worker execution uses a local worker bound of one.
+Only same-host, shared-filesystem local popen topology without chdir is supported.
+Unresolved/invalid counts, unsupported topology and nonabsolute namespaces raise
+`pytest.UsageError` with `invalid admission configuration:` before protected work.
+P12 validates delivered payload shape, exact supported integer version and all
+required decision fields during worker configuration. Missing/malformed payloads,
+invalid versions, nonpositive/bool/noninteger capacities and nonstring/blank
+reasons raise the same `UsageError` before provider creation or protected work;
+they never become a conservative CPU-budget fallback. Expected constructor
+validation errors retain their cause, while interruptions and unexpected defects
+are not caught as configuration errors. Negative scenarios first prove successful
+uncorrupted setup and real protected work, then mutate the actual transfer in a
+public `pytest_configure_node` hook with `trylast=True`, after the real ordinary
+transfer hook. Refusal requires a nonzero enclosing session, the diagnostic
+prefix and no provider-ready/work receipt, not merely any child failure.
+Recovery is to correct worker/count/topology or delivery configuration and rerun;
+do not bypass validation, replace it with capacity one or reuse an active basetemp.
+
+The injected public `tmp_path_factory.getbasetemp()` supplies the namespace:
+serial uses the base, local workers and replacements its parent. Each invocation
+must have its own basetemp; an explicit basetemp has exactly one active invocation.
+Nested scenarios use fresh external workspaces, isolated ini/rootdir/confcutdir,
+repository-root cwd and absolute venv Python, with explicit xdist, skip-policy
+and admission plugins. Clean environments remove ambient pytest injections and
+disable plugin autoload. Public automatic-worker controls select three workers;
+capped variants observe two ready workers. Serial and zero-worker arguments are
+intentional scenario inputs, not registered verification commands. One-worker
+tracers initialize the provider before holding only the inner namespace, require
+positive busy-lock/timeout evidence, then independently acquire after release.
+Replacement tracers terminate the initial worker only outside acquisition,
+retain its expected crash verdict and repeat contention/progress in the same
+namespace. Process/hold cleanup remains bounded and sole-owned on faults and
+interruption.
+
+P13 makes `build_and_install_contract_wheel` require keyword-only
+`admission: AdmissionPool | None`. Heavy installation requires a real pool;
+`None` raises `ValueError` before acquisition/work. The existing
+`attribution_only=True` branch accepts explicit `None` and bypasses admission,
+building attribution artifacts only, never installing them. Installation owns
+its acquisition across the original complete build/install region, passing the
+same absolute end to admission and subsequent remaining command allowances;
+waiting never renews the caller-supplied duration or default 120-second envelope.
+The lazy worker-wheel session fixture explicitly requests `admission` and passes
+`admission.shared_pool`, independent of function autouse timing. Its former
+installation-only legacy-path monkeypatch is removed; existing isolated wheel,
+venv, support and evidence destinations remain unchanged.
+
+P13 direct probes use prepared matching repository inputs and isolated capacity-one
+pools. The nested variant prepares those inputs before provider-ready, then
+observes actual installation-caller contention/timeout and a separate successful
+real build/install after release. That establishes provider-to-public-caller
+wiring; the lazy fixture's explicit dependency/forwarding is established by
+inventory review and ordinary application/full-suite regression, not by claiming
+the nested direct call executed the lazy fixture. Registered C01–C04 transport
+guards retain all twelve metadata/flock/body lifecycle pairs, unsafe-node cases,
+serialization/original timeout and original setup remainder through real
+pool/O owners and public external-work observations. They no longer intercept
+private owner constructors or the private installation implementation.
+
+Only R4 installation has migrated at P13. Workspace, private-support/clone copies,
+host preparation/wrapper/prepared command and standalone policy provisioning
+retain their existing one-slot legacy protection until P14–P19. The session pool
+and legacy lock remain distinct domains and can overlap: each is bounded, but
+aggregate admitted work can exceed K/the CPU budget. Full session-wide K
+acceptance and removal of legacy identity guards belong to P19. Controlled
+contract probes use their own per-test pools rather than unrelated outer resources.
 
 Register this suite before its first RED recording and run the full accumulated
 suite in every admission-pool phase's VALIDATE, alongside the full green gate

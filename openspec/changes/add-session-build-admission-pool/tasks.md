@@ -316,65 +316,65 @@ Acceptance: unknown/unsupported/malformed/inaccessible CPU observations yield ca
 Acceptance: real one-worker session K=1 times out against outer holder at inner B and acquires after release. Final planned worker count determines one controller decision shared with initial/replacement nodes; serial uses workers=1. Seams S/A; consumes P03/P10.
 
 ### RED
-- [ ] 11.1 Record design.md's plugin/import/environment contract: tests.admission_plugin registered once via repository pytest_plugins or explicit inner -p; generated W outside inventory roots; cwd repository root; absolute .venv Python; isolated I/rootdir/confcutdir; fresh absolute B; explicit xdist/green_skip_policy/admission_plugin; -n 1 --dist worksteal. Scenario hooks load from W/conftest.py; ini pythonpath serves subsequent imports and early plugin imports use cwd. Use clean_environment, remove PYTEST_ADDOPTS/PYTEST_PLUGINS/PYTHONSAFEPATH, set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 and retain executable paths. Record public final-spec resolution, serial/replacement policy and namespace derivation through injected tmp_path_factory. Establish ready after provider/basetemp initialization, then outer AdmissionPool(directory=B, capacity=1) hold/attempt/release/progress. Completion: prerequisite setup succeeds and real resource/handshake observations are specified.
-- [ ] 11.2 Add necessary callable fixture/hook scaffolding; completion: new boundary explicitly identifies missing behavior and existing collectors remain operational.
-- [ ] 11.3 Create `test_session_workers_share_admission`; completion: deterministic inner K=1 timeout under hold and separate post-release acquisition; initial/replacement delivery in the same tracer. Terminate initial worker outside acquisition, record restart allowance/crash identity/status and settle helpers. Include numeric/auto/logical/capped/serial input variants; W/conftest.py's public auto-worker hook returns three and --maxprocesses=2 yields two worker-ready events. The real CPU resolver bounds admission. Include helper lifecycle companions and exact child commands/statuses.
-- [ ] 11.4 Execute R(test_session_workers_share_admission); completion: missing shared-session behavior explains failure after successful setup.
+- [x] 11.1 Record design.md's plugin/import/environment contract: tests.admission_plugin registered once via repository pytest_plugins or explicit inner -p; generated W outside inventory roots; cwd repository root; absolute .venv Python; isolated I/rootdir/confcutdir; fresh absolute B; explicit xdist/green_skip_policy/admission_plugin; -n 1 --dist worksteal. Scenario hooks load from W/conftest.py; ini pythonpath serves subsequent imports and early plugin imports use cwd. Use clean_environment, remove PYTEST_ADDOPTS/PYTEST_PLUGINS/PYTHONSAFEPATH, set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 and retain executable paths. Record public final-spec resolution, serial/replacement policy and namespace derivation through injected tmp_path_factory. Establish ready after provider/basetemp initialization, then outer AdmissionPool(directory=B, capacity=1) hold/attempt/release/progress. Completion: prerequisite setup succeeds and real resource/handshake observations are specified.
+- [x] 11.2 Add necessary callable fixture/hook scaffolding; completion: new boundary explicitly identifies missing behavior and existing collectors remain operational.
+- [x] 11.3 Create `test_session_workers_share_admission`; completion: deterministic inner K=1 timeout under hold and separate post-release acquisition; initial/replacement delivery in the same tracer. Terminate initial worker outside acquisition, record restart allowance/crash identity/status and settle helpers. Include numeric/auto/logical/capped/serial input variants; W/conftest.py's public auto-worker hook returns three and --maxprocesses=2 yields two worker-ready events. The real CPU resolver bounds admission. Include helper lifecycle companions and exact child commands/statuses.
+- [x] 11.4 Execute R(test_session_workers_share_admission); completion: missing shared-session behavior explains failure after successful setup.
 
 ### GREEN
-- [ ] 11.5 Implement final-spec count resolution, one saved decision and generic initial/replacement transfer, serial local initialization, SessionAdmission fixture and public-temp-factory namespace derivation. Completion: shared absolute directory/capacity, resource-free provider, unsupported topology/count and nonabsolute namespace refusal before work.
-- [ ] 11.6 Document worker modes/caps, serial/replacement policy, topology and exclusive basetemp use. Completion: migrated scope accurate; fenced docs/testing.md commands use one positive decimal -n and one --dist worksteal with xdist active; queue priorities 1..13/allocations retained.
-- [ ] 11.7 Execute T(test_session_workers_share_admission)+G; completion: asserted child scenarios and outer/full checks pass/E.
+- [x] 11.5 Implement final-spec count resolution, one saved decision and generic initial/replacement transfer, serial local initialization, SessionAdmission fixture and public-temp-factory namespace derivation. Completion: shared absolute directory/capacity, resource-free provider, unsupported topology/count and nonabsolute namespace refusal before work.
+- [x] 11.6 Document worker modes/caps, serial/replacement policy, topology and exclusive basetemp use. Completion: migrated scope accurate; fenced docs/testing.md commands use one positive decimal -n and one --dist worksteal with xdist active; queue priorities 1..13/allocations retained.
+- [x] 11.7 Execute T(test_session_workers_share_admission)+G; completion: asserted child scenarios and outer/full checks pass/E.
 
 ### INTROSPECT
-- [ ] 11.8 Record session/harness review; completion: internal payload schema, single plugin registration and real resolver/owner paths retained.
-- [ ] 11.9 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 11.8 Record session/harness review; completion: internal payload schema, single plugin registration and real resolver/owner paths retained.
+- [x] 11.9 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 11.10 Independently execute T(test_session_workers_share_admission)+G; completion: contention/progress, replacement decision/namespace, expected crash settlement, final-count/cap/serial variants and P01 namespace isolation pass; full G provides ordinary multiworker regression evidence.
+- [x] 11.10 Independently execute T(test_session_workers_share_admission)+G; completion: contention/progress, replacement decision/namespace, expected crash settlement, final-count/cap/serial variants and P01 namespace isolation pass; full G provides ordinary multiworker regression evidence.
 
 ## 12. P12 — Invalid distributed setup refusal
 
 Acceptance: missing/malformed configuration produces UsageError with the specified prefix and a nonzero enclosing session before protected work. Seam S; consumes P11.
 
 ### RED
-- [ ] 12.1 Record UsageError/refusal and P11 harness contracts. Put controlled pytest_configure_node corruption in W/conftest.py with @pytest.hookimpl(trylast=True), after the real plugin's ordinary transfer hook. Establish successful uncorrupted setup first. Freeze missing/version/decision-field/capacity cases and external work observations; separately exercise nonabsolute namespace at the public provider boundary. Completion: mutations reach real worker validation and successful setup establishes prerequisites.
-- [ ] 12.2 Create `test_invalid_session_configuration_fails_setup`; completion: controlled delivery exercises real setup/refusal.
-- [ ] 12.3 Execute R(test_invalid_session_configuration_fails_setup); completion: missing refusal explains failure.
+- [x] 12.1 Record UsageError/refusal and P11 harness contracts. Put controlled pytest_configure_node corruption in W/conftest.py with @pytest.hookimpl(trylast=True), after the real plugin's ordinary transfer hook. Establish successful uncorrupted setup first. Freeze missing/version/decision-field/capacity cases and external work observations; separately exercise nonabsolute namespace at the public provider boundary. Completion: mutations reach real worker validation and successful setup establishes prerequisites.
+- [x] 12.2 Create `test_invalid_session_configuration_fails_setup`; completion: controlled delivery exercises real setup/refusal.
+- [x] 12.3 Execute R(test_invalid_session_configuration_fails_setup); completion: missing refusal explains failure.
 
 ### GREEN
-- [ ] 12.4 Implement setup refusal; completion: invalid delivery ends setup before provider/work.
-- [ ] 12.5 Document recovery by fixing configuration and rerunning; completion: fenced docs/testing.md commands retain positive -n/worksteal and existing queue allocations.
-- [ ] 12.6 Execute T(test_invalid_session_configuration_fails_setup)+G; completion: expected child failure asserted; outer/full checks exit 0/E.
+- [x] 12.4 Implement setup refusal; completion: invalid delivery ends setup before provider/work.
+- [x] 12.5 Document recovery by fixing configuration and rerunning; completion: fenced docs/testing.md commands retain positive -n/worksteal and existing queue allocations.
+- [x] 12.6 Execute T(test_invalid_session_configuration_fails_setup)+G; completion: expected child failure asserted; outer/full checks exit 0/E.
 
 ### INTROSPECT
-- [ ] 12.7 Record refusal/harness review; completion: failure identities preserved and payload schema internal.
-- [ ] 12.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 12.7 Record refusal/harness review; completion: failure identities preserved and payload schema internal.
+- [x] 12.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 12.9 Independently execute T(test_invalid_session_configuration_fails_setup)+G; completion: invalid setup stops before work and valid sessions pass.
+- [x] 12.9 Independently execute T(test_invalid_session_configuration_fails_setup)+G; completion: invalid setup stops before work and valid sessions pass.
 
 ## 13. P13 — Installation admission
 
 Acceptance: installation acquires the explicit pool, including early worker-session setup. Direct and nested tests observe supported installation-caller integration; inventory review and existing application/full-suite tests establish lazy-fixture migration/regression evidence. Seams installation/A/S; consumes P11/P12.
 
 ### RED
-- [ ] 13.1 Freeze design.md's R1–R8 inventory, current lines/deadlines/owner phases and direct/wiring dispositions. Prepare matching repository inputs via tests.mcp_contract_support.prepare_inputs before hold. Drive supported build_and_install_contract_wheel with explicit local K=1 recording-O pool and short positive timeout_seconds. Nested variant retains base inner command, requests admission and directly passes admission.shared_pool to that caller. Record input/handshake/observation bounds; review lazy-fixture explicit admission dependency/forwarding. Completion: prepared inputs, scoped evidence and prerequisites ready.
-- [ ] 13.2 Create `test_worker_installation_uses_session_admission`; completion: isolated caller and nested real-provider variants positively observe contention/short timeout, then a separate successful call after release; include lifecycle companions. Timeout input is a duration converted by the caller to its original deadline.
-- [ ] 13.3 Execute R(test_worker_installation_uses_session_admission); completion: missing shared-pool use explains failure.
+- [x] 13.1 Freeze design.md's R1–R8 inventory, current lines/deadlines/owner phases and direct/wiring dispositions. Prepare matching repository inputs via tests.mcp_contract_support.prepare_inputs before hold. Drive supported build_and_install_contract_wheel with explicit local K=1 recording-O pool and short positive timeout_seconds. Nested variant retains base inner command, requests admission and directly passes admission.shared_pool to that caller. Record input/handshake/observation bounds; review lazy-fixture explicit admission dependency/forwarding. Completion: prepared inputs, scoped evidence and prerequisites ready.
+- [x] 13.2 Create `test_worker_installation_uses_session_admission`; completion: isolated caller and nested real-provider variants positively observe contention/short timeout, then a separate successful call after release; include lifecycle companions. Timeout input is a duration converted by the caller to its original deadline.
+- [x] 13.3 Execute R(test_worker_installation_uses_session_admission); completion: missing shared-pool use explains failure.
 
 ### GREEN
-- [ ] 13.4 Migrate installation configuration/acquisition and explicit lazy-fixture forwarding; completion: caller owns acquisition and isolated destinations retained.
-- [ ] 13.4.1 Migrate C01–C04 transport guards from design.md in tests/test_mcp_transport.py: sole-owner faults, unsafe nodes, serialization/original timeout and setup deadline. Use capacity-one AdmissionPool/O for acquisition guards and the supported installation caller for the setup envelope. Completion: all original fault/security/time cases remain in the registered MCP suite, real owner paths and external O observations replace legacy/internal interception, and per-function dispositions include all 12 C01 point/fault pairs, and passing T+M(transport)+G evidence is recorded in E; VALIDATE additionally runs S and the applicable registered regression procedures. C05 shared-session identity remains owned by P19.
-- [ ] 13.5 Document early-session installation and evidence scopes; completion: migrated/remaining callers distinguished.
-- [ ] 13.6 Execute T(test_worker_installation_uses_session_admission)+G; completion: exit 0/E.
+- [x] 13.4 Migrate installation configuration/acquisition and explicit lazy-fixture forwarding; completion: caller owns acquisition and isolated destinations retained.
+- [x] 13.4.1 Migrate C01–C04 transport guards from design.md in tests/test_mcp_transport.py: sole-owner faults, unsafe nodes, serialization/original timeout and setup deadline. Use capacity-one AdmissionPool/O for acquisition guards and the supported installation caller for the setup envelope. Completion: all original fault/security/time cases remain in the registered MCP suite, real owner paths and external O observations replace legacy/internal interception, and per-function dispositions include all 12 C01 point/fault pairs, and passing T+M(transport)+G evidence is recorded in E; VALIDATE additionally runs S and the applicable registered regression procedures. C05 shared-session identity remains owned by P19.
+- [x] 13.5 Document early-session installation and evidence scopes; completion: migrated/remaining callers distinguished.
+- [x] 13.6 Execute T(test_worker_installation_uses_session_admission)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 13.7 Record installation/owner review; completion: original budgets, attribution and explicit dependencies retained.
-- [ ] 13.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 13.7 Record installation/owner review; completion: original budgets, attribution and explicit dependencies retained.
+- [x] 13.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 13.9 Independently execute T(test_worker_installation_uses_session_admission)+G; completion: scoped caller/provider observations, lazy-fixture inventory review and application regression evidence recorded distinctly.
+- [x] 13.9 Independently execute T(test_worker_installation_uses_session_admission)+G; completion: scoped caller/provider observations, lazy-fixture inventory review and application regression evidence recorded distinctly.
 
 ## 14. P14 — Host preparation
 

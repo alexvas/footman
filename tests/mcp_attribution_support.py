@@ -171,7 +171,11 @@ def exercise(root, tmp, case):
     with patch.object(wheel, "command", command):
         try:
             result = wheel.build_and_install_contract_wheel(
-                prepared, evidence_directory=output, attribution_only=True, env=env
+                prepared,
+                admission=None,
+                evidence_directory=output,
+                attribution_only=True,
+                env=env,
             )
         except wheel.BuildFailure as error:
             failure = error
@@ -184,7 +188,11 @@ def exercise(root, tmp, case):
             repeat_before, _ = wheel.inventory(prepared)
             try:
                 wheel.build_and_install_contract_wheel(
-                    prepared, evidence_directory=output, attribution_only=True, env=env
+                    prepared,
+                    admission=None,
+                    evidence_directory=output,
+                    attribution_only=True,
+                    env=env,
                 )
             except wheel.BuildFailure as error:
                 repeat_after, _ = wheel.inventory(prepared)

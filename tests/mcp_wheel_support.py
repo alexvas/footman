@@ -12,7 +12,7 @@ import sys
 import time
 import tomllib
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -20,6 +20,7 @@ from footman.filesystem.descriptors import DirectoryDescriptor, OwnedDescriptor
 from footman.filesystem.operations import PosixDescriptorOps
 from footman.process import OwnedProcess, ProcessStream, StreamOutcome
 from tests import mcp_provenance as p
+from tests.admission_support import AdmissionPool
 from tests.build_observation_values import freeze
 
 ROOTS = ("src/", "pyproject.toml", "README.md")
@@ -520,6 +521,7 @@ def copy_support_file(source, destination):
 def build_and_install_contract_wheel(
     repository_root,
     *,
+    admission: AdmissionPool | None,
     evidence_directory,
     timeout_seconds=120,
     attribution_only=False,
@@ -530,7 +532,13 @@ def build_and_install_contract_wheel(
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("setup timeout must be finite and positive")
     end = time.monotonic() + timeout_seconds
-    with build_slot(None if attribution_only else BUILD_SLOT_PATH, deadline=end):
+    if attribution_only:
+        context = nullcontext()
+    else:
+        if not isinstance(admission, AdmissionPool):
+            raise ValueError("installation requires an AdmissionPool")
+        context = admission.acquire(deadline=end)
+    with context:
         return _build_and_install_contract_wheel(
             repository_root,
             evidence_directory=evidence_directory,

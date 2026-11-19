@@ -273,6 +273,14 @@ constructs; line numbers may move):
   process imports: CLI import-path preparation must happen first so the tools
   run from a checkout or copied tool tree without an installed package.
 
+- **`ty: ignore[invalid-assignment]` in `tests/test_admission_pool.py`** on
+  deliberate assignments to frozen `AdmissionPool.capacity`/`.directory`,
+  `CapacityDecision.capacity` and `SessionAdmission.shared_pool`: these runtime
+  probes require the actual assignment to raise `FrozenInstanceError`. Each
+  directive is local and explained beside the mutation. The mandatory typed
+  boundary remains `src/` and `host_tests/`; explicit admission-module type
+  checks retain these narrow opt-outs rather than removing runtime coverage.
+
 The `# noqa: F401` on `import footman.filesystem.cleanup` inside
 `tests/test_filesystem_cleanup.py`'s `_ISOLATED_PROBE` string is probe-source
 text, not an in-force directive in the checked inventory: Ruff (including

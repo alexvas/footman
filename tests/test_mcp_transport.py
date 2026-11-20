@@ -194,13 +194,17 @@ def test_borrowed_attestation_one_write_flush_no_close_or_retry(fault):
         "wrong-root",
     ],
 )
-def test_full_package_pre_dispatch_controls(tmp_path, fault):
-    support("mcp_contract_support").exercise_package_control(ROOT, tmp_path, fault)
+def test_full_package_pre_dispatch_controls(tmp_path, fault, admission):
+    support("mcp_contract_support").exercise_package_control(
+        ROOT, tmp_path, fault, admission=admission.shared_pool
+    )
 
 
 @pytest.mark.parametrize("context", ["development", "wheel"])
-def test_real_sdk_protocol_peer_and_bootstrap_discovery(tmp_path, context):
-    support("mcp_contract_support").exercise_discovery(ROOT, tmp_path, context)
+def test_real_sdk_protocol_peer_and_bootstrap_discovery(tmp_path, context, admission):
+    support("mcp_contract_support").exercise_discovery(
+        ROOT, tmp_path, context, admission=admission.shared_pool
+    )
 
 
 @pytest.mark.parametrize(
@@ -356,8 +360,10 @@ def test_lifecycle_input_rejects_before_launch(tmp_path, fault):
         "missing-option",
     ],
 )
-def test_exact_wheel_bootstrap_lifecycle_contract(tmp_path, case):
-    support("mcp_contract_support").exercise_wheel_lifecycle(ROOT, tmp_path, case)
+def test_exact_wheel_bootstrap_lifecycle_contract(tmp_path, case, admission):
+    support("mcp_contract_support").exercise_wheel_lifecycle(
+        ROOT, tmp_path, case, admission=admission.shared_pool
+    )
 
 
 @pytest.mark.parametrize(
@@ -964,12 +970,12 @@ def test_build_admission_does_not_renew_setup_deadline(monkeypatch, tmp_path):
     assert_released(ops)
 
 
-def test_real_builds_use_invocation_shared_admission(request, tmp_path_factory):
-    from tests import mcp_wheel_support as wheel
+def test_real_builds_use_invocation_shared_admission(
+    tmp_path, tmp_path_factory, monkeypatch, admission
+):
+    from tests.admission_guard_support import run_guard
 
-    base = tmp_path_factory.getbasetemp()
-    expected = base.parent if hasattr(request.config, "workerinput") else base
-    assert wheel.BUILD_SLOT_PATH == expected / "mcp-build.lock"
+    run_guard(tmp_path, tmp_path_factory, monkeypatch, admission, "installation")
 
 
 @pytest.mark.parametrize(
@@ -1183,7 +1189,9 @@ def test_docker_stub_recording_imports_no_process_or_sdk(tmp_path):
     assert result["status"] == 0 and result["stdout"].strip() == b"[]"
 
 
-def test_worker_wheel_is_reused_with_immutable_support_and_private_manifests(tmp_path):
+def test_worker_wheel_is_reused_with_immutable_support_and_private_manifests(
+    tmp_path, admission
+):
     from tests import mcp_contract_support as s
     from tests import mcp_provenance as p
 
@@ -1191,8 +1199,8 @@ def test_worker_wheel_is_reused_with_immutable_support_and_private_manifests(tmp
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    one = s.world(ROOT, first, "wheel")
-    two = s.world(ROOT, second, "wheel")
+    one = s.world(ROOT, first, "wheel", admission=admission.shared_pool)
+    two = s.world(ROOT, second, "wheel", admission=admission.shared_pool)
     assert one["bound"].environment == two["bound"].environment
     assert one["bound"].wheel == two["bound"].wheel
     assert one["bound"].support_root == two["bound"].support_root
@@ -1200,7 +1208,12 @@ def test_worker_wheel_is_reused_with_immutable_support_and_private_manifests(tmp
     private.mkdir()
     from tests.mcp_wheel_support import reuse_for_test
 
-    isolated = reuse_for_test(s.WHEEL_PROVIDER(), private, private_support=True)
+    isolated = reuse_for_test(
+        s.WHEEL_PROVIDER(),
+        private,
+        admission=admission.shared_pool,
+        private_support=True,
+    )
     assert isolated.support_root != one["bound"].support_root
     s.rewrite(
         isolated.support_root / "tests/mcp_server_child.py", b"# isolated shadow\n"
@@ -1218,7 +1231,9 @@ def test_worker_wheel_is_reused_with_immutable_support_and_private_manifests(tmp
     assert record["environment"] == str(one["bound"].environment)
 
 
-def test_mutable_installation_clone_has_private_inodes_and_relocated_launcher(tmp_path):
+def test_mutable_installation_clone_has_private_inodes_and_relocated_launcher(
+    tmp_path, admission
+):
     from tests import mcp_contract_support as s
     from tests import mcp_provenance as p
     from tests import mcp_wheel_support as wheel
@@ -1227,7 +1242,9 @@ def test_mutable_installation_clone_has_private_inodes_and_relocated_launcher(tm
     root, _ = p.manifest_set(base.expected_origin)
     before = p.sources(root)
     original_script = p.read(base.environment / "bin/footman")
-    copied = wheel.reuse_for_test(base, tmp_path, mutable=True)
+    copied = wheel.reuse_for_test(
+        base, tmp_path, admission=admission.shared_pool, mutable=True
+    )
     clone, _ = p.manifest_set(copied.expected_origin)
     assert clone.is_relative_to(copied.environment) and not clone.is_relative_to(
         base.environment
@@ -1247,14 +1264,18 @@ def test_mutable_installation_clone_has_private_inodes_and_relocated_launcher(tm
     "fault", ["operation-close", "sole-close", "interruption", "repeat", "independent"]
 )
 @pytest.mark.parametrize("after_successes", [0, 1], ids=["copy", "layout"])
-def test_clone_process_owner_failure_matrix(tmp_path, fault, after_successes):
+def test_clone_process_owner_failure_matrix(
+    tmp_path, fault, after_successes, admission
+):
     from tests import mcp_contract_support as s
     from tests import mcp_wheel_support as wheel
 
     base = s.WHEEL_PROVIDER()
 
     def action():
-        clone = wheel.reuse_for_test(base, tmp_path, mutable=True)
+        clone = wheel.reuse_for_test(
+            base, tmp_path, admission=admission.shared_pool, mutable=True
+        )
         assert clone.environment != base.environment
 
     s.exercise_build_process_fault(

@@ -24,13 +24,6 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session")
-def _wheel_build_slot_path(request, tmp_path_factory):
-    base = tmp_path_factory.getbasetemp()
-    shared = base.parent if hasattr(request.config, "workerinput") else base
-    return shared / "mcp-build.lock"
-
-
-@pytest.fixture(scope="session")
 def _mcp_worker_wheel(request, tmp_path_factory, admission):
     from pathlib import Path
 
@@ -72,26 +65,19 @@ def _mcp_worker_wheel(request, tmp_path_factory, admission):
 
 
 @pytest.fixture(autouse=True)
-def _mcp_build_admission(request, _wheel_build_slot_path, monkeypatch):
-    name = request.node.path.name
-    if name not in {
-        "test_mcp_transport.py",
-        "test_mcp_server.py",
-        "test_host_acceptance_contracts.py",
-        "test_host_build_tooling.py",
-        "test_host_provenance.py",
-        "test_host_workspace.py",
-    }:
-        return
-    from tests import mcp_contract_support, mcp_wheel_support
+def _mcp_worker_provider(request, monkeypatch):
+    """Keep the lazy wheel factory available independently of collector names.
 
-    if name in {"test_mcp_transport.py", "test_mcp_server.py"}:
-        monkeypatch.setattr(
-            mcp_contract_support,
-            "WHEEL_PROVIDER",
-            lambda: request.getfixturevalue("_mcp_worker_wheel"),
-        )
-    monkeypatch.setattr(mcp_wheel_support, "BUILD_SLOT_PATH", _wheel_build_slot_path)
+    Installing this factory acquires nothing. The session fixture explicitly
+    depends on admission; callers select heavy work by invoking the factory.
+    """
+    from tests import mcp_contract_support
+
+    monkeypatch.setattr(
+        mcp_contract_support,
+        "WHEEL_PROVIDER",
+        lambda: request.getfixturevalue("_mcp_worker_wheel"),
+    )
 
 
 @pytest.fixture

@@ -65,6 +65,7 @@ def test_work(admission, initialized, execution_inputs, tmp_path, monkeypatch):
         p.write_observation(ROOT / 'target-ready', b'ready')
         gate('attempt-' + initialized)
         result = original(value, artifact, digest, **kwargs)
+        assert p.read(ROOT / ('busy-' + initialized)) == b'busy'
         assert result is None and value.provisioned
         assert len(value.commands) == 2
         assert all(op['status'] == 0 and op['cleanup_complete'] for op in value.commands)

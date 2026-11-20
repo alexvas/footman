@@ -885,7 +885,7 @@ def copy_probe_bundle(destination):
         p.write(destination / relative, p.read(ROOT / relative))
 
 
-def standalone_probe(base, tmp, fault, *, optimized=False):
+def standalone_probe(base, tmp, fault, *, admission: AdmissionPool, optimized=False):
     """Validate probe setup with the independent Phase-9 real-wheel fixture.
 
     This never substitutes for a production runner invocation. Immutable cases
@@ -896,6 +896,7 @@ def standalone_probe(base, tmp, fault, *, optimized=False):
     bound = wheel.reuse_for_test(
         base,
         destination,
+        admission=admission,
         mutable=fault
         in {
             "stale-module",
@@ -1017,12 +1018,10 @@ def configure_policy_suite(root, tmp, case):
     return environment, records
 
 
-def standalone_policy(base, tmp, case):
-    import time
-
+def standalone_policy(base, tmp, case, *, admission: AdmissionPool):
     destination = tmp / "installation"
     destination.mkdir()
-    bound = wheel.reuse_for_test(base, destination, mutable=True)
+    bound = wheel.reuse_for_test(base, destination, admission=admission, mutable=True)
     workspace = tmp / "workspace"
     (workspace / "tests").mkdir(parents=True)
     (workspace / "host_tests").mkdir()
@@ -1031,7 +1030,7 @@ def standalone_policy(base, tmp, case):
         p.write(workspace / relative, p.read(ROOT / relative))
     environment, _ = configure_policy_suite(workspace, tmp, case)
     deadline = time.monotonic() + 120
-    with wheel.build_slot(wheel.BUILD_SLOT_PATH, deadline=deadline):
+    with admission.acquire(deadline=deadline):
         provisioning = wheel.command(
             [
                 "uv",

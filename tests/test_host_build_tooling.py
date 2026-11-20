@@ -440,9 +440,12 @@ def test_build_stream_failure_still_publishes_operation_once(
     assert not manifest.exists()
 
 
-def test_host_and_mcp_use_one_nonvacuous_admission_path(_wheel_build_slot_path):
-    assert wheel.BUILD_SLOT_PATH == _wheel_build_slot_path
-    assert wheel.BUILD_SLOT_PATH.name == "mcp-build.lock"
+def test_host_and_mcp_use_one_nonvacuous_admission_path(
+    tmp_path, tmp_path_factory, monkeypatch, admission
+):
+    from tests.admission_guard_support import run_guard
+
+    run_guard(tmp_path, tmp_path_factory, monkeypatch, admission, "shared")
 
 
 def test_prepared_root_and_call_admission_charge_original_envelope(

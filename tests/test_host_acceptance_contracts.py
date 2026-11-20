@@ -1109,13 +1109,15 @@ PROBE_FAULTS = (
 
 @pytest.mark.parametrize("fault", PROBE_FAULTS)
 def test_isolated_runner_probe_itself_has_executable_wheel_controls(
-    request, tmp_path, fault
+    request, tmp_path, fault, admission
 ):
     # Independent fixture validation, not production runner acceptance. A broken
     # copied probe must never be counted as RED for the missing public runner.
     base = request.getfixturevalue("_mcp_worker_wheel")
     before = wheel.inventory(base.repository_root)[0]
-    result, records, bound = h.standalone_probe(base, tmp_path, fault)
+    result, records, bound = h.standalone_probe(
+        base, tmp_path, fault, admission=admission.shared_pool
+    )
     assert (result["status"] == 0) is (
         fault in {"none", "shadow-script", "shadow-cwd", "retag-image"}
     ), result
@@ -1861,14 +1863,16 @@ def test_install_tool_proxy_preserves_first_status_and_attempts_independent_deli
     "fault", ["stale-module", "stale-entry", "self-consistent-stale", "swapped-copy"]
 )
 def test_install_proxy_mutates_an_actual_private_install_before_expectations(
-    request, tmp_path, fault
+    request, tmp_path, fault, admission
 ):
     import hashlib
 
     base = request.getfixturevalue("_mcp_worker_wheel")
     destination = tmp_path / "clone"
     destination.mkdir()
-    clone = wheel.reuse_for_test(base, destination, mutable=True)
+    clone = wheel.reuse_for_test(
+        base, destination, admission=admission.shared_pool, mutable=True
+    )
     executable, extra, records = h.install_proxy(tmp_path, fault)
     result = wheel.command(
         [
@@ -2575,10 +2579,12 @@ def test_invalid_prepared_profile_is_setup_failure_not_expected_attribution_reje
     "fault", ["none", "evidence-inconsistent", "attestation-duplicate"]
 )
 def test_copied_runner_probe_rejection_survives_actual_python_optimization(
-    request, tmp_path, fault
+    request, tmp_path, fault, admission
 ):
     base = request.getfixturevalue("_mcp_worker_wheel")
-    result, records, _ = h.standalone_probe(base, tmp_path, fault, optimized=True)
+    result, records, _ = h.standalone_probe(
+        base, tmp_path, fault, admission=admission.shared_pool, optimized=True
+    )
     assert (result["status"] == 0) is (fault == "none")
     installs = [
         p.load(records / name)
@@ -2698,10 +2704,12 @@ def test_runner_rejects_duplicate_binding_keys_even_when_values_match(
     [("pass", 0), ("skip", 1), ("xfail", 1), ("xpass", 1), ("fail", 1), ("empty", 5)],
 )
 def test_isolated_policy_fixture_executes_with_locked_wheel_dependencies(
-    request, tmp_path, case, expected
+    request, tmp_path, case, expected, admission
 ):
     base = request.getfixturevalue("_mcp_worker_wheel")
-    result, records, bound = h.standalone_policy(base, tmp_path, case)
+    result, records, bound = h.standalone_policy(
+        base, tmp_path, case, admission=admission.shared_pool
+    )
     assert result["status"] == expected, result
     assert b"DEVELOPMENT_SUITE_SELECTED" not in result["stdout"] + result["stderr"]
     installations = [

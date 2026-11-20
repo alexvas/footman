@@ -10,8 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("context", ["development", "wheel"])
-def test_real_server_initialization_and_exact_phase_only_discovery(tmp_path, context):
-    support("mcp_contract_support").exercise_discovery(ROOT, tmp_path, context)
+def test_real_server_initialization_and_exact_phase_only_discovery(
+    tmp_path, context, admission
+):
+    support("mcp_contract_support").exercise_discovery(
+        ROOT, tmp_path, context, admission=admission.shared_pool
+    )
 
 
 @pytest.mark.parametrize(

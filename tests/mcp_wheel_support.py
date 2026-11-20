@@ -1,7 +1,6 @@
 """Independent Phase-9 build/install fixture; never imports later acceptance code."""
 
 import configparser
-import fcntl
 import hashlib
 import io
 import math
@@ -12,7 +11,7 @@ import sys
 import time
 import tomllib
 import zipfile
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -26,40 +25,6 @@ from tests.build_observation_values import freeze
 ROOTS = ("src/", "pyproject.toml", "README.md")
 WHEEL_ONLY_SUPPORT_FILES = ("tests/mcp_wheel_client.py",)
 OPS = PosixDescriptorOps()
-BUILD_SLOT_PATH = None  # pytest supplies one shared, fixture-owned path per invocation.
-
-
-@contextmanager
-def build_slot(path, *, deadline):
-    """Admit one provisioning leg; waiting consumes the original setup budget."""
-    if path is None:
-        yield
-        return
-    if time.monotonic() >= deadline:
-        raise TimeoutError("build admission envelope exhausted")
-    path = Path(path)
-    with DirectoryDescriptor.open_secure_path(OPS, path.parent) as parent:
-        name = parent.child_basename(path.name)
-        flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-        label = "MCP build admission"
-        fd = os.open(name, flags, 0o600, dir_fd=parent.fd)
-        with OwnedDescriptor(OPS, fd, label=label) as owner:
-            info = os.fstat(owner.fd)
-            p.require(
-                stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid(),
-                "unsafe build admission node",
-            )
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("build admission envelope exhausted")
-                try:
-                    fcntl.flock(owner.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    time.sleep(min(0.01, remaining))
-            yield
-        # Closing the sole descriptor releases the lock; no retry/unlock owner.
 
 
 def provision_workspace(
@@ -274,13 +239,17 @@ class BuildObservation:
             object.__setattr__(self, name, freeze(getattr(self, name)))
 
 
-def reuse_for_test(base, destination, *, mutable=False, private_support=False):
+def reuse_for_test(
+    base, destination, *, admission: AdmissionPool, mutable=False, private_support=False
+):
     """Reuse an immutable worker install; destructive controls get a CoW copy.
 
     This is a clone of the recorded installation, not another claimed install.
     Only the public Footman launcher is used/relocated; activation and unrelated
     dependency CLI launchers are deliberately outside this fixture's contract.
     """
+    if not isinstance(admission, AdmissionPool):
+        raise ValueError("clone reuse requires an AdmissionPool")
     destination = Path(destination)
     end = time.monotonic() + 120
 
@@ -294,7 +263,7 @@ def reuse_for_test(base, destination, *, mutable=False, private_support=False):
     if private_support:
         support = destination / "copied"
         (support / "tests").mkdir(parents=True, mode=0o700)
-        with build_slot(BUILD_SLOT_PATH, deadline=end):
+        with admission.acquire(deadline=end):
             for item in base.support_inventory:
                 copy_support_file(
                     base.support_root / item["path"], support / item["path"]
@@ -306,7 +275,7 @@ def reuse_for_test(base, destination, *, mutable=False, private_support=False):
         environment = destination / "venv"
         environment.mkdir(mode=0o700)
         env = clean_environment()
-        with build_slot(BUILD_SLOT_PATH, deadline=end):
+        with admission.acquire(deadline=end):
             copied = command(
                 [
                     "cp",

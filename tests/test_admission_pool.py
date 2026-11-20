@@ -3083,7 +3083,9 @@ def test_host_wrapper_uses_session_admission(
         OSError("execution parent close"),
     )
     if case.startswith("nested"):
-        inputs = session.prepare(tmp_path, mode=["-n", "1"])
+        # Keep real fixture launcher paths below uv's shell-wrapper threshold.
+        # This remains a fresh ordinary pytest-owned namespace per invocation.
+        inputs = session.prepare(storage, mode=["-n", "1"])
         source = execution.SOURCE.replace(
             "Path('__EXECUTION_ROOT__')", f"Path({str(storage)!r})"
         ).replace("'__EXECUTION_KIND__'", repr(kind))
@@ -3527,4 +3529,103 @@ def test_workspace_preserves_admission_envelope(
 
     run_case(
         tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "direct",
+        "elapsed",
+        "repeat",
+        "cross-preparation",
+        "forwarding",
+        "metadata-operation-close",
+        "metadata-interruption",
+        "flock-operation-close",
+        "flock-interruption",
+        "body-operation-close",
+        "body-interruption",
+        "sole-close",
+        "nested",
+        "nested-operation-close",
+        "nested-sole-close",
+        "nested-interruption",
+    ],
+)
+def test_clone_copy_uses_session_admission(
+    tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+):
+    from tests.admission_clone_support import run_case
+
+    run_case(
+        tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "direct",
+        "elapsed",
+        "repeat",
+        "cross-execution",
+        "metadata-operation-close",
+        "metadata-interruption",
+        "flock-operation-close",
+        "flock-interruption",
+        "body-operation-close",
+        "body-interruption",
+        "sole-close",
+        "nested",
+        "nested-operation-close",
+        "nested-sole-close",
+        "nested-interruption",
+    ],
+)
+def test_policy_suite_provisioning_uses_admission(
+    tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+):
+    from tests.admission_policy_support import run_case
+
+    run_case(
+        tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "direct",
+        "elapsed",
+        "repeat",
+        "cross-preparation",
+        "metadata-operation-close",
+        "metadata-interruption",
+        "flock-operation-close",
+        "flock-interruption",
+        "body-operation-close",
+        "body-interruption",
+        "sole-close",
+        "nested",
+        "nested-operation-close",
+        "nested-sole-close",
+        "nested-interruption",
+    ],
+)
+def test_private_support_copy_uses_session_admission(
+    tmp_path, tmp_path_factory, monkeypatch, admission, _mcp_worker_wheel, case
+):
+    from tests.admission_clone_support import run_case
+
+    run_case(
+        tmp_path,
+        tmp_path_factory,
+        monkeypatch,
+        admission,
+        _mcp_worker_wheel,
+        case,
+        private_support=True,
     )

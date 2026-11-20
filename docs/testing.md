@@ -587,28 +587,27 @@ clones, not new installs or general-purpose relocatable venvs; activation and
 unrelated dependency CLI launchers are not used. Direct fixture/attribution and
 wheel-swap boundary tests still exercise their own public build surface.
 
-One fixture-owned `mcp-build.lock` per pytest invocation admits the remaining
-legacy provisioning and native clone-copy helpers in `test_mcp_transport.py`, `test_mcp_server.py`,
+One immutable session-owned admission pool per pytest invocation bounds the
+existing heavy-work regions across `test_mcp_transport.py`, `test_mcp_server.py`,
 `test_host_acceptance_contracts.py`, `test_host_build_tooling.py`,
-`test_host_provenance.py` and `test_host_workspace.py`. Selecting the path alone
-is not admission: remaining legacy callers must enter `build_slot`. Direct
-real `_Workspace` provisioning in the provenance/workspace collectors goes through the test-only
-`provision_workspace` adapter, which requires an explicit session pool and holds
-admission across the unmodified `provision` call, including uv venv and pip. During the admission-pool migration,
-P13 moves build/install and initial worker-wheel session setup to the explicit
-session pool, even when setup precedes function autouse fixtures. P14 also moves
-host preparation copies, inventory and synthetic Git setup to that pool. P15
-moves wrapper calls and real by-path Python prepared execution to the same pool.
-P16 also moves direct workspace provisioning to the explicit pool. Other
-regions retain this legacy lock until their P17–P19 migrations. Pool slot
-files and the legacy lock are separate exclusion domains: pool K and legacy one
-can overlap, so the intermediate aggregate can exceed K and the CPU budget.
+`test_host_provenance.py` and `test_host_workspace.py`. Callers explicitly pass
+`admission.shared_pool` and acquire within their original boundaries. Initial
+lazy worker installation depends explicitly on admission even before function
+fixtures; the resource-free lazy wheel factory is available without collector-name
+gating and acquires nothing unless invoked. Direct real `_Workspace` provisioning
+uses the test-only `provision_workspace` adapter across the unmodified provision
+method, including uv venv and pip, without taking over borrowed workspace owners.
+Host preparation, wrapper/prepared execution, clone/private-support copies and
+separate policy provisioning share this pool. At most K of these regions hold
+admission; independent invocations have disjoint namespaces. The phased account
+below records the transition; its temporary separate legacy exclusion domain is
+removed at P19. This is not a limit on unrelated foundation/portability fixtures.
 
 Waiting consumes each caller's original deadline. Build and prepared execution
 share their original 120-second fixture envelope; direct workspace provisioning
 uses the workspace's original deadline, including preparation/waiting already
 spent. Child remainders are computed afterward, never renewed. A missing shared
-path is an error for the direct-workspace adapter, not a silent bypass. This is
+pool is an error for the direct-workspace adapter, not a silent bypass. This is
 fixture admission, not a production runner option or a widened host/cleanup
 window. Synthetic `test_host_provenance_faults.py`, mocked provisioning failures,
 archive-preflight refusals and once-only rejection controls do not run uv. MCP
@@ -1740,8 +1739,9 @@ wrong types raise `TypeError` and NaN/infinity raise `ValueError`, before any
 resource operation. Large integers are validated without conversion to float.
 The description remains immutable; a rejected input creates no slot file.
 
-This is the initial migration slice, not the final session-wide pool. Legacy
-callers still use their existing admission. P03 adds bounded free-slot use and
+The following phased account describes delivery of the completed session-wide
+pool. Early phases temporarily retained separate exclusion domains; P19 removes
+that transitional mechanism. P03 adds bounded free-slot use and
 release progress; P04 checks the caller's same absolute deadline before probes
 and waiting, caps polling sleep at its remainder, and raises `TimeoutError` at
 exact/past exhaustion before protected work. Waiting never renews caller or
@@ -1959,12 +1959,80 @@ Its serialized region entry contains both actual native provisioning commands;
 no absent command timestamps or return-object success is invented. C06 collector
 legacy-identity coverage remains P19-owned.
 
-At P16, workspace R1, installation R4, preparation R6, wrapper R5 and prepared
-execution R8 use the session pool. Private-support R2/clone R3 copies and standalone
-policy provisioning R7 retain existing one-slot legacy protection until P17–P19. The session pool and legacy lock remain distinct domains and can overlap: each is bounded, but
-aggregate admitted work can exceed K/the CPU budget. Full session-wide K
-acceptance and removal of legacy identity guards belong to P19. Controlled
-contract probes use their own per-test pools rather than unrelated outer resources.
+P17 requires a configured `AdmissionPool` at `reuse_for_test`, including immutable
+reuse (which still performs no acquisition). Only its original native clone-copy
+R3 region moves to the pool. The original `monotonic() + 120` envelope starts
+before support preparation and admission; copy receives only its remainder.
+Scheme inspection, launcher relocation, archive-derived manifests and isolation
+checks retain their original placement after release. No clone is relabelled as
+a new install. `standalone_policy`, `standalone_probe`, world/discovery/package
+controls and lifecycle drivers explicitly forward the same pool without extra
+acquisition. The R2 private-support copy retains legacy protection until P19.
+R7 policy provisioning retains its separate original local envelope; P18 moves
+its acquisition to the pool after R3 releases.
+
+P17 probes resolve the actual worker-wheel prerequisite first. Real local K=1
+contention precedes release and successful native copy; the controlled original
+100/220 envelope spends seven seconds and leaves literal 113 for copy. An
+admitted preparation caller excludes clone work through the same pool, then a
+separate post-release clone succeeds. This cross-caller negative uses a deliberate
+O error after positive busy observation, not an invented fixed-envelope timeout.
+The actual mutable-clone collector body also receives the real nested provider;
+its inner busy marker is required after the real clone and before publication.
+The actual standalone-policy chain verifies same-pool forwarding while retaining
+R7's legacy acquisition. Base bytes, independent clone inodes, relocated launcher,
+original process-owner fault matrix and new admission fault/repeat/independent
+cleanup cases remain covered. Native `wheel.command` refuses failed/incomplete
+cleanup before returning; clone command records do not invent workspace-style
+`cleanup_complete` fields.
+
+P18 gives standalone-policy R7 its own acquisition at the original separate
+local `monotonic() + 120` deadline, after the real clone has released. Native
+locked pytest installation and the later isolated policy suite keep the same
+original deadline remainders and result/publication checks. Direct probes
+observe the completed clone before holding K=1, positive O contention at R7,
+release and actual successful provisioning/policy execution. Their literal
+clock distinguishes clone deadline 220 from policy deadline 240 after twenty
+seconds of intervening work; seven seconds of policy waiting leave 113.
+Cross-caller coverage excludes prepared execution while R7 holds admission,
+then runs that separate caller successfully after release. Faults armed only
+after clone completion target R7 independently and cannot publish success.
+The actual policy collector-body/provider variant retains original installation,
+import and status checks, plus positive busy evidence and bounded helper cleanup.
+
+Nested real-wheel launcher prerequisites use the harness's already allocated
+short ordinary pytest-owned storage for W/I/B, avoiding uv's long-shebang shell
+wrapper without changing launcher validation or temporary-root environment.
+The scenario session still starts with explicit plugins and autoload disabled;
+only its actual policy descendant restores normal fresh-venv plugin discovery
+after scenario-session plugin setup. No required skip-policy plugin is disabled.
+All existing hold/handshake/execution/cleanup budgets remain unchanged.
+
+P19 moves the original R2 private-support copy to the same supplied pool using
+reuse's original absolute end. Independent support bytes/inodes, private manifests
+and immutable base installation remain unchanged. All eight regions now use the
+same explicit session description: workspace R1, private-support R2, clone R3,
+installation R4, wrapper R5, preparation R6, policy provisioning R7 and prepared
+execution R8. Sequential helpers release before the next acquisition; no extra
+outer acquisition or renewed allowance is introduced. The transitional single-path
+API, path fixture, admission globals and collector-selected admission patches are
+removed. Controlled contract probes retain isolated per-test pools rather than
+holding unrelated outer resources.
+
+C05/C11 now launch bounded fresh one-worker provider/caller guards rather than
+comparing configured paths. A positive real busy probe advances controlled O time
+100 to 101, exhausts the caller's original deadline before work, and precedes a
+separate real post-release installation. C11 exercises the host wrapper timeout
+and MCP progress through the same provider; C05 exercises installation timeout
+and progress. Existing explicit context owners, exact child statuses, bounded
+handshakes/holds and settled helper observations remain mandatory. C06 retains
+six heavy and two lightweight collector ids: actual transport/private-support,
+server lazy setup/discovery, host wrapper, host prepared execution, provenance
+fixture/body and workspace collector prove shared-pool busy/release/work.
+Actual lightweight scaffold and provenance refusal controls run under acquisition
+and installation refusal spies and must remain resource-free. No private conftest
+invocation or path identity substitutes for admitted work. All original C01–C13
+failure/security/deadline/repeat/independent-cleanup behavior remains represented.
 
 Register this suite before its first RED recording and run the full accumulated
 suite in every admission-pool phase's VALIDATE, alongside the full green gate

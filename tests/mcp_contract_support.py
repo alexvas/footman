@@ -126,6 +126,7 @@ def world(root, tmp, context="development", **options):
             bound = reuse_for_test(
                 base,
                 install,
+                admission=options.get("admission"),
                 mutable=options.get("mutable_wheel", False),
                 private_support=options.get("private_support", False),
             )
@@ -315,8 +316,8 @@ def run_wheel_client(w, *, wait_seconds=0):
     return value
 
 
-def exercise_discovery(root, tmp, context):
-    w = world(root, tmp, context)
+def exercise_discovery(root, tmp, context, *, admission):
+    w = world(root, tmp, context, admission=admission)
     if context == "wheel":
         run_wheel_client(w)
         check(
@@ -846,8 +847,8 @@ def reject_bootstrap(w):
     return result
 
 
-def exercise_package_control(root, tmp, fault):
-    w = world(root, tmp, "wheel", mutable_wheel=True)
+def exercise_package_control(root, tmp, fault, *, admission):
+    w = world(root, tmp, "wheel", admission=admission, mutable_wheel=True)
     package, _ = p.manifest_set(w["manifest"])
     if fault in {"container.py", "supervision.py", "__main__.py"}:
         path = package / fault
@@ -1036,9 +1037,9 @@ def exercise_lifecycle_validation(tmp, fault):
     )
 
 
-def exercise_wheel_lifecycle(root, tmp, case):
+def exercise_wheel_lifecycle(root, tmp, case, *, admission):
 
-    w = world(root, tmp, "wheel")
+    w = world(root, tmp, "wheel", admission=admission)
     input_path = tmp / "lifecycle.json"
     value = lifecycle_input(tmp, duration=3 if case == "lifetime" else 15)
     if case != "direct":

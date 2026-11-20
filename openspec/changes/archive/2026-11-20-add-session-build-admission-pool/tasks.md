@@ -447,67 +447,67 @@ Acceptance: provision_workspace requires pool admission, holds it across provisi
 Acceptance: reuse_for_test clone R3 consumes the supplied pool with original copy isolation. Introduce standalone_policy.admission and every caller's forwarding in this phase; preserve R7 legacy protection until P18 and R2 until P19. Consumes P16; seams supported callers/A/S.
 
 ### RED
-- [ ] 17.1 Freeze both signatures' complete direct/indirect inventories, including standalone_policy's reuse call (tests/host_acceptance_contract_support.py:993) and its callers (tests/test_host_acceptance_contracts.py:2523 anchor). Record required same-pool forwarding and protected R2/R7 transitions. Fully resolve base/setup before isolated K=1 hold; record bounded O-contention/entry/release observations and actual-wiring/cross-caller variants. Completion: valid clone inputs and current/future region ownership explicit.
-- [ ] 17.2 Create `test_clone_copy_uses_session_admission`; completion: supplied pool contention/progress, valid isolated clone and same-pool forwarding observations plus wiring/cross-caller/lifecycle companions.
-- [ ] 17.3 Execute R(test_clone_copy_uses_session_admission); completion: missing common-pool behavior explains failure.
+- [x] 17.1 Freeze both signatures' complete direct/indirect inventories, including standalone_policy's reuse call (tests/host_acceptance_contract_support.py:993) and its callers (tests/test_host_acceptance_contracts.py:2523 anchor). Record required same-pool forwarding and protected R2/R7 transitions. Fully resolve base/setup before isolated K=1 hold; record bounded O-contention/entry/release observations and actual-wiring/cross-caller variants. Completion: valid clone inputs and current/future region ownership explicit.
+- [x] 17.2 Create `test_clone_copy_uses_session_admission`; completion: supplied pool contention/progress, valid isolated clone and same-pool forwarding observations plus wiring/cross-caller/lifecycle companions.
+- [x] 17.3 Execute R(test_clone_copy_uses_session_admission); completion: missing common-pool behavior explains failure.
 
 ### GREEN
-- [ ] 17.4 Migrate R3 and required reuse_for_test.admission at every call, including private-support consumers. Add standalone_policy.admission, update all callers/forwarders and pass the same pool to reuse_for_test. Completion: refreshed inventories, original budgets/isolation, protected R2/R7 and direct/wiring checks pass.
-- [ ] 17.5 Document clone boundary, forwarding and transitional protections; completion: scope matches phase.
-- [ ] 17.6 Execute T(test_clone_copy_uses_session_admission)+G; completion: exit 0/E.
+- [x] 17.4 Migrate R3 and required reuse_for_test.admission at every call, including private-support consumers. Add standalone_policy.admission, update all callers/forwarders and pass the same pool to reuse_for_test. Completion: refreshed inventories, original budgets/isolation, protected R2/R7 and direct/wiring checks pass.
+- [x] 17.5 Document clone boundary, forwarding and transitional protections; completion: scope matches phase.
+- [x] 17.6 Execute T(test_clone_copy_uses_session_admission)+G; completion: exit 0/E.
 
 ### INTROSPECT
-- [ ] 17.7 Record isolation/lifecycle/inventory review; completion: R3 supplied-pool use, standalone forwarding, R7 protection until P18, R2 protection until P19, independent mutable support preserved.
-- [ ] 17.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 17.7 Record isolation/lifecycle/inventory review; completion: R3 supplied-pool use, standalone forwarding, R7 protection until P18, R2 protection until P19, independent mutable support preserved.
+- [x] 17.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 17.9 Independently execute T(test_clone_copy_uses_session_admission)+G; completion: clone/forwarding/isolation/prior phases pass.
+- [x] 17.9 Independently execute T(test_clone_copy_uses_session_admission)+G; completion: clone/forwarding/isolation/prior phases pass.
 
 ## 18. P18 — Standalone policy provisioning
 
 Acceptance: R7's separate uv pip install uses the forwarded pool and original local 120-second envelope after clone releases. Consumes P17 clone/signatures/forwarding; seams standalone_policy/external command/A/O/S.
 
 ### RED
-- [ ] 18.1 Refresh standalone_policy call inventory and freeze R7 (:1002), deadline (:1001) and remainder (:1017). Record supported external-command/completion handshakes establishing clone release before the K=1 provisioning hold. Completion: base prepared, sequential operation and actual-wiring observations specified.
-- [ ] 18.2 Create `test_policy_suite_provisioning_uses_admission`; completion: completed clone released, later provisioning contends then progresses after release with original checks; include direct/cross-caller/wiring and lifecycle companions.
-- [ ] 18.3 Execute R(test_policy_suite_provisioning_uses_admission); completion: missing R7 pool/deadline behavior explains failure after successful prerequisites.
+- [x] 18.1 Refresh standalone_policy call inventory and freeze R7 (:1002), deadline (:1001) and remainder (:1017). Record supported external-command/completion handshakes establishing clone release before the K=1 provisioning hold. Completion: base prepared, sequential operation and actual-wiring observations specified.
+- [x] 18.2 Create `test_policy_suite_provisioning_uses_admission`; completion: completed clone released, later provisioning contends then progresses after release with original checks; include direct/cross-caller/wiring and lifecycle companions.
+- [x] 18.3 Execute R(test_policy_suite_provisioning_uses_admission); completion: missing R7 pool/deadline behavior explains failure after successful prerequisites.
 
 ### GREEN
-- [ ] 18.4 Replace R7's working legacy acquisition with admission.acquire(deadline=deadline) inside standalone_policy. Retain/re-audit P17 parameter/caller/reuse forwarding. Completion: clone releases before R7, original local deadline/remainder/results and distinct acquisition location retained, inventory refreshed.
-- [ ] 18.5 Document separate policy-provisioning boundary; completion: eight-region/session descriptions include it distinctly.
-- [ ] 18.6 Execute T(test_policy_suite_provisioning_uses_admission)+G; completion: exit 0/E with R7 evidence separate from clone evidence.
+- [x] 18.4 Replace R7's working legacy acquisition with admission.acquire(deadline=deadline) inside standalone_policy. Retain/re-audit P17 parameter/caller/reuse forwarding. Completion: clone releases before R7, original local deadline/remainder/results and distinct acquisition location retained, inventory refreshed.
+- [x] 18.5 Document separate policy-provisioning boundary; completion: eight-region/session descriptions include it distinctly.
+- [x] 18.6 Execute T(test_policy_suite_provisioning_uses_admission)+G; completion: exit 0/E with R7 evidence separate from clone evidence.
 
 ### INTROSPECT
-- [ ] 18.7 Record chain/deadline/owner review; completion: separate sequential R3/R7 acquisitions with original checks/budgets.
-- [ ] 18.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
+- [x] 18.7 Record chain/deadline/owner review; completion: separate sequential R3/R7 acquisitions with original checks/budgets.
+- [x] 18.8 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E.
 
 ### VALIDATE
-- [ ] 18.9 Independently execute T(test_policy_suite_provisioning_uses_admission)+G and audit R7 evidence; completion: sequence/wiring/remainder/prior phases pass.
+- [x] 18.9 Independently execute T(test_policy_suite_provisioning_uses_admission)+G and audit R7 evidence; completion: sequence/wiring/remainder/prior phases pass.
 
 ## 19. P19 — Private support and completed migration
 
 Acceptance: private-support R2 uses supplied pool; all eight regions use the final acquisition API with existing boundaries/deadlines/results preserved. Consumes P17/P18/prior migrations; seams reuse caller/A/S.
 
 ### RED
-- [ ] 19.1 Refresh reuse inventory and protected R2 transition. Resolve base/support inputs and complete setup admission before isolated K=1 hold; explicitly call reuse_for_test(..., admission=pool, private_support=True). Freeze result/ownership/removal criteria and bounded O-contention/entry/release protocol, including actual-wiring/cross-caller variants. Completion: valid prerequisites and positive observations specified under existing envelope.
-- [ ] 19.2 Create `test_private_support_copy_uses_session_admission`; completion: contention while held, independent valid support output after release, actual-wiring/cross-caller observations and lifecycle companions.
-- [ ] 19.3 Execute R(test_private_support_copy_uses_session_admission); completion: missing supplied-pool use explains failure.
+- [x] 19.1 Refresh reuse inventory and protected R2 transition. Resolve base/support inputs and complete setup admission before isolated K=1 hold; explicitly call reuse_for_test(..., admission=pool, private_support=True). Freeze result/ownership/removal criteria and bounded O-contention/entry/release protocol, including actual-wiring/cross-caller variants. Completion: valid prerequisites and positive observations specified under existing envelope.
+- [x] 19.2 Create `test_private_support_copy_uses_session_admission`; completion: contention while held, independent valid support output after release, actual-wiring/cross-caller observations and lifecycle companions.
+- [x] 19.3 Execute R(test_private_support_copy_uses_session_admission); completion: missing supplied-pool use explains failure.
 
 ### GREEN
-- [ ] 19.4 Migrate private-support acquisition; completion: original copy isolation and intentional attribution-only cases retained.
-- [ ] 19.4.1 Migrate C05/C06/C11 shared-path/identity guards in their registered modules to real provider/caller contention and release-progress behavior. C05/C11 run the P11-style isolated one-worker nested invocation with fresh B, real provider and recording/fault O; their outer module remains the registered verification entry point. Resolve inputs before a short real hold at inner B, then use controlled O monotonic observations to exercise timeout accounting and release for a separate progress control. An explicit context owner bounds the hold and releases it on failure/interruption. Record maximum real hold duration, handshake bounds, release/settlement observations and inner/outer statuses; only intended inner contenders use B, preserving unrelated callers' allowances. Replace collector-gated private-conftest invocation with supported fixture/caller coverage for all six heavy collectors and explicit non-heavy configurations. Complete removal of legacy admission wiring while preserving wheel-provider availability. Completion: all per-function cases and P13–P16 dispositions audited, registered failure/contention/interruption/repeat/independent-cleanup coverage retained, and T+M(transport)+M(workspace)+M(tooling)+G pass/E; VALIDATE additionally runs S and applicable registered regression procedures.
-- [ ] 19.5 Complete R1–R8 live-location/deadline/direct+wiring inventory and record individual attribution-only cases in E. Remove legacy API/configuration and migrate identity guards to capacity-one/session behavior. Run `rg -n -F 'build_slot' tests host_tests scripts docs/testing.md`, `rg -n -F 'BUILD_SLOT_PATH' tests host_tests scripts docs/testing.md`, and `rg -n -F '_mcp_build_admission' tests/test_host_workspace.py`; each expected exit 1 establishes legacy-name absence. Review public replacement guards for missing admission/work coverage/contention/deadlines. Completion: eight positively accounted regions plus absence searches, with expected search statuses distinguished from test-runner results.
-- [ ] 19.6 Update docs/testing.md single-file promise/final API docs; completion: six collectors/lazy setup/host/prepared/clones/support/workspace accurate; Phase-11 exclusive-results scheduling, priorities 1..13 and allocations retained; fenced commands use one positive decimal -n/worksteal with xdist active. Existing documentation/registration guards pass in G.
-- [ ] 19.7 Execute T(test_private_support_copy_uses_session_admission)+G; completion: exit 0/E with final API migration complete.
+- [x] 19.4 Migrate private-support acquisition; completion: original copy isolation and intentional attribution-only cases retained.
+- [x] 19.4.1 Migrate C05/C06/C11 shared-path/identity guards in their registered modules to real provider/caller contention and release-progress behavior. C05/C11 run the P11-style isolated one-worker nested invocation with fresh B, real provider and recording/fault O; their outer module remains the registered verification entry point. Resolve inputs before a short real hold at inner B, then use controlled O monotonic observations to exercise timeout accounting and release for a separate progress control. An explicit context owner bounds the hold and releases it on failure/interruption. Record maximum real hold duration, handshake bounds, release/settlement observations and inner/outer statuses; only intended inner contenders use B, preserving unrelated callers' allowances. Replace collector-gated private-conftest invocation with supported fixture/caller coverage for all six heavy collectors and explicit non-heavy configurations. Complete removal of legacy admission wiring while preserving wheel-provider availability. Completion: all per-function cases and P13–P16 dispositions audited, registered failure/contention/interruption/repeat/independent-cleanup coverage retained, and T+M(transport)+M(workspace)+M(tooling)+G pass/E; VALIDATE additionally runs S and applicable registered regression procedures.
+- [x] 19.5 Complete R1–R8 live-location/deadline/direct+wiring inventory and record individual attribution-only cases in E. Remove legacy API/configuration and migrate identity guards to capacity-one/session behavior. Run `rg -n -F 'build_slot' tests host_tests scripts docs/testing.md`, `rg -n -F 'BUILD_SLOT_PATH' tests host_tests scripts docs/testing.md`, and `rg -n -F '_mcp_build_admission' tests/test_host_workspace.py`; each expected exit 1 establishes legacy-name absence. Review public replacement guards for missing admission/work coverage/contention/deadlines. Completion: eight positively accounted regions plus absence searches, with expected search statuses distinguished from test-runner results.
+- [x] 19.6 Update docs/testing.md single-file promise/final API docs; completion: six collectors/lazy setup/host/prepared/clones/support/workspace accurate; Phase-11 exclusive-results scheduling, priorities 1..13 and allocations retained; fenced commands use one positive decimal -n/worksteal with xdist active. Existing documentation/registration guards pass in G.
+- [x] 19.7 Execute T(test_private_support_copy_uses_session_admission)+G; completion: exit 0/E with final API migration complete.
 
 ### INTROSPECT
-- [ ] 19.8 Review each region against code/direct+wiring evidence, every spec requirement and old guard; completion: all eight live regions, callers, original deadlines/checks and intentional bypass dispositions accounted for.
-- [ ] 19.9 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E and frozen public boundaries retained.
+- [x] 19.8 Review each region against code/direct+wiring evidence, every spec requirement and old guard; completion: all eight live regions, callers, original deadlines/checks and intentional bypass dispositions accounted for.
+- [x] 19.9 Apply justified internal refactoring or retain structure; T after edits, G afterward; completion: passing E and frozen public boundaries retained.
 
 ### VALIDATE
-- [ ] 19.10 Independently execute T(test_private_support_copy_uses_session_admission)+G and audit all contracts/tests/evidence; completion: current acceptance and previous-phase applicability pass.
-- [ ] 19.11 Repeat `GREEN_CHECKS_WORKERS=8 scripts/check-green` sequentially on unchanged final code on the baseline machine; completion: both final runs successful, statuses/counts/wall and final K/affinity/quota recorded. Comparison with the retained historical baseline is descriptive wall time and check counts only; CPU/capacity-controlled conclusions use a fresh baseline with matching recorded observations.
-- [ ] 19.12 Deliver self-contained verification/performance summary outside openspec; completion: comparison conditions/limitations explicit, K>1 results investigated where improvement is absent, claims supported by measurements.
+- [x] 19.10 Independently execute T(test_private_support_copy_uses_session_admission)+G and audit all contracts/tests/evidence; completion: current acceptance and previous-phase applicability pass.
+- [x] 19.11 Repeat `GREEN_CHECKS_WORKERS=8 scripts/check-green` sequentially on unchanged final code on the baseline machine; completion: both final runs successful, statuses/counts/wall and final K/affinity/quota recorded. Comparison with the retained historical baseline is descriptive wall time and check counts only; CPU/capacity-controlled conclusions use a fresh baseline with matching recorded observations.
+- [x] 19.12 Deliver self-contained verification/performance summary outside openspec; completion: comparison conditions/limitations explicit, K>1 results investigated where improvement is absent, claims supported by measurements.
 
 ## Traceability
 

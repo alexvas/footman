@@ -85,15 +85,35 @@ def test_delivered_runner_passes_orchestrator_target_and_import_preflight(
     + [("test_host_provenance_faults.py", False), ("test_scaffold.py", False)],
 )
 def test_shared_admission_covers_actual_provisioning_collectors(
-    collector, admitted, _wheel_build_slot_path, monkeypatch
+    collector, admitted, tmp_path, tmp_path_factory, monkeypatch, admission
 ):
-    from tests.conftest import _mcp_build_admission
+    if admitted:
+        from tests.admission_collector_support import run_collector
 
-    request = SimpleNamespace(node=SimpleNamespace(path=Path(collector)))
-    with monkeypatch.context() as patch:
-        patch.setattr(wheel, "BUILD_SLOT_PATH", None)
-        _mcp_build_admission.__wrapped__(request, _wheel_build_slot_path, patch)
-        assert wheel.BUILD_SLOT_PATH == (_wheel_build_slot_path if admitted else None)
+        run_collector(tmp_path, tmp_path_factory, monkeypatch, admission, collector)
+        return
+    from tests.admission_support import AdmissionPool
+
+    acquire = Mock(
+        side_effect=AssertionError("lightweight collector acquired admission")
+    )
+    build = Mock(
+        side_effect=AssertionError("lightweight collector acquired worker wheel")
+    )
+    monkeypatch.setattr(AdmissionPool, "acquire", acquire)
+    monkeypatch.setattr(wheel, "build_and_install_contract_wheel", build)
+    if collector == "test_scaffold.py":
+        from tests.test_scaffold import test_package_is_importable
+
+        test_package_is_importable()
+    else:
+        from tests.test_host_provenance_faults import (
+            test_parent_rejects_ambient_support_without_acquisition,
+        )
+
+        test_parent_rejects_ambient_support_without_acquisition(tmp_path)
+    acquire.assert_not_called()
+    build.assert_not_called()
 
 
 def test_workspace_admission_cannot_silently_bypass_shared_slot(monkeypatch):

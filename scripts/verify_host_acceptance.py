@@ -639,6 +639,80 @@ def _execute_prepared_leg(leg):
     return _AttributedResult(result, observation)
 
 
+def _negative_assertion(streams, diagnostic):
+    marker = b"FIXTURE_OUTCOMES="
+    records = [
+        line[len(marker) :]
+        for stream in streams
+        for line in stream.splitlines()
+        if line.startswith(marker)
+    ]
+    if not records:
+        # A diagnostic alone proves neither the intended assertion nor teardown.
+        return False
+    if len(records) != 1:
+        return False
+    try:
+        value = json.loads(records[0], object_pairs_hook=_unique)
+    except ValueError:
+        return False
+    if type(value) is not dict or set(value) != {
+        "schema_version",
+        "collected",
+        "exitstatus",
+        "reports",
+        "collection_errors",
+        "internal_errors",
+        "interrupted",
+        "cleanup_complete",
+    }:
+        return False
+    if any(
+        type(value[key]) is not int or value[key] != 1
+        for key in ("schema_version", "collected", "exitstatus")
+    ):
+        return False
+    if (
+        value["collection_errors"] != []
+        or value["internal_errors"] != []
+        or value["interrupted"] is not False
+        or value["cleanup_complete"] is not True
+    ):
+        return False
+    reports = value["reports"]
+    if type(reports) is not list or len(reports) != 3:
+        return False
+    for report, when, outcome in zip(
+        reports,
+        ("setup", "call", "teardown"),
+        ("passed", "failed", "passed"),
+        strict=True,
+    ):
+        if type(report) is not dict or set(report) != {
+            "nodeid",
+            "when",
+            "outcome",
+            "wasxfail",
+            "longrepr",
+            "message",
+        }:
+            return False
+        if (
+            report["nodeid"]
+            != "host_tests/test_negative_expectations.py::test_negative_expectations"
+            or report["when"] != when
+            or report["outcome"] != outcome
+            or report["wasxfail"] is not False
+            or type(report["longrepr"]) is not str
+        ):
+            return False
+        if when != "call" and (
+            report["longrepr"] != "" or report["message"] is not None
+        ):
+            return False
+    return reports[1]["message"] == "AssertionError: " + diagnostic.decode("ascii")
+
+
 def _leg_result(core, leg, result, record=None):
     outpath, errpath = leg.evidence / "stdout.txt", leg.evidence / "stderr.txt"
     counts = result.counts
@@ -671,7 +745,7 @@ def _leg_result(core, leg, result, record=None):
             and counts["failed"] == 1
             and counts["passed"] == 0
             and counts["collected"] == 1
-            and diagnostic in result.stdout.splitlines()
+            and _negative_assertion((result.stdout, result.stderr), diagnostic)
             and result.cleanup_complete
             and result.evidence_complete
         )
@@ -788,9 +862,9 @@ def main(argv=None):
         "preparation_outcomes": [],
         "runner_preflight": runner_preflight | {"load_complete": True},
         "runtime": {"python": sys.version, "platform": sys.platform},
-        "execution_scope": "core; integration and operator acceptance pending",
+        "execution_scope": "host orchestration; execution environment requires independent attribution",
         "warnings": [
-            "Full orchestration integration pending task 11.10.1; real-host execution pending operator task 11.15."
+            "Docker-free integration is simulation, not real-host proof; operator host acceptance requires separate evidence."
         ],
         "resource_reconciliation": {"evidence": "retained", "run_directory": str(run)},
         "first_unexpected_status": None,

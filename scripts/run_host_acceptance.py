@@ -84,6 +84,17 @@ if __name__ == "__main__":
 """
 
 
+def _launcher_body(data, interpreter):
+    # uv uses this exact shell/Python polyglot when a shebang is too long.
+    # Strip only a fully bound trampoline, never arbitrary Python string nodes.
+    quoted = "'" + str(interpreter).replace("'", "'\"'\"'") + "'"
+    prefix = ("#!/bin/sh\n'''exec' " + quoted + ' "$0" "$@"\n' + "' '''\n").encode()
+    if data.startswith(b"#!/bin/sh\n"):
+        _require(data.startswith(prefix), "unsupported installed launcher semantics")
+        return data[len(prefix) :]
+    return data
+
+
 def _require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -578,7 +589,8 @@ class _Workspace:
         script = self.venv / "bin/footman"
         launcher = self._read(script)
         _require(
-            ast.dump(ast.parse(launcher)) == ast.dump(ast.parse(_LAUNCHER)),
+            ast.dump(ast.parse(_launcher_body(launcher, self.python)))
+            == ast.dump(ast.parse(_LAUNCHER)),
             "unsupported installed launcher semantics",
         )
         manifest = {
@@ -639,7 +651,7 @@ class _Workspace:
                 *([] if self.junit is None else ["--junitxml", str(self.junit)]),
                 *(self.directory / p for p in self.suite_paths),
                 "-n",
-                "1",
+                "8" if self.profile == "normal" else "1",
                 "--dist",
                 "worksteal",
                 "--tb=short",
@@ -696,13 +708,44 @@ def _verify_installed(workspace, manifest):
     )
 
 
+def _flow_artifacts(workspace, filename):
+    """Find only exclusive per-flow outputs, never follow replaced flow roots."""
+    paths = []
+    if workspace.host_context.get("pytest_workers", 1) > 1:
+        with DirectoryDescriptor.open_secure_path(
+            workspace.ops, workspace.directory
+        ) as root:
+            for name in sorted(root.list_names()):
+                if name.startswith("host-runs-"):
+                    _require(
+                        re.fullmatch(r"host-runs-[0-9a-f]{32}", name) is not None,
+                        "invalid host flow root name",
+                    )
+                    _require(
+                        stat.S_ISDIR(root.stat_child(name).st_mode),
+                        "unsafe host flow root",
+                    )
+                    paths.append(workspace.directory / name / filename)
+    # Primitive/probe suites use the original direct-parent evidence contract;
+    # real host fixtures always reserve a flow root before launching a service.
+    return paths or [workspace.directory / filename]
+
+
 def _verified_evidence(workspace):
+    paths = _flow_artifacts(workspace, "provenance.json")
+    for path in paths:
+        _verified_evidence_file(workspace, path)
+    workspace.verified_evidence_paths = list(map(str, paths))
+    return True
+
+
+def _verified_evidence_file(workspace, path):
     expected = json.loads(
         workspace._read(workspace.directory / "expected-origin.json"),
         object_pairs_hook=_unique,
     )
     retained = json.loads(
-        workspace._read(workspace.directory / "provenance.json"),
+        workspace._read(path),
         object_pairs_hook=_unique,
     )
     sources = sorted(
@@ -887,6 +930,7 @@ def _execute_prepared_host_leg(leg):
         _verify_installed(workspace, origin)
         workspace.host_context["configured_image_id"] = leg.image
         workspace.host_context["leg_budget"] = budget
+        workspace.host_context["pytest_workers"] = 8 if leg.profile == "normal" else 1
         workspace.host_context["service_observations_path"] = str(
             directory / "service-observations.json"
         )
@@ -940,8 +984,7 @@ def _execute_prepared_host_leg(leg):
         primary = error
     failures = CleanupFailures(primary)
 
-    def image_attribution():
-        path = directory / "service-observations.json"
+    def image_attribution_file(path):
         if not os.path.lexists(path):
             report["warnings"].append("observed image metadata unavailable")
             return
@@ -958,6 +1001,21 @@ def _execute_prepared_host_leg(leg):
         else:
             report["warnings"].append("unusable observed image metadata")
         report["image_metadata"] = value
+        report.setdefault("worker_image_metadata", []).append(
+            {"path": str(path), "metadata": value}
+        )
+
+    def image_attribution():
+        paths = (
+            _flow_artifacts(workspace, "service-observations.json")
+            if workspace.provenance_started
+            else [directory / "service-observations.json"]
+        )
+        for path in paths:
+            image_attribution_file(path)
+        report["worker_provenance_evidence_paths"] = getattr(
+            workspace, "verified_evidence_paths", []
+        )
 
     failures.run(image_attribution, ordinary=(Exception,))
     if manifest is not None:
@@ -969,7 +1027,9 @@ def _execute_prepared_host_leg(leg):
     report.update(
         venv=str(workspace.venv),
         expected_origin_path=str(directory / "expected-origin.json"),
-        provenance_evidence_path=str(directory / "provenance.json"),
+        provenance_evidence_path=next(
+            iter(getattr(workspace, "verified_evidence_paths", [])), None
+        ),
         counts=counts,
         inventory=workspace.inventory,
         generated=workspace.generated,

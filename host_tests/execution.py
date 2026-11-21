@@ -152,8 +152,17 @@ class Commands:
 
 class HostFlow:
     def __init__(self, context: dict[str, Any]):
-        self.context = context
+        self.context = dict(context)
         self.root = Path(context["support_root"]) / ("host-runs-" + uuid.uuid4().hex)
+        if context.get("pytest_workers", 1) > 1:
+            # Each worker owns one exclusively reserved flow root. Shared
+            # support/expected-origin/install inputs remain read-only.
+            self.context["provenance_evidence_path"] = str(
+                self.root / "provenance.json"
+            )
+            self.context["service_observations_path"] = str(
+                self.root / "service-observations.json"
+            )
         self.commands = Commands(self.root, context["service_deadline_monotonic"])
         self.cases: list[dict[str, Any]] = []
         self.services: list[Any] = []

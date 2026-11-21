@@ -5,12 +5,40 @@ import sys
 import time
 import tomllib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from host_tests import execution as e
 from tests import mcp_provenance as p
+
+
+@pytest.mark.parametrize("workers", [2, 8])
+def test_parallel_host_flows_never_share_first_evidence_or_metadata(tmp_path, workers):
+    context = {
+        "support_root": str(tmp_path),
+        "service_deadline_monotonic": time.monotonic() + 120,
+        "pytest_workers": workers,
+        "provenance_evidence_path": str(tmp_path / "provenance.json"),
+        "service_observations_path": str(tmp_path / "service-observations.json"),
+    }
+    original = context.copy()
+    flows = [e.HostFlow(context) for _ in range(workers)]
+    for key in ("provenance_evidence_path", "service_observations_path"):
+        paths = [flow.context[key] for flow in flows]
+        assert len(set(paths)) == workers and original[key] not in paths
+        for index, flow in enumerate(flows):
+            path = Path(flow.context[key])
+            assert path.parent == flow.root
+            p.write(path, str(index).encode())
+            assert p.read(path) == str(index).encode()
+    assert context == original
+    for flow in flows:
+        flow.finish()
+        flow.finish()
+    assert not (tmp_path / "provenance.json").exists()
+    assert not (tmp_path / "service-observations.json").exists()
 
 
 @pytest.mark.parametrize("kind", ["image", "wrapper"])

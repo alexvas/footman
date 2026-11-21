@@ -11,7 +11,7 @@ import pytest
 
 
 class Outcomes:
-    """Per-session, resource-free negative attribution; controller reports only."""
+    """Resource-free assertion/teardown attribution; controller reports only."""
 
     def __init__(self) -> None:
         self.reports: list[dict[str, Any]] = []
@@ -55,8 +55,12 @@ class Outcomes:
             "collection_errors": self.collection_errors,
             "internal_errors": self.internal_errors,
             "interrupted": self.interrupted,
-            "cleanup_complete": len(teardown) == 1
-            and teardown[0]["outcome"] == "passed",
+            "cleanup_complete": session.testscollected > 0
+            and len(teardown) == session.testscollected
+            and len({r["nodeid"] for r in teardown}) == session.testscollected
+            and all(r["outcome"] == "passed" for r in teardown)
+            and not self.interrupted
+            and not self.internal_errors,
         }
         print("\nFIXTURE_OUTCOMES=" + json.dumps(value, sort_keys=True), flush=True)
 

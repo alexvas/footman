@@ -1200,8 +1200,9 @@ The loaded-module and shebang-direct legs now execute the delivered core through
 the production literal `_RESULTS_BASE`, each reserving a receipt-attributed
 exclusive run directory and asserting a final successful report with four detected
 negative legs. These are real default-path runs with synthetic build/execution
-boundaries only, not real-host acceptance: full integration remains pending
-11.10.1 and the real-host run remains operator-only task 11.15.
+boundaries only: each core leg uses recorded build/execution doubles. The delivered
+complete-profile Docker-free integration is registered separately and remains
+simulation, not host proof; real-host execution is operator-only task 11.15.
 
 `tests/host_results_support.py` supplies test-only no-follow results inventories
 (including caches and dangling links), explicit successful-reservation claims,
@@ -1377,9 +1378,40 @@ Its native failure/interruption/independent-delivery controls preserve authority
 The stub image lookup/retag controls are explicit development simulations; neither
 they nor successful SDK traffic proves real Docker resolution/copy/removal.
 
-The runner, not an operator's ambient pytest command, will invoke the explicit
-copied `host_tests/` path with explicit isolated configuration, exactly one worker
-setting and `--dist worksteal`. It must reject zero collection, skips, xfails,
+The runner, not an operator's ambient pytest command, invokes the explicit
+copied suite path with isolated configuration and exactly one worker setting:
+`-n 8` for the complete normal suite, `-n 1` for each dedicated negative suite,
+with `--dist worksteal` in both cases. Normal workers reserve separate exclusive
+flow roots for provenance, image observations, command logs and fixture resources;
+only installed-package/support/expected-origin inputs are shared read-only.
+The runner validates every participating flow's provenance, retains its exact
+evidence path and attributes image metadata separately for each flow. Idle
+workers need not create fixtures or evidence. The Docker-free complete-profile
+integration has a 180-second outer driver envelope (including its unchanged
+local-cleanup reserve); core-only doubled executions retain their 90-second
+bound. These test-driver limits do not change production dispatch timeouts.
+For the complete-profile integration, the results ledger has a once-only
+quiescence barrier before preservation or deletion: require the outer completion
+observation, controller-reported successful teardown of every collected item in
+each acquired flow, and absence of active recorded simulated containers. Normal
+and negative copied sessions emit the same structured controller observations.
+Missing completion, worker loss, teardown failure or an interrupted/failed
+observation retains the exact claimed paths and fails verification; it does not
+copy a changing tree, retry cleanup or treat local child exit as service settlement.
+These are read-only observations, not authority to signal/reap descendants.
+
+The registered Phase-11 suite includes complete-profile real-build/loader/fixture
+success on both the literal default base and an isolated base, plus real-route
+fault controls for invalid JSON, omitted/mutated assertion copies, unrelated
+Docker CLI failure, normal override leakage, missing proof readback, prerequisite
+status, actual pytest-pipe release failure and publication interruption. No
+execution/loader double supplies those outcomes. Observer-only per-call records
+check globals and candidate source/build/dist preservation on normal return and
+exception unwind; core-double regression tests remain separate. Controlled faults
+are labeled Docker-free sensitivity tests, not host proof. Lost-completion and
+unsettled-barrier controls retain synthetic fixture paths without acquiring live
+unowned children; they do not claim guaranteed containment after arbitrary OS loss.
+It must reject zero collection, skips, xfails,
 xpasses, missing prerequisites and unresolved cleanup. Host execution requires
 an operator-prepared local image and a Docker-capable host; no automatic image
 build/pull or development-container socket access is permitted. Docker-free
@@ -1476,8 +1508,10 @@ Together with the registered Phase-11 contracts, these tests run only disposable
 complete-profile copies, synthetic build/execution boundaries and inert sibling
 loader fixtures. They retain actual helper output/status and structured Python
 call outcomes, not invented runner-process statuses. Synthetic aggregate zero
-proves decision logic only: full build/install/copied-suite integration remains
-pending task 11.10.1 and real-host execution remains operator-only task 11.15.
+proves decision logic only: these core legs use recorded build/execution doubles.
+The delivered complete-profile Docker-free integration is registered separately
+and remains simulation, not host proof; real-host execution is operator-only task
+11.15.
 The core checks do not authorize running the operator script on the candidate
 checkout or using Docker in development. Existing RED contracts for later
 implementation tasks remain required and unsuccessful, not passing GREEN.
@@ -1552,9 +1586,10 @@ mutation/omission, and origin/evidence owner failures with repeat cleanup.
 Synthetic parser/terminal and evidence-fault observations are explicitly separate
 from real service-child proof. No real Docker or operator script is executed.
 Public runner wiring and full build/source binding are delivered by the
-controlled tooling below. Full orchestration/suite integration remains assigned
-to 11.10.1, and real-host execution exclusively to operator task 11.15; neither
-is established by these Docker-free results.
+controlled tooling below. These component controls do not establish full
+orchestration/suite integration. The delivered complete-profile Docker-free
+integration is registered separately and remains simulation, not host proof;
+real-host execution is exclusively operator task 11.15.
 
 ### Controlled build and low-level execution
 
@@ -1730,9 +1765,10 @@ interruption, repeat, independent cleanup and changed-allowlist controls exercis
 fixture failure handling. The existing dedicated negative JSON module still
 changes only the shared cleanup expectation after its verified MCP baseline;
 it does not acquire the normal cleanup fixture or reinterpret cleanup failure as
-an intended detection. Real Docker execution remains exclusively operator task
-11.15. These controls are not real survivor, ownership or removal proof; full
-orchestrator integration remains task 11.10.1.
+an intended detection. Each cleanup control uses recorded build/execution doubles,
+not real survivor, ownership or removal proof. The delivered complete-profile
+Docker-free integration is registered separately and remains simulation, not host
+proof; real Docker execution is exclusively operator task 11.15.
 
 ## Session build admission pool suite
 

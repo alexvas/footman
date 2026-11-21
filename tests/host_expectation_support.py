@@ -24,58 +24,24 @@ ASSERTION_SUPPORT = (
     "tests/mcp_provenance.py",
     "tests/host_acceptance_assertions.py",
 )
+COPIED_SUPPORT = (*ASSERTION_SUPPORT, "host_tests/support.py")
 NORMAL_SUITE = "host_tests/test_normal_expectations.py"
 NEGATIVE_SUITE = "host_tests/test_negative_expectations.py"
 
 CONFTEST = '''"""Generated Docker-free fixture, not delivered real-host support."""
 from pathlib import Path
 import base64
-import json
 import pytest
 from tests import host_acceptance_assertions as assertions
 from tests import mcp_provenance as p
+from host_tests.support import Outcomes
 
 pytest_plugins = ["tests.green_skip_policy"]
 _ROOT = Path(__file__).resolve().parents[1]
 _EXPECTATION = None
-_REPORTS = []
-_COLLECTION_ERRORS = []
-_INTERNAL_ERRORS = []
-_INTERRUPTED = False
 
-def pytest_runtest_logreport(report):
-    crash = getattr(report.longrepr, "reprcrash", None)
-    _REPORTS.append({
-        "nodeid": report.nodeid, "when": report.when, "outcome": report.outcome,
-        "wasxfail": hasattr(report, "wasxfail"),
-        "longrepr": str(report.longrepr) if report.longrepr is not None else "",
-        "message": crash.message if crash is not None else None,
-    })
-
-def pytest_collectreport(report):
-    if not report.passed:
-        _COLLECTION_ERRORS.append(str(report.longrepr))
-
-def pytest_internalerror(excrepr, excinfo):
-    _INTERNAL_ERRORS.append(str(excrepr))
-
-def pytest_keyboard_interrupt(excinfo):
-    global _INTERRUPTED
-    _INTERRUPTED = True
-
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session, exitstatus):
-    if hasattr(session.config, "workerinput"):
-        return
-    teardown = [r for r in _REPORTS if r["when"] == "teardown"]
-    value = {
-        "schema_version": 1, "collected": session.testscollected,
-        "exitstatus": int(session.exitstatus), "reports": _REPORTS,
-        "collection_errors": _COLLECTION_ERRORS, "internal_errors": _INTERNAL_ERRORS,
-        "interrupted": _INTERRUPTED,
-        "cleanup_complete": len(teardown) == 1 and teardown[0]["outcome"] == "passed",
-    }
-    print("\\nFIXTURE_OUTCOMES=" + json.dumps(value, sort_keys=True), flush=True)
+def pytest_configure(config):
+    config.pluginmanager.register(Outcomes(), "fixture-outcomes")
 
 def pytest_sessionstart(session):
     global _EXPECTATION
@@ -145,7 +111,7 @@ def copied_fixture(tmp, observations, *, profile, expectation=None, raw_input=No
     (workspace / "tests").mkdir(parents=True)
     (workspace / "host_tests").mkdir()
     sources = []
-    for relative in ASSERTION_SUPPORT:
+    for relative in COPIED_SUPPORT:
         data = p.read(h.ROOT / relative)
         p.write(workspace / relative, data)
         h.check(p.read(workspace / relative) == data, "assertion copy bytes differ")

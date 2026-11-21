@@ -20,6 +20,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     negative = selected == [root / "test_negative_expectations.py"]
     path = root / "expectation_input.json"
     present = os.path.lexists(path)
+    # Controller teardown observations also establish normal fixture settlement;
+    # a reaped pytest child alone cannot establish nested-service cleanup.
+    from host_tests.support import Outcomes
+
+    session.config.pluginmanager.register(Outcomes(), "host-fixture-outcomes")
     if not negative:
         if present or any(p.name == "test_negative_expectations.py" for p in selected):
             raise pytest.UsageError(
@@ -38,10 +43,6 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     session.config.stash[_EXPECTATION] = assertions.validate_expectation_input(
         p.load(path)
     )
-    # Resource-free controller/worker observations, not another process owner.
-    from host_tests.support import Outcomes
-
-    session.config.pluginmanager.register(Outcomes(), "host-negative-outcomes")
 
 
 @pytest.fixture(scope="session")

@@ -216,7 +216,32 @@ def _remove(parent, name, expected, preserved):
 class ResultsLedger:
     """Explicit test-only path claims; never automatically adopts operator runs."""
 
-    def __init__(self, base, evidence, *, created_base_receipt=None):
+    def __init__(
+        self,
+        base,
+        evidence,
+        *,
+        created_base_receipt=None,
+        disposable_venv_profiles=(),
+        quiescence=None,
+    ):
+        # Opt-in only for the fixed prepared integration layout, never a broad
+        # basename exclusion. All omitted payload bytes remain in the inventory
+        # and the unchanged pre-deletion identity/content checks.
+        h.check(
+            type(disposable_venv_profiles) is tuple
+            and all(
+                type(profile) is str
+                and profile
+                in {"staged_bytes", "argv", "command_status", "cleanup", "normal"}
+                for profile in disposable_venv_profiles
+            )
+            and len(set(disposable_venv_profiles)) == len(disposable_venv_profiles),
+            "invalid disposable venv profiles",
+        )
+        h.check(quiescence is None or callable(quiescence), "invalid quiescence guard")
+        self.quiescence = quiescence
+        self.disposable_venv_profiles = disposable_venv_profiles
         self.base = Path(base)
         self.evidence = Path(evidence)
         h.check(
@@ -307,7 +332,34 @@ class ResultsLedger:
             return
         self.attempted = True
         try:
+            if self.quiescence is not None:
+                barrier = CleanupFailures(primary)
+                original_interruptions = len(barrier.interruptions)
+                barrier.run(self.quiescence, ordinary=(Exception,))
+                if (
+                    barrier.ordinary_failures
+                    or barrier.unexpected
+                    or len(barrier.interruptions) > original_interruptions
+                ):
+                    selected = barrier.complete()
+                    # complete() leaves an ordinary original primary with its
+                    # caller; do not interpret that None as a passed barrier.
+                    if selected is None:
+                        selected = primary
+                    if selected is not None:
+                        raise selected
             self.after = inventory(self.base, expected_identity=self.base_identity)
+            omitted = {
+                f"{name}/{profile}/workspace/venv"
+                for name in self.claims
+                for profile in self.disposable_venv_profiles
+            }
+            entries = {entry["path"]: entry for entry in self.after}
+            omitted = {path for path in omitted if path in entries}
+            h.check(
+                all(entries[path]["kind"] == "directory" for path in omitted),
+                "disposable venv root must be a directory",
+            )
             p.write(
                 self.evidence / "after.json",
                 p.canonical(
@@ -315,6 +367,7 @@ class ResultsLedger:
                         "base_identity": self.base_identity,
                         "inventory": self.after,
                         "owned": self.claims,
+                        "omitted_venv_payloads": sorted(omitted),
                     }
                 ),
             )
@@ -324,14 +377,19 @@ class ResultsLedger:
                 if entry["path"].split("/")[0] not in self.claims
             ]
             h.check(untouched == self.before, "unknown or changed pre-existing results")
-            # Preserve every regular file, including partial/binary output, before
-            # any deletion. Symlinks remain inventory records, never read targets.
+            # Preserve every evidence file, including partial/binary output,
+            # before deletion. Only explicitly declared disposable venv payload
+            # copies are omitted; their complete inventory and removal checks
+            # are unchanged. Symlinks remain records, never read targets.
             retained = self.evidence / "retained"
             retained.mkdir()
             for entry in self.after:
                 if (
                     entry["path"].split("/")[0] in self.claims
                     and entry["kind"] == "file"
+                    and not any(
+                        Path(entry["path"]).is_relative_to(path) for path in omitted
+                    )
                 ):
                     destination = retained / entry["path"]
                     destination.parent.mkdir(parents=True, exist_ok=True)

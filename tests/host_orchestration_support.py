@@ -265,9 +265,7 @@ def snapshot_candidate():
             "refs_sha256": hashlib.sha256(h.git(h.ROOT, "show-ref")).hexdigest(),
             "index_sha256": hashlib.sha256(p.read(index)).hexdigest(),
         },
-        "source": h.inventory(
-            h.ROOT, ("src/", "tests/", "scripts/", "pyproject.toml", "uv.lock")
-        )[0],
+        "source": h.inventory(h.ROOT)[0],
         "build_input": wheel.inventory(h.ROOT)[0],
         "dist": attribution.dist_identity(h.ROOT),
     }
@@ -538,8 +536,10 @@ def audit(event, arguments):
             resolved = None if environment is None else shutil.which(argv[0], path=environment.get("PATH", ""))
             if resolved is None or Path(resolved).resolve() != Path(TOOLS) / "docker":
                 raise RuntimeError("real Docker or ambient Docker PATH is forbidden")
-            if argv[1:] != ["image", "inspect", "--format", "{{.Id}}", TAG]:
-                raise RuntimeError("only one literal image inspection is allowed; no build/pull")
+            if argv[1:] != ["image", "inspect", "--format", "{{.Id}}", TAG] and not (
+                not SUBSTITUTE and argv[1:] == ["--version"]
+            ):
+                raise RuntimeError("only literal image inspection/version preflight is allowed; no build/pull")
 
 sys.addaudithook(audit)
 spec = importlib.util.spec_from_file_location("_core_orchestrator_contract", root / "scripts/verify_host_acceptance.py")
@@ -615,9 +615,28 @@ def execute(leg):
         raise RuntimeError("synthetic prepared-leg exception")
     negative = values["profile"] == "negative"
     diagnostics = {"staged_bytes": "staged bytes mismatch", "argv": "configured argv mismatch", "command_status": "command status mismatch", "cleanup": "container cleanup mismatch"}
-    stdout = chosen.get("diagnostic", diagnostics.get(case, "normal suite passed"))
+    diagnostic = chosen.get("diagnostic", diagnostics.get(case, "normal suite passed"))
+    stdout = diagnostic
     if negative and chosen.get("baseline_verified", True):
         stdout = "FIXTURE_BASELINE_VERIFIED\\n" + stdout
+    if negative and chosen.get("controller_outcomes", True):
+        # Fabricated controller records for explicit core-boundary doubles only.
+        # Production uses the same strict validator, with no synthetic bypass.
+        observation = {
+            "schema_version": 1, "collected": 1,
+            "exitstatus": chosen.get("status", 1),
+            "collection_errors": [], "internal_errors": [], "interrupted": False,
+            "cleanup_complete": chosen.get("cleanup_complete", True),
+            "reports": [
+                {"nodeid": "host_tests/test_negative_expectations.py::test_negative_expectations",
+                 "when": when, "outcome": "failed" if when == "call" else "passed",
+                 "wasxfail": False,
+                 "longrepr": diagnostic if when == "call" else "",
+                 "message": "AssertionError: " + diagnostic if when == "call" else None}
+                for when in ("setup", "call", "teardown")
+            ],
+        }
+        stdout += "\\nFIXTURE_OUTCOMES=" + json.dumps(observation, sort_keys=True)
     return SimpleNamespace(
         pytest_status=chosen.get("status", 1 if negative else 0),
         stdout=(stdout + "\\n").encode(), stderr=b"synthetic boundary diagnostic\\x00\\xff",
@@ -636,6 +655,37 @@ def logging_state():
     loggers = [logging.root, *(value for value in logging.root.manager.loggerDict.values() if isinstance(value, logging.Logger))]
     return {logger.name: (logger.level, logger.disabled, logger.propagate, tuple(logger.handlers), tuple(logger.filters)) for logger in loggers}, logging.root.manager.disable
 before_logging = logging_state()
+leg_states = []
+active_leg_states = {}
+previous_profile = sys.getprofile()
+def observe_leg_state(frame, event, arg):
+    if previous_profile is not None:
+        previous_profile(frame, event, arg)
+    if frame.f_code.co_name != "_execute_prepared_leg" or Path(frame.f_code.co_filename) != root / "scripts/verify_host_acceptance.py":
+        return
+    if event not in {"call", "return"}:
+        return
+    try:
+        import _footman_acceptance as tooling
+        candidate = tooling.Tooling(Path(CANDIDATE_ROOT))
+        identity = {"source": candidate.inventory(tooling.SOURCE_ROOTS)[0],
+                    "build_input": candidate.inventory(tooling.BUILD_ROOTS)[0],
+                    "dist": candidate.dist_inventory()}
+        globals_now = (list(sys.path), os.getcwd(), dict(os.environ), logging_state())
+        if event == "call":
+            leg = frame.f_locals["leg"]
+            active_leg_states[id(frame)] = (globals_now, identity, leg.case_id, leg.profile)
+        else:
+            before, candidate_before, case, profile = active_leg_states.pop(id(frame))
+            leg_states.append({"case_id": case, "profile": profile,
+                "globals_restored": before == globals_now,
+                "candidate_before": candidate_before, "candidate_after": identity})
+    except BaseException as observation_error:
+        # Observation must not replace execution or acquire release authority.
+        # The enclosing test rejects any incomplete attribution below.
+        leg_states.append({"observation_error": type(observation_error).__name__ + ": " + str(observation_error)})
+if not SUBSTITUTE:
+    sys.setprofile(observe_leg_state)
 status = None
 error = None
 caught = None
@@ -645,7 +695,10 @@ except BaseException as failure:
     caught = failure
     error = {"type": type(failure).__name__, "message": str(failure)}
 finally:
-    observation = {"legs": legs, "call_status": status, "error": error,
+    if not SUBSTITUTE:
+        sys.setprofile(previous_profile)
+    observation = {"legs": legs, "leg_states": leg_states,
+                   "call_status": status, "error": error,
                    "cwd_restored": os.getcwd() == before_cwd,
                    "environment_restored": dict(os.environ) == before_env,
                    "logging_restored": logging_state() == before_logging,
@@ -653,6 +706,8 @@ finally:
                    "launch_requests": launch_requests, "exec_requests": exec_requests,
                    "exclusive_reservations": reservations,
                    "exclusive_base_creations": base_creations,
+                   "fault_events": globals().get("fault_events", []),
+                   "publication_interruption_preserved": caught is not None and caught is globals().get("publication_control"),
                    "simulation": True}
     print("CORE_PROBE " + json.dumps(observation, sort_keys=True))
 if caught is not None:
@@ -725,12 +780,18 @@ def invoke(
         ),
     )
     before = results_base_inventory(prepared["base"])
+    # Missing completion (including outer timeout/interruption) cannot authorize
+    # preservation/deletion beneath unobserved pytest/service descendants.
+    if not substitute:
+        prepared["integration_observed"] = None
     try:
         result = wheel.command(
             [sys.executable, "-P", "-c", program],
             cwd=prepared["foreign"],
             env=env,
-            timeout_seconds=90,
+            # The real five-leg integration has its own reviewed outer
+            # envelope; retain the original bound for core-only doubles.
+            timeout_seconds=90 if substitute else 180,
         )
     finally:
         completion = {
@@ -776,6 +837,8 @@ def invoke(
         "orchestrator probe did not report a complete observation: " + repr(result),
     )
     observed = json.loads(records[0])
+    if not substitute:
+        prepared["integration_observed"] = observed
     h.check(observed["logging_restored"], "orchestration leaked global logging state")
     p.write(
         diagnostic / "results-inventory.json",

@@ -75,6 +75,104 @@ c = m._Core(m._bootstrap())
     return result
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "message",
+        "node",
+        "setup",
+        "teardown",
+        "xfail",
+        "collection",
+        "internal",
+        "interrupt",
+        "cleanup",
+        "duplicate",
+        "malformed",
+        "missing",
+    ],
+)
+def test_structured_negative_diagnostic_does_not_depend_on_traceback_format(
+    tmp_path, fault
+):
+    prepared = core.prepare(tmp_path)
+    value = {
+        "schema_version": 1,
+        "collected": 1,
+        "exitstatus": 1,
+        "collection_errors": [],
+        "internal_errors": [],
+        "interrupted": False,
+        "cleanup_complete": True,
+        "reports": [
+            {
+                "nodeid": "host_tests/test_negative_expectations.py::test_negative_expectations",
+                "when": when,
+                "outcome": "failed" if when == "call" else "passed",
+                "wasxfail": False,
+                "longrepr": "formatted traceback" if when == "call" else "",
+                "message": "AssertionError: configured argv mismatch"
+                if when == "call"
+                else None,
+            }
+            for when in ("setup", "call", "teardown")
+        ],
+    }
+    if fault == "message":
+        value["reports"][1]["message"] = "AssertionError: unrelated failure"
+    elif fault == "node":
+        value["reports"][1]["nodeid"] = "another_test"
+    elif fault in {"setup", "teardown"}:
+        value["reports"][0 if fault == "setup" else 2]["outcome"] = "failed"
+    elif fault == "xfail":
+        value["reports"][1]["wasxfail"] = True
+    elif fault in {"collection", "internal"}:
+        value[fault + "_errors"] = ["failure"]
+    elif fault == "interrupt":
+        value["interrupted"] = True
+    elif fault == "cleanup":
+        value["cleanup_complete"] = False
+    marker = b"FIXTURE_OUTCOMES=" + json.dumps(value).encode() + b"\n"
+    if fault == "duplicate":
+        marker *= 2
+    elif fault == "malformed":
+        marker = b"FIXTURE_OUTCOMES={bad-json}\n"
+    elif fault == "missing":
+        marker = b""
+    # A bare diagnostic cannot rescue a missing or malformed observation.
+    stdout = b"configured argv mismatch\nE   AssertionError: configured argv mismatch\n"
+    isolated(
+        prepared,
+        f"""
+assert m._negative_assertion(({stdout!r}, {marker!r}), b'configured argv mismatch') is {fault is None!r}
+""",
+    )
+
+
+@pytest.mark.parametrize("substitute,timeout", [(True, 90), (False, 180)])
+def test_outer_envelope_distinguishes_real_integration_from_core_doubles(
+    tmp_path, monkeypatch, substitute, timeout
+):
+    prepared = core.prepare(tmp_path)
+    original = wheel.command
+    calls = []
+    refused = RuntimeError("observed outer launch boundary; no child acquired")
+
+    def command(argv, **kwargs):
+        if argv[0] == sys.executable and "-c" in argv:
+            calls.append(kwargs["timeout_seconds"])
+            raise refused
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(wheel, "command", command)
+    with pytest.raises(RuntimeError) as caught:
+        core.invoke(prepared, substitute=substitute)
+    assert caught.value is refused
+    assert calls == [timeout]
+    assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]
+
+
 def test_negative_detection_vocabulary_matches_host_fixture_and_probe(tmp_path):
     expected = assertions.EXPECTATION_DIAGNOSTICS
     assert tuple(expected) == assertions.EXPECTATION_CASES == core.CASES

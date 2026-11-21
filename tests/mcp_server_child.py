@@ -34,6 +34,16 @@ if __name__ == "__main__":
 """
 
 
+def launcher_body(data, interpreter):
+    quoted = "'" + str(interpreter).replace("'", "'\"'\"'") + "'"
+    prefix = ("#!/bin/sh\n'''exec' " + quoted + ' "$0" "$@"\n' + "' '''\n").encode()
+    if data.startswith(b"#!/bin/sh\n"):
+        if not data.startswith(prefix):
+            raise ValueError("unsupported generated launcher semantics")
+        return data[len(prefix) :]
+    return data
+
+
 def validate_launcher(p, entrypoint, script):
     p.require(
         isinstance(entrypoint, dict)
@@ -51,7 +61,8 @@ def validate_launcher(p, entrypoint, script):
         "changed generated launcher",
     )
     p.require(
-        ast.dump(ast.parse(data)) == ast.dump(ast.parse(LAUNCHER)),
+        ast.dump(ast.parse(launcher_body(data, sys.executable)))
+        == ast.dump(ast.parse(LAUNCHER)),
         "unsupported generated launcher semantics",
     )
 

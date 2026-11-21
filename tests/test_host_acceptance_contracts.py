@@ -3062,7 +3062,7 @@ def test_copied_fixture_negative_controls_reach_shared_assertions_with_raw_statu
     paths = {entry["path"] for entry in profile["inventory"]}
     assert fixture.NEGATIVE_SUITE in paths and fixture.NORMAL_SUITE not in paths
     assert "host_tests/expectation_input.json" in profile["generated_inputs"]
-    assert "tests/host_acceptance_assertions.py" in {
+    assert {"tests/host_acceptance_assertions.py", "host_tests/support.py"} <= {
         entry["path"] for entry in profile["source_support"]
     }
     assert "tests/mcp_protocol_child.py" not in paths
@@ -3283,6 +3283,7 @@ def test_negative_attribution_requires_exact_successful_fixture_cleanup(case):
         "collection-error",
         "internal-error",
         "missing-teardown",
+        "duplicate-teardown",
         "failed-teardown",
         "extra-failure",
         "extra-error",
@@ -3330,6 +3331,8 @@ def test_negative_attribution_rejects_inexact_structured_outcomes(fault):
         ] = ["injected failure"]
     elif fault == "missing-teardown":
         value["reports"].pop()
+    elif fault == "duplicate-teardown":
+        value["reports"].append(copy.deepcopy(value["reports"][-1]))
     elif fault in {"extra-failure", "extra-error"}:
         extra = copy.deepcopy(value["reports"][1 if fault == "extra-failure" else 0])
         extra["nodeid"] += "_unrelated"
@@ -3785,8 +3788,14 @@ def test_orchestrator_core_resolves_tag_once_and_hands_exact_build_to_all_profil
         diagnostic = (
             "normal suite passed" if case is None else EXPECTATION_DIAGNOSTICS[case]
         )
-        baseline = "" if case is None else "FIXTURE_BASELINE_VERIFIED\n"
-        assert p.read(leg["stdout_path"]) == (baseline + diagnostic + "\n").encode()
+        lines = p.read(leg["stdout_path"]).splitlines()
+        if case is None:
+            assert lines == [diagnostic.encode()]
+        else:
+            assert lines[:2] == [b"FIXTURE_BASELINE_VERIFIED", diagnostic.encode()]
+            assert len(lines) == 3 and lines[2].startswith(b"FIXTURE_OUTCOMES=")
+            value = json.loads(lines[2].removeprefix(b"FIXTURE_OUTCOMES="))
+            assert value["reports"][1]["message"] == "AssertionError: " + diagnostic
         if case is not None:
             assert leg["baseline_verified"] is True
         assert p.read(leg["stderr_path"]) == b"synthetic boundary diagnostic\x00\xff"
@@ -3820,17 +3829,18 @@ def test_orchestrator_core_resolves_tag_once_and_hands_exact_build_to_all_profil
     )
 
 
+@pytest.mark.parametrize("missing", ["baseline_verified", "controller_outcomes"])
 @pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
-def test_orchestrator_core_matching_diagnostic_without_verified_baseline_is_invalid_observation(
-    tmp_path, case
+def test_orchestrator_core_matching_diagnostic_without_required_evidence_is_invalid_observation(
+    tmp_path, case, missing
 ):
     from tests import host_orchestration_support as core
 
     prepared = core.prepare(tmp_path)
     # Keep assertion kind, raw status, failed count and exact target diagnostic
-    # identical to a valid negative leg; remove only baseline confirmation.
+    # identical to a valid negative leg; remove exactly one required observation.
     result, observed, _, names = core.invoke(
-        prepared, outcomes={case: {"baseline_verified": False}}
+        prepared, outcomes={case: {missing: False}}
     )
     assert result["status"] == observed["call_status"] == 1, result
     _, report = core_report(prepared, names)
@@ -3838,13 +3848,20 @@ def test_orchestrator_core_matching_diagnostic_without_verified_baseline_is_inva
     assert [leg["case_id"] for leg in observed["legs"]] == [*core.CASES, None]
     leg = report["legs"][core.CASES.index(case)]
     assert leg["pytest_status"] == 1 and leg["detected"] is False
-    assert leg["baseline_verified"] is False
-    assert leg["failure_kind"] == "invalid-observation/setup"
+    assert leg["baseline_verified"] is (missing != "baseline_verified")
+    assert leg["failure_kind"] == (
+        "invalid-observation/setup" if missing == "baseline_verified" else "assertion"
+    )
     assert leg["counts"]["collected"] == leg["counts"]["failed"] == 1
     from tests.host_acceptance_assertions import EXPECTATION_DIAGNOSTICS
 
-    assert p.read(leg["stdout_path"]) == (EXPECTATION_DIAGNOSTICS[case] + "\n").encode()
-    assert b"FIXTURE_BASELINE_VERIFIED" not in p.read(leg["stdout_path"]).splitlines()
+    lines = p.read(leg["stdout_path"]).splitlines()
+    diagnostic = EXPECTATION_DIAGNOSTICS[case].encode()
+    if missing == "baseline_verified":
+        assert len(lines) == 2 and lines[0] == diagnostic
+        assert lines[1].startswith(b"FIXTURE_OUTCOMES=")
+    else:
+        assert lines == [b"FIXTURE_BASELINE_VERIFIED", diagnostic]
 
 
 @pytest.mark.parametrize(
@@ -4473,6 +4490,7 @@ def test_default_results_base_setup_owner_failure_and_repeat_matrix(
 def test_orchestrator_unpatched_default_direct_and_loaded_legs_reconcile_exact_runs(
     tmp_path,
     _account_for_orchestrator_results,
+    admission,
 ):
     from footman.filesystem.descriptors import DirectoryDescriptor
     from tests import host_orchestration_support as core
@@ -4509,12 +4527,30 @@ def test_orchestrator_unpatched_default_direct_and_loaded_legs_reconcile_exact_r
                         runner,
                         b"""from types import SimpleNamespace
 from pathlib import Path
+import json
 
 def _execute_prepared_host_leg(leg):
     case = leg.case_id
     diagnostics = {"staged_bytes": "staged bytes mismatch", "argv": "configured argv mismatch", "command_status": "command status mismatch", "cleanup": "container cleanup mismatch"}
+    stdout = "normal suite passed\\n"
+    if case:
+        # Explicitly synthetic controller records, never real teardown proof.
+        observation = {
+            "schema_version": 1, "collected": 1, "exitstatus": 1,
+            "collection_errors": [], "internal_errors": [], "interrupted": False,
+            "cleanup_complete": True,
+            "reports": [
+                {"nodeid": "host_tests/test_negative_expectations.py::test_negative_expectations",
+                 "when": when, "outcome": "failed" if when == "call" else "passed",
+                 "wasxfail": False,
+                 "longrepr": diagnostics[case] if when == "call" else "",
+                 "message": "AssertionError: " + diagnostics[case] if when == "call" else None}
+                for when in ("setup", "call", "teardown")
+            ],
+        }
+        stdout = "FIXTURE_BASELINE_VERIFIED\\n" + diagnostics[case] + "\\nFIXTURE_OUTCOMES=" + json.dumps(observation, sort_keys=True) + "\\n"
     return SimpleNamespace(pytest_status=1 if case else 0,
-        stdout=(("FIXTURE_BASELINE_VERIFIED\\n" + diagnostics[case] + "\\n") if case else "normal suite passed\\n").encode(),
+        stdout=stdout.encode(),
         stderr=b"synthetic boundary diagnostic\\x00\\xff",
         counts={"collected":1 if case else 2,"passed":0 if case else 2,"failed":1 if case else 0,"skipped":0,"xfailed":0,"xpassed":0},
         failure_kind="assertion" if case else None, cleanup_complete=True, evidence_complete=True)
@@ -4684,6 +4720,9 @@ def _execute_prepared_host_leg(leg):
                 if selected is not None and selected is not primary:
                     raise selected
             assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]
+        integration_root = tmp_path / "delivered-integration"
+        integration_root.mkdir()
+        _delivered_orchestrator_integration(integration_root, admission, True)
     finally:
         import sys
 
@@ -5993,6 +6032,125 @@ def _results_fixture(tmp_path):
     return base, evidence, results.ResultsLedger(base, evidence)
 
 
+@pytest.mark.parametrize("omit", [False, True])
+def test_results_ledger_keeps_evidence_and_full_inventory_without_venv_copies(
+    tmp_path, omit
+):
+    from tests import host_results_support as results
+
+    base, evidence = tmp_path / "base", tmp_path / "evidence"
+    base.mkdir()
+    evidence.mkdir()
+    operator = base / "operator-retained"
+    operator.mkdir()
+    p.write(operator / "report.json", b"operator evidence")
+    ledger = results.ResultsLedger(
+        base, evidence, disposable_venv_profiles=("normal",) if omit else ()
+    )
+    run = base / "owned"
+    run.mkdir()
+    venv = run / "normal/workspace/venv"
+    venv.mkdir(parents=True)
+    p.write(venv / "dependency.py", b"installed dependency bytes")
+    (venv / "external-link").symlink_to(operator)
+    # A same-named directory outside the declared layout remains evidence.
+    (run / "venv").mkdir()
+    p.write(run / "venv/provenance.json", b"not disposable")
+    reports = run / "normal/evidence"
+    reports.mkdir()
+    for name in (
+        "report.json",
+        "stdout.txt",
+        "stderr.txt",
+        "inventory.json",
+        "provenance.json",
+        "expected-origin.json",
+    ):
+        p.write(reports / name, b"retained evidence\x00\xff")
+    ledger.claim(run, reservation_succeeded=True)
+    ledger.finish()
+    after = p.load(evidence / "after.json")
+    assert after["omitted_venv_payloads"] == (
+        ["owned/normal/workspace/venv"] if omit else []
+    )
+    payload = next(
+        entry
+        for entry in after["inventory"]
+        if entry["path"] == "owned/normal/workspace/venv/dependency.py"
+    )
+    assert payload["sha256"] == hashlib_for_contract(b"installed dependency bytes")
+    saved = evidence / "retained/owned"
+    assert (saved / "normal/workspace/venv/dependency.py").exists() is (not omit)
+    assert p.read(saved / "venv/provenance.json") == b"not disposable"
+    for name in (
+        "report.json",
+        "stdout.txt",
+        "stderr.txt",
+        "inventory.json",
+        "provenance.json",
+        "expected-origin.json",
+    ):
+        assert p.read(saved / "normal/evidence" / name) == b"retained evidence\x00\xff"
+    assert p.read(operator / "report.json") == b"operator evidence"
+    assert not run.exists() and results.inventory(base) == ledger.before
+    ledger.finish()
+    assert results.inventory(base) == ledger.before
+
+
+@pytest.mark.parametrize(
+    "profiles", [("../normal",), ("normal", "normal"), ["normal"], (True,)]
+)
+def test_results_ledger_refuses_unsafe_disposable_profiles_before_acquisition(
+    tmp_path, monkeypatch, profiles
+):
+    from tests import host_results_support as results
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("must reject before acquisition")
+
+    monkeypatch.setattr(results, "_snapshot", forbidden)
+    with pytest.raises(AssertionError, match="invalid disposable venv profiles"):
+        results.ResultsLedger(tmp_path, tmp_path, disposable_venv_profiles=profiles)
+
+
+@pytest.mark.parametrize("fault", ["mutated-payload", "symlink-root"])
+def test_omitting_venv_copy_does_not_relax_inventory_or_removal_checks(
+    tmp_path, monkeypatch, fault
+):
+    from tests import host_results_support as results
+
+    base, evidence = tmp_path / "base", tmp_path / "evidence"
+    base.mkdir()
+    evidence.mkdir()
+    ledger = results.ResultsLedger(base, evidence, disposable_venv_profiles=("normal",))
+    run = base / "owned"
+    run.mkdir()
+    venv = run / "normal/workspace/venv"
+    venv.parent.mkdir(parents=True)
+    if fault == "symlink-root":
+        venv.symlink_to(tmp_path)
+    else:
+        venv.mkdir()
+        p.write(venv / "payload", b"original")
+        original_remove = results._remove
+
+        def changed(*args):
+            h.replace(venv / "payload", b"changed after inventory")
+            return original_remove(*args)
+
+        monkeypatch.setattr(results, "_remove", changed)
+    ledger.claim(run, reservation_succeeded=True)
+    with pytest.raises(
+        AssertionError, match="directory|changed since preservation"
+    ) as first:
+        ledger.finish()
+    with pytest.raises(AssertionError) as second:
+        ledger.finish()
+    assert first.value is second.value and run.is_dir()
+    assert not (evidence / "reconciled.json").exists()
+    assert not (evidence / "retained/owned/normal/workspace/venv").exists()
+
+
 def test_results_ledger_preserves_binary_evidence_and_operator_runs_and_repeats(
     tmp_path,
 ):
@@ -6716,6 +6874,528 @@ def test_orchestrator_report_has_handoff_identity_counts_warnings_and_resource_s
         assert isinstance(leg["counts"], dict)
         assert p.read(leg["stdout_path"]) is not None
         assert p.read(leg["stderr_path"]) is not None
+
+
+@pytest.mark.sleepy
+def test_delivered_orchestrator_integrates_real_build_loader_and_complete_suites(
+    tmp_path, admission
+):
+    _delivered_orchestrator_integration(tmp_path, admission, False)
+
+
+def _delivered_orchestrator_integration(tmp_path, admission, real_base):
+    import time
+
+    from tests import host_integration_support as integration
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    with admission.shared_pool.acquire(deadline=time.monotonic() + 120):
+        prepared = integration.prepare(tmp_path)
+        if real_base:
+            prepared["base"] = Path(
+                "/tmp/gorshochek/ephemeral/footman.git/host-acceptance"
+            )
+        retained = tmp_path / "retained-results"
+        retained.mkdir()
+        ledger = results.ResultsLedger(
+            prepared["base"],
+            retained,
+            disposable_venv_profiles=(*core.CASES, "normal"),
+            quiescence=lambda: integration.require_quiescence(prepared),
+        )
+        prepared["_results_ledger"] = ledger
+        try:
+            operation, observed, _, names = core.invoke(
+                prepared,
+                substitute=False,
+                patch_base=not real_base,
+                environment=integration.environment(prepared),
+            )
+            assert operation["status"] == 0, operation
+            assert observed["call_status"] == 0 and observed["error"] is None
+            assert observed["cwd_restored"] and observed["environment_restored"]
+            assert observed["logging_restored"] and observed["legs"] == []
+            assert len(observed["leg_states"]) == 5
+            for state in observed["leg_states"]:
+                assert state["globals_restored"]
+                assert state["candidate_before"] == state["candidate_after"]
+            assert len(names) == 1
+            report = p.load(prepared["base"] / names[0] / "report.json")
+            assert report["state"] == "final" and report["success"] is True
+            assert report["first_unexpected_status"] is None
+            assert [leg["case_id"] for leg in report["legs"]] == [*core.CASES, None]
+            for leg in report["legs"]:
+                negative = leg["case_id"] is not None
+                assert leg["pytest_status"] == (1 if negative else 0)
+                assert leg["counts"]["collected"] > 0
+                assert (
+                    leg["counts"]["skipped"]
+                    == leg["counts"]["xfailed"]
+                    == leg["counts"]["xpassed"]
+                    == 0
+                )
+                assert not negative or leg["detected"] is True
+                loader = leg["loader"]
+                path = prepared["root"] / "scripts/run_host_acceptance.py"
+                assert loader["module_path"] == loader["spec_origin"] == str(path)
+                assert loader["source_sha256"] == hashlib_for_contract(p.read(path))
+                assert p.read(leg["stdout_path"])
+                assert Path(leg["stderr_path"]).is_file()
+            states = [
+                p.load(prepared["state"] / name)
+                for name in h.root_names(prepared["state"])
+                if name.endswith(".json")
+            ]
+            assert states and all(state["active"] is False for state in states)
+        finally:
+            core.reconcile_reservations(prepared, ledger)
+            assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]
+        assert results.inventory(prepared["base"]) == ledger.before
+        preservation = p.load(retained / "after.json")
+        assert len(preservation["omitted_venv_payloads"]) == 5
+        for relative in preservation["omitted_venv_payloads"]:
+            assert not (retained / "retained" / relative).exists()
+            profile = Path(relative).parts[1]
+            saved = retained / "retained" / names[0] / profile
+            leg_report = p.load(saved / "evidence/report.json")
+            assert leg_report["cleanup_complete"]
+            commands = [
+                command["argv"]
+                for command in leg_report["commands"]
+                if "pytest" in command["argv"]
+            ]
+            assert len(commands) == 1
+            assert commands[0][commands[0].index("-n") + 1] == (
+                "8" if profile == "normal" else "1"
+            )
+            paths = leg_report["worker_provenance_evidence_paths"]
+            if profile == "normal":
+                assert 1 <= len(paths) <= min(8, leg_report["counts"]["collected"])
+            else:
+                assert len(paths) == 1
+            assert len(set(paths)) == len(paths)
+            for path in paths:
+                relative = Path(path).relative_to(prepared["base"] / names[0] / profile)
+                assert p.load(saved / relative)["context"] == "wheel"
+            if profile == "normal":
+                assert not (saved / "workspace/provenance.json").exists()
+                assert not (saved / "workspace/service-observations.json").exists()
+                assert len(leg_report["worker_image_metadata"]) == len(paths)
+            assert (saved / "evidence/stdout.txt").is_file()
+            assert (saved / "evidence/stderr.txt").is_file()
+            assert (saved / "workspace/expected-origin.json").is_file()
+            if profile != "normal":
+                assert (saved / "workspace/provenance.json").is_file()
+
+
+@pytest.mark.parametrize("primary_kind", ["none", "operation", "interruption"])
+@pytest.mark.parametrize("guard_kind", ["failure", "interruption"])
+def test_results_quiescence_barrier_latches_before_preservation_and_keeps_independent_cleanup(
+    tmp_path, monkeypatch, primary_kind, guard_kind
+):
+    from footman.filesystem.cleanup import CleanupFailures
+    from tests import host_results_support as results
+
+    base, evidence = tmp_path / "results", tmp_path / "evidence"
+    base.mkdir()
+    evidence.mkdir()
+    primary = (
+        None
+        if primary_kind == "none"
+        else OSError("active operation")
+        if primary_kind == "operation"
+        else KeyboardInterrupt("active interruption")
+    )
+    refused = (
+        OSError("nested work unsettled")
+        if guard_kind == "failure"
+        else KeyboardInterrupt("settlement observation interrupted")
+    )
+    calls = []
+
+    def quiescence():
+        calls.append(True)
+        raise refused
+
+    ledger = results.ResultsLedger(base, evidence, quiescence=quiescence)
+    run = base / "owned"
+    run.mkdir()
+    p.write(run / "changing-output", b"must not be copied or deleted")
+    ledger.claim(run, reservation_succeeded=True)
+    sibling_base, sibling_evidence = tmp_path / "sibling", tmp_path / "sibling-evidence"
+    sibling_base.mkdir()
+    sibling_evidence.mkdir()
+    sibling = results.ResultsLedger(sibling_base, sibling_evidence)
+    other = sibling_base / "owned"
+    other.mkdir()
+    p.write(other / "retained", b"independent")
+    sibling.claim(other, reservation_succeeded=True)
+    original = results.inventory
+
+    def inventory(path, **kwargs):
+        assert Path(path) != base, (
+            "no preservation inventory under unobserved descendants"
+        )
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(results, "inventory", inventory)
+    selected = (
+        primary
+        if primary_kind == "interruption"
+        or (primary is not None and guard_kind == "failure")
+        else refused
+    )
+    failures = CleanupFailures(None)
+    failures.run(lambda: ledger.finish(primary), ordinary=(Exception,))
+    failures.run(sibling.finish, ordinary=(Exception,))
+    try:
+        result = failures.complete()
+    except BaseException as error:
+        result = error
+    assert result is selected
+    with pytest.raises(BaseException) as repeated:
+        ledger.finish()
+    assert repeated.value is selected and calls == [True]
+    assert ledger.after is None and not (evidence / "after.json").exists()
+    assert not (evidence / "retained").exists()
+    assert p.read(run / "changing-output") == b"must not be copied or deleted"
+    assert (
+        not other.exists()
+        and p.read(sibling_evidence / "retained/owned/retained") == b"independent"
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "outer",
+        "missing",
+        "duplicate",
+        "teardown",
+        "interrupted",
+        "active",
+        "operation-close",
+        "close",
+        "interrupt-close",
+    ],
+)
+def test_integration_quiescence_requires_actual_complete_teardown_and_sole_reads(
+    tmp_path, monkeypatch, fault
+):
+    from footman.filesystem.operations import PosixDescriptorOps
+    from tests import host_integration_support as integration
+    from tests import host_orchestration_support as core
+
+    # Synthetic controller records test the rejection barrier only: no child or
+    # service acquired, no claim that this establishes real fixture execution.
+    base, state = tmp_path / "results", tmp_path / "state"
+    base.mkdir()
+    state.mkdir()
+    run = base / "owned"
+    workspace, evidence = run / "normal/workspace", run / "normal/evidence"
+    workspace.mkdir(parents=True)
+    evidence.mkdir()
+    (workspace / ("host-runs-" + "a" * 32)).mkdir()
+    output = evidence / "pytest-stdout.txt"
+    value = {
+        "schema_version": 1,
+        "collected": 1,
+        "exitstatus": 0,
+        "cleanup_complete": True,
+        "interrupted": fault == "interrupted",
+        "internal_errors": [],
+        "collection_errors": [],
+        "reports": [
+            {
+                "nodeid": "test_fixture",
+                "when": "teardown",
+                "outcome": "failed" if fault == "teardown" else "passed",
+            }
+        ],
+    }
+    raw = b"FIXTURE_OUTCOMES=" + p.canonical(value) + b"\n"
+    p.write(
+        output,
+        b"no receipt\n"
+        if fault == "missing"
+        else raw * (2 if fault == "duplicate" else 1),
+    )
+    p.write(
+        evidence / "report.json",
+        p.canonical(
+            {
+                "commands": [
+                    {
+                        "argv": ["python", "-m", "pytest"],
+                        "status": 0,
+                        "stdout_path": str(output),
+                    }
+                ]
+            }
+        ),
+    )
+    p.write(state / ("b" * 64 + ".json"), p.canonical({"active": fault == "active"}))
+    prepared = {
+        "base": base,
+        "state": state,
+        "integration_observed": None if fault == "outer" else {},
+    }
+    monkeypatch.setattr(core, "reservation_receipts", lambda _: [{"path": str(run)}])
+    primary = (
+        KeyboardInterrupt("read interrupted")
+        if fault == "interrupt-close"
+        else OSError("read failed")
+    )
+    release = OSError("sole close failed")
+    original_read = os.read
+    closed = []
+
+    def selected(fd):
+        return os.readlink("/proc/self/fd/" + str(fd)) == str(output)
+
+    class Ops(PosixDescriptorOps):
+        def close(self, fd):
+            target = selected(fd)
+            super().close(fd)
+            if target and fault in {"operation-close", "close", "interrupt-close"}:
+                closed.append(fd)
+                raise release
+
+    def read(fd, size):
+        if selected(fd) and fault in {"operation-close", "interrupt-close"}:
+            raise primary
+        return original_read(fd, size)
+
+    monkeypatch.setattr(p, "OPS", Ops())
+    monkeypatch.setattr(os, "read", read)
+    if fault == "none":
+        integration.require_quiescence(prepared)
+    else:
+        with pytest.raises(BaseException) as caught:
+            integration.require_quiescence(prepared)
+        if fault in {"operation-close", "interrupt-close", "close"}:
+            assert caught.value is (release if fault == "close" else primary)
+            assert len(closed) == 1
+            if fault != "close":
+                assert release in getattr(caught.value, "_transaction_secondary", [])
+    assert run.is_dir() and (evidence / "report.json").is_file()
+
+
+@pytest.mark.parametrize("producer", ["delivered", "copied"])
+@pytest.mark.parametrize("count", [1, 4])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "missing",
+        "duplicate",
+        "duplicate-nodeid",
+        "failed",
+        "interrupted",
+        "internal-errors",
+        "collected-count-mismatch",
+        "zero-collected",
+    ],
+)
+def test_host_controller_settlement_requires_every_participating_item_teardown(
+    capsys, count, fault, producer
+):
+    from types import SimpleNamespace
+    from typing import Any
+
+    from host_tests.support import Outcomes
+    from tests import host_expectation_support as fixture
+
+    outcomes = Outcomes()
+    if producer == "copied":
+        plugins: list[tuple[Outcomes, str]] = []
+        namespace: dict[str, Any] = {"__file__": str(h.ROOT / "host_tests/conftest.py")}
+        exec(compile(fixture.CONFTEST, "copied-conftest.py", "exec"), namespace)
+        namespace["pytest_configure"](
+            SimpleNamespace(
+                pluginmanager=SimpleNamespace(
+                    register=lambda plugin, name: plugins.append((plugin, name))
+                )
+            )
+        )
+        assert len(plugins) == 1
+        outcomes, name = plugins[0]
+        assert type(outcomes) is Outcomes and name == "fixture-outcomes"
+        assert "host_tests/support.py" in fixture.COPIED_SUPPORT
+    collected = count
+    outcomes.reports = [
+        {"nodeid": f"test_{i}", "when": "teardown", "outcome": "passed"}
+        for i in range(count)
+    ]
+    if fault == "missing":
+        outcomes.reports.pop()
+    if fault in {"duplicate", "duplicate-nodeid"}:
+        outcomes.reports.append(outcomes.reports[0])
+        if fault == "duplicate-nodeid":
+            collected += 1
+    if fault == "zero-collected":
+        collected = 0
+        outcomes.reports.clear()
+    if fault == "collected-count-mismatch":
+        collected += 1
+    if fault == "internal-errors":
+        outcomes.internal_errors.append("controller error")
+    if fault == "failed":
+        outcomes.reports[0]["outcome"] = "failed"
+    outcomes.interrupted = fault == "interrupted"
+    outcomes.pytest_sessionfinish(
+        SimpleNamespace(
+            config=SimpleNamespace(), testscollected=collected, exitstatus=0
+        ),
+        0,
+    )
+    value = json.loads(
+        capsys.readouterr().out.strip().removeprefix("FIXTURE_OUTCOMES=")
+    )
+    assert value["cleanup_complete"] is (fault == "none")
+
+
+@pytest.mark.sleepy
+@pytest.mark.parametrize(
+    "mode", ["combined", "normal-input", "prerequisite", "release", "interrupt"]
+)
+def test_delivered_integration_rejects_faults_without_execution_or_loader_doubles(
+    tmp_path, admission, mode
+):
+    import time
+
+    from tests import host_integration_faults as faults
+    from tests import host_integration_support as integration
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    with admission.shared_pool.acquire(deadline=time.monotonic() + 120):
+        prepared = integration.prepare(
+            tmp_path,
+            docker_fault="unrelated"
+            if mode == "combined"
+            else "prerequisite"
+            if mode == "prerequisite"
+            else None,
+        )
+        retained = tmp_path / "retained-results"
+        retained.mkdir()
+        ledger = results.ResultsLedger(
+            prepared["base"],
+            retained,
+            disposable_venv_profiles=(*core.CASES, "normal"),
+            quiescence=lambda: integration.require_quiescence(prepared),
+        )
+        prepared["_results_ledger"] = ledger
+        try:
+            operation, observed, _, names = core.invoke(
+                prepared,
+                substitute=False,
+                environment=integration.environment(prepared),
+                probe_setup=faults.setup(mode, prepared),
+            )
+            assert operation["status"] == (-2 if mode == "interrupt" else 1), operation
+            assert (
+                observed["cwd_restored"]
+                and observed["environment_restored"]
+                and observed["logging_restored"]
+            )
+            assert observed["legs"] == [] and len(observed["leg_states"]) == 5
+            for state in observed["leg_states"]:
+                assert state["globals_restored"]
+                assert state["candidate_before"] == state["candidate_after"]
+            assert len(names) == 1
+            run = prepared["base"] / names[0]
+            report = p.load(run / "report.json")
+            assert report["success"] is False and report["first_unexpected_status"] == 1
+            assert report["state"] == ("incomplete" if mode == "interrupt" else "final")
+            assert [row["case_id"] for row in report["call_outcomes"]] == [
+                *core.CASES,
+                None,
+            ]
+            events = set(observed["fault_events"])
+            assert (
+                events
+                == {
+                    "combined": {
+                        "invalid-input",
+                        "missing-assertions",
+                        "mutated-assertions",
+                        "missing-proof",
+                    },
+                    "normal-input": {"normal-input"},
+                    "prerequisite": {"prerequisite"},
+                    "release": {"pipe-release"},
+                    "interrupt": {"publication-interruption"},
+                }[mode]
+            )
+            if mode == "combined":
+                assert [row["outcome"] for row in report["call_outcomes"]] == [
+                    "raised",
+                    "raised",
+                    "raised",
+                    "returned",
+                    "raised",
+                ]
+                assert len(report["legs"]) == 1
+                assert report["legs"][0]["case_id"] == "cleanup"
+                assert report["legs"][0]["pytest_status"] == 1
+                assert report["legs"][0]["detected"] is False
+                assert report["legs"][0]["failure_kind"] == "invalid-observation/setup"
+                for case in core.CASES[:3]:
+                    assert not (run / case / "workspace/venv").exists()
+                normal = p.load(run / "normal/evidence/report.json")
+                assert normal["pytest_status"] == 0 and normal["counts"]["passed"] == 4
+                assert normal["success"] is False
+            else:
+                assert len(report["legs"]) == 4
+                assert all(
+                    row["detected"] and row["pytest_status"] == 1
+                    for row in report["legs"]
+                )
+                assert report["call_outcomes"][-1]["outcome"] == "raised"
+            normal = p.load(run / "normal/evidence/report.json")
+            if mode == "normal-input":
+                assert not (run / "normal/workspace/venv").exists()
+                assert (
+                    "unexpected prepared host input"
+                    in report["call_outcomes"][-1]["diagnostic"]
+                )
+            if mode == "prerequisite":
+                assert any(
+                    row["argv"] == ["docker", "--version"] and row["status"] == 23
+                    for row in normal["commands"]
+                )
+                assert normal["pytest_status"] is None and normal["success"] is False
+            if mode == "release":
+                assert (
+                    normal["cleanup_complete"] is False and normal["success"] is False
+                )
+                assert any(
+                    "injected pytest pipe sole-close failure after release" in warning
+                    for warning in normal["warnings"]
+                )
+                # Settlement is separate from successful release/domain work.
+                assert any(
+                    "pytest" in row["argv"]
+                    and row["status"] == 0
+                    and row["cleanup_complete"] is True
+                    for row in normal["commands"]
+                )
+            if mode == "interrupt":
+                assert observed["publication_interruption_preserved"]
+                assert observed["error"]["type"] == "KeyboardInterrupt"
+                assert (
+                    normal["pytest_status"] == 0 and normal["cleanup_complete"] is True
+                )
+        finally:
+            core.reconcile_reservations(prepared, ledger)
+            assert core.snapshot_candidate() == prepared["profile"]["candidate_before"]
+        assert results.inventory(prepared["base"]) == ledger.before
+        assert p.load(retained / "reconciled.json")["complete"] is True
+        assert p.load(retained / "retained" / names[0] / "report.json") == report
 
 
 @pytest.mark.sleepy

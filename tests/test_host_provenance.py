@@ -28,6 +28,142 @@ def runner():
     return module
 
 
+@pytest.mark.parametrize(
+    "fault", [None, "interpreter", "arguments", "extra-shell", "extra-python"]
+)
+@pytest.mark.parametrize(
+    "interpreter",
+    [
+        "/external/very-long-" + "x" * 160 + "/bin/python",
+        "/external/space and 'quote/venv/bin/python",
+    ],
+)
+def test_bound_uv_long_shebang_trampoline(runner, fault, interpreter):
+    import ast
+
+    from tests import mcp_server_child as bootstrap
+
+    quoted = "'" + interpreter.replace("'", "'\"'\"'") + "'"
+    prefix = ("#!/bin/sh\n'''exec' " + quoted + ' "$0" "$@"\n' + "' '''\n").encode()
+    body = runner._LAUNCHER.encode()
+    data = prefix + body
+    if fault == "interpreter":
+        data = data.replace(quoted.encode(), b"'/ambient/python'")
+    elif fault == "arguments":
+        data = data.replace(b'"$@"', b'"$*"')
+    elif fault == "extra-shell":
+        data = data.replace(b"#!/bin/sh\n", b"#!/bin/sh\necho injected\n")
+    elif fault == "extra-python":
+        data += b"print('injected')\n"
+    expected = ast.dump(ast.parse(body))
+    for normalize in (runner._launcher_body, bootstrap.launcher_body):
+        if fault in {"interpreter", "arguments", "extra-shell"}:
+            with pytest.raises(ValueError, match="launcher semantics"):
+                normalize(data, interpreter)
+        else:
+            assert (ast.dump(ast.parse(normalize(data, interpreter))) == expected) is (
+                fault is None
+            )
+        assert normalize(body, interpreter) == body
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "operation-close", "close", "interruption-close"]
+)
+def test_worker_artifact_discovery_sole_owner_matrix(
+    tmp_path, runner, monkeypatch, fault
+):
+    from types import SimpleNamespace
+
+    for token in ("a", "b"):
+        (tmp_path / ("host-runs-" + token * 32)).mkdir()
+    workspace = SimpleNamespace(
+        directory=tmp_path,
+        ops=runner.PosixDescriptorOps(),
+        host_context={"pytest_workers": 2},
+    )
+    opened, closed = [], []
+    original_open = runner.DirectoryDescriptor.open_secure_path
+    original_close = runner.DirectoryDescriptor.close
+    original_names = runner.DirectoryDescriptor.list_names
+    primary = (
+        KeyboardInterrupt("discovery interrupted")
+        if fault == "interruption-close"
+        else OSError("discovery failed")
+    )
+    secondary = OSError("discovery close failed")
+
+    def opening(ops, path):
+        owner = original_open(ops, path)
+        opened.append(owner)
+        return owner
+
+    def names(owner):
+        if fault in {"operation-close", "interruption-close"}:
+            raise primary
+        return original_names(owner)
+
+    def closing(owner):
+        if owner in opened and not owner.released:
+            closed.append(owner)
+            original_close(owner)
+            if fault is not None:
+                raise secondary
+        else:
+            original_close(owner)
+
+    monkeypatch.setattr(
+        runner.DirectoryDescriptor, "open_secure_path", staticmethod(opening)
+    )
+    monkeypatch.setattr(runner.DirectoryDescriptor, "list_names", names)
+    monkeypatch.setattr(runner.DirectoryDescriptor, "close", closing)
+    if fault is None:
+        paths = runner._flow_artifacts(workspace, "provenance.json")
+        assert len(paths) == len(set(paths)) == 2
+    else:
+        with pytest.raises(BaseException) as caught:
+            runner._flow_artifacts(workspace, "provenance.json")
+        assert caught.value is (secondary if fault == "close" else primary)
+    assert len(opened) == len(closed) == 1
+    opened[0].close()
+    assert len(closed) == 1
+
+
+@pytest.mark.parametrize("fault", ["missing", "changed", "symlink"])
+def test_each_worker_provenance_is_required_and_unsafe_roots_fail_closed(
+    tmp_path, runner, monkeypatch, fault
+):
+    from types import SimpleNamespace
+
+    roots = [tmp_path / ("host-runs-" + token * 32) for token in ("a", "b")]
+    for root in roots:
+        root.mkdir()
+    if fault == "symlink":
+        roots[1].rmdir()
+        roots[1].symlink_to(roots[0])
+    workspace = SimpleNamespace(
+        directory=tmp_path,
+        ops=runner.PosixDescriptorOps(),
+        host_context={"pytest_workers": 2},
+    )
+    calls = []
+
+    def verify(owner, path):
+        calls.append(path)
+        if path.parent == roots[1]:
+            raise ValueError(
+                "missing worker evidence"
+                if fault == "missing"
+                else "changed worker evidence"
+            )
+
+    monkeypatch.setattr(runner, "_verified_evidence_file", verify)
+    with pytest.raises(ValueError, match="worker evidence|unsafe host flow root"):
+        runner._verified_evidence(workspace)
+    assert not hasattr(workspace, "verified_evidence_paths")
+    assert len(calls) == (0 if fault == "symlink" else 2)
+
+
 @pytest.fixture
 def workspace(tmp_path, runner, _mcp_worker_wheel, admission):
     root = tmp_path / "source"

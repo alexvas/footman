@@ -127,6 +127,7 @@ assert c.read(Path(record['stderr_path'])) == b'synthetic stderr'
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("branch", ["read", "write", "inventory", "publish", "mkdir"])
 @pytest.mark.parametrize(
     "fault", ["operation", "operation-close", "close", "interrupt", "interrupt-close"]
@@ -315,6 +316,7 @@ assert c.read(cache) == {bytecode!r}
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "declaration",
     [
@@ -715,6 +717,7 @@ OwnedProcess.__exit__ = exit
     accounted_invoke(prepared, check, probe_setup=setup)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "case,stage",
     [

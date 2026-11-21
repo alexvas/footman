@@ -403,6 +403,7 @@ def test_action_fault_precedence_independent_cleanup_and_repeat(
     assert len(result.failures) == len({id(f.error) for f in result.failures})
 
 
+@pytest.mark.sleepy
 def test_pending_action_retains_owner_and_late_error_is_observation_only(api):
     action = Action(api, pending=True)
     owner = launch(api, plan(api, action))
@@ -795,6 +796,7 @@ class Helper(Action):
         # Nonblocking: the helper's own configured deadline drives cleanup.
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("code", ["import time; time.sleep(10)", "raise SystemExit(7)"])
 @pytest.mark.real_process_time
 def test_real_pipe_helper_drain_and_fallback(api, code):
@@ -827,6 +829,7 @@ def test_real_pipe_helper_drain_and_fallback(api, code):
             helper.owner.wait_cleanup(1)
 
 
+@pytest.mark.sleepy
 @pytest.mark.real_process_time
 def test_drain_without_consumer_does_not_stall_full_spool(api):
     action = Action(api)
@@ -847,6 +850,7 @@ def test_drain_without_consumer_does_not_stall_full_spool(api):
     assert not workers()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fault", ["startup", "reader"])
 @pytest.mark.real_process_time
 def test_real_pipe_faults_keep_reader_barrier_and_independent_action(api, fault):

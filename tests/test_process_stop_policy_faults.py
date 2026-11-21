@@ -32,6 +32,7 @@ def authority(result):
     return result.failures[0].error if result.failures else None
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("boundary", ["start", "observe", "cancel"])
 @pytest.mark.parametrize("kind", [OSError, RuntimeError, KeyboardInterrupt])
 def test_each_action_boundary_preserves_primary_and_independent_release(
@@ -423,6 +424,7 @@ def test_prepare_interruption_and_independent_cleanup_defect(api):
     assert not workers()
 
 
+@pytest.mark.sleepy
 def test_failed_readiness_retains_pending_prepared_resources(api):
     error = OSError("readiness")
     action = Action(api, pending=True, prepare_error=error)
@@ -502,6 +504,7 @@ def test_live_reader_and_pending_action_keep_exact_owners(api, process_stage_pau
     assert not workers()
 
 
+@pytest.mark.sleepy
 def test_action_done_and_resource_completion_are_both_required(api):
     action = Action(api)
     settled = threading.Event()
@@ -523,6 +526,7 @@ def test_action_done_and_resource_completion_are_both_required(api):
     assert not workers()
 
 
+@pytest.mark.sleepy
 def test_late_action_interruption_preserves_delivered_error_and_diagnostics(api):
     ordinary = OSError("control failure")
     action = Action(api, pending=True, error=ordinary)
@@ -547,6 +551,7 @@ def test_late_action_interruption_preserves_delivered_error_and_diagnostics(api)
     assert not workers()
 
 
+@pytest.mark.sleepy
 @pytest.mark.real_process_time
 def test_real_descendant_pipe_deadline_race_and_unrelated_descriptor(api):
     ops, label = PosixDescriptorOps(), "unrelated descriptor"

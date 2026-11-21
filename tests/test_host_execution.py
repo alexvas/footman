@@ -55,6 +55,7 @@ def test_host_fixture_stages_disposable_bytes_modes_and_real_symlink(
         assert before.complete and not before.failures and owner.shutdown() == before
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
 def test_host_command_collector_and_pipe_release_authority(
     tmp_path, monkeypatch, fault

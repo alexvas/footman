@@ -5,16 +5,26 @@
 Run the whole gate from the repository root with `scripts/check-green`. It runs
 the Ruff lint, Ruff format, syntax-compilation and type checks recorded in
 [python-checks.md](python-checks.md), then the mandated full-suite parallel
-pytest command below. All four fast checks (Ruff lint, Ruff format,
+pytest groups below, executed sequentially. All four fast checks (Ruff lint, Ruff format,
 syntax compilation and ty) run even if an earlier fast check fails. The gate
 keeps the first failing status and stops before pytest if any fast check fails,
 including missing status or incomplete process cleanup. Only a successful fast
 block permits the complete pytest suite to run. A failed fast block is an
 unsuccessful G; tests not run have no passing verification. The gate accepts no
-scope or fix arguments. `GREEN_CHECKS_WORKERS` changes only the pytest worker count (an
-integer from 1 to 1024); it never narrows the suite or the other checks.
-`tests/test_green_gate.py` pins that plan, the worker range and the preserved
-statuses.
+scope or fix arguments. Group allocations are fixed: `auto`, `8`, `8`;
+`GREEN_CHECKS_WORKERS` is ignored. Stop at the first nonzero group
+status and preserve it. Retain one complete combined stdout/stderr log for G,
+including its `G-record` JSON start/end delimiters. Each record identifies the
+check, group (1–3 for pytest; null for fast checks), and shell-quoted re-runnable
+command. End records contain the raw child status, cleanup `clean` state and
+lifecycle failures. An exception records unknown status/cleanup as null and is
+re-raised; this is not passing verification. Also retain the overall gate exit
+status. Groups without start records were not run; a start without an end is
+incomplete evidence. Record later groups as not run. G passes only when all three groups pass, with no skips, xfails or xpasses.
+Any nonzero status, including no tests collected, is unsuccessful verification.
+
+`scripts/green_checks.py` implements this plan. Regression tests compare its
+group commands with this guide rather than maintaining separate allocations.
 
 After changing Python code, format production, host support, tests and scripts
 before running G:
@@ -51,21 +61,21 @@ phase completion.
 
 ## Working schedule: gate plus specialised suites
 
-When validation requires both G and the delivered phase suites and the machine
-has **at least 32 available logical CPUs**, the working schedule is **budgeted
-parallel execution**, not gate followed by every suite. Count CPUs available to
-the process, respecting affinity and container CPU quotas; a host-wide CPU count
-alone is insufficient. Use this schedule only if both the available logical CPU
-count and any effective CPU quota provide at least 32 CPUs. If capacity is below
-32 or cannot be established, run the gate and then the required specialised
-commands sequentially by default. Keep the registered per-command worker counts
-in either mode. Run from the repository root against one unchanged candidate:
+**Current grouped-G scheduling:** run all three G groups and their owned cleanup
+to settlement before starting specialised suites. Group 1 uses automatic
+worker selection, so the historical fixed eight-worker G budget below no longer
+justifies overlap. Keep specialised commands and their shared eight-worker queue
+unchanged, including the Phase-11 real-base exclusivity rule.
 
-- Start the unscoped gate with its own eight-worker allocation. Set
-  `GREEN_CHECKS_WORKERS=8` explicitly if the inherited environment might override
-  the default; do not add scope or fix arguments to `scripts/check-green`.
-- Independently schedule the required specialised commands below with a **shared
-  budget of eight workers**. Use each command exactly as registered, including
+Run from the repository root against one unchanged candidate. Count CPUs
+available to the process, respecting affinity and container CPU quotas;
+a host-wide CPU count alone is insufficient for capacity planning.
+
+- Run the unscoped grouped gate first; do not add scope or fix arguments.
+- After G and its cleanup settle, schedule required specialised commands below
+  with a **shared budget of eight workers** if both available logical CPUs and
+  effective CPU quota provide at least 32 CPUs. For lower or unknown capacity,
+  run specialised commands sequentially with their registered worker counts. Use each command exactly as registered, including
   its worker count and `--dist worksteal`; do not combine or deduplicate commands.
 - Scan the following queue in order. Start a command when its entire worker
   allocation fits the remaining specialised budget; a later, smaller command
@@ -114,10 +124,10 @@ Historical Phase-10 validation covers eleven commands
 (through queue priority 11), without a dependency on the later Phase-11 suite.
 The historical Phase-9 validation set contains ten commands (through queue
 priority 10), without a dependency on the later Phase-10 suite.
-Thus results, snapshot and launcher can initially run alongside the
-gate: specialised allocation 1 + 1 + 6, plus the gate's separate 8. The limit
-of 16 is a count of top-level xdist workers, **not** a limit on all OS processes:
-pytest controllers, check tools and test-owned child processes are additional.
+After G settles, results, snapshot and launcher can initially run together
+under the specialised budget: allocation 1 + 1 + 6. The eight-worker budget
+counts top-level xdist workers, **not** all OS processes: pytest controllers,
+check tools and test-owned child processes are additional.
 For narrower phase work, schedule only suites required by that phase; this does
 not waive any earlier-suite or full-gate requirement. Add future delivered suites
 to this scheduling policy when their commands are registered.
@@ -126,7 +136,7 @@ Keep independent complete stdout/stderr logs, command/start/end observations
 and actual exit statuses for every invocation. Attempt every independently
 required invocation and retain the first observed failing status as well as all
 individual statuses. Inside G, run all fast checks but do not start its pytest
-command after a failed fast block. That boundary does not waive separately
+groups after a failed fast block; stop subsequent groups after a group failure. That boundary does not waive separately
 required specialised invocations. Record tests not run as not run, not passing;
 and wait for every launched command and owned cleanup before declaring the
 combined run complete. An unsettled cleanup is a failure, not free capacity for
@@ -138,17 +148,18 @@ Use the existing process/filesystem ownership contracts in any orchestration
 helper. The queue is a scheduling policy, not a new committed runner; do not
 depend on a machine-local ephemeral benchmark script to run project checks.
 
-The policy was selected from three rotated measurements per mode on a Linux
+The historical concurrent gate-plus-suites policy was selected from three rotated measurements per mode on a Linux
 development machine with 32 available logical CPUs: median combined wall time
 was 111.67 s for gate then sequential suites, 85.27 s for gate plus a sequential
 suite branch, and 28.44 s for this budgeted schedule. All commands passed. These
 are historical **loadfile** performance observations, predating worksteal
 adoption and the change from two to eight workers for specialised commands,
 not current verification or a guarantee for the current worker allocations,
-worksteal or different I/O loads. The admission budgets are retained; future timings must name the scheduler
-actually used. The automatic working-policy choice is limited to the
-32-or-more-available-CPU condition above; lower or unknown capacity uses the
-sequential fallback, not an unmeasured concurrent default. Do not silently change
+worksteal or different I/O loads. These measurements do not authorize overlap
+with the current grouped gate. The specialised budget is retained; future timings
+must name the scheduler actually used. Only the post-G specialised queue may
+run concurrently under the 32-or-more-available-CPU condition above; lower or
+unknown capacity uses the sequential fallback. Do not silently change
 registered commands or drop required checks. Concurrent invocations deliberately
 repeat coverage and must keep their fixture-owned mutable state isolated.
 
@@ -159,21 +170,29 @@ Run from the repository root:
 
 ```sh
 uv sync --extra dev --locked
-.venv/bin/python -m pytest tests -n 8 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests -m 'not sleepy and not auto_stress' -n auto --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests -m 'auto_stress' -n 8 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests -m 'sleepy and not auto_stress' -n 8 --dist worksteal --tb=short -q
 uv build
 uv run --locked footman --help
 uv run --locked python -m footman --help
 scripts/check-green
 ```
 
-The pytest command is the mandated full-suite run: `pytest-xdist` uses
-`--dist worksteal` across eight workers and redistributes pending tests from
-busier workers. Tests from one file may execute in different processes;
+The three pytest commands form the mandated full-suite run, in order. Run each
+only after its predecessor succeeds; the prerequisite command block above is
+not a shell fail-fast runner. Group 1 contains neither marker, group 2 contains
+all `auto_stress` tests (including those also marked `sleepy`), and group 3
+contains `sleepy` tests without `auto_stress`. Thus every test belongs to exactly
+one group. Marker deselections are intentional partitioning, not skipped tests
+or permission to omit a group. `pytest-xdist` uses `--dist worksteal` with
+`auto`, eight and eight workers respectively and redistributes pending tests
+from busier workers. Tests from one file may execute in different processes;
 module/session fixtures may therefore initialize once in each participating
 worker. Do not rely on file-wide worker affinity, mutable module globals shared
 between tests, or a session fixture being globally unique. Keep mutable resources
 fixture-owned and isolated per worker/request, and synchronize only through
-explicitly owned interfaces. Use this command, not a serial or narrowed variant,
+explicitly owned interfaces. Use all three commands, not a serial or narrowed variant,
 for G; `docs/python-checks.md` records the parallelism rules and gate entry points.
 The [worksteal adoption record](testing-worksteal.md) preserves the historical
 1000-run validation, CPU observations and deferred I/O investigation. If a task explicitly requires a serial `unittest
@@ -684,7 +703,8 @@ unprivileged-user prerequisites as Phase 10:
 This module covers synthetic proc ownership, PID reuse, narrow leaf-open
 disappearance and independent/repeated cleanup failure authority. It is required
 for current observer-repair verification alongside the original Phase-10 suite
-and the unscoped gate, with its own eight-worker allocation at queue priority 13.
+and the grouped unscoped gate. Run this standalone suite after G settles,
+at queue priority 13 under the specialised eight-worker budget.
 It is not part of the historical Phase-10 registration or validation counts.
 
 ## Phase 10 integrated acceptance and portability suite
@@ -1012,8 +1032,8 @@ settings and select only the explicit node:
 .venv/bin/python -m pytest 'tests/test_dispatch_acceptance.py::test_relocated_helper_loss_reconciliation[lifetime]' -n 8 --dist worksteal --tb=short -q
 ```
 
-Compare this with repeated executions of the exact full eight-worker development
-command registered above, not merely the narrower eight-worker Phase-10 module. Each repeat
+Compare this with repeated executions of all three development G groups
+registered above, not merely the narrower eight-worker Phase-10 module. Each repeat
 is a separate invocation with full output, actual exit status and worker-local
 fixture resources. Give every invocation its own exclusively created, short
 `PYTEST_DEBUG_TEMPROOT` parent (for example `/tmp/fpd-<id>/r01`); do not reuse it
@@ -2043,14 +2063,43 @@ the thirteen-row scheduling queue or existing worker allocations.
 .venv/bin/python -m pytest tests/test_admission_pool.py -n 1 --dist worksteal --tb=short -q
 ```
 
+## Future improvements to grouped G
+
+- **Marker classification guards and maintenance.** Tests own their classification
+  through standard pytest markers: `@pytest.mark.sleepy` applies to the entire
+  function (all parameters), while `pytest.param(..., marks=pytest.mark.sleepy)`
+  applies to selected parameters of an otherwise unmarked function. Markers add;
+  a parameter cannot remove a function-level marker. The former node-ID inventory
+  and collection marking hook have been removed. Contributors changing tests
+  should review their markers alongside the code; renames retain decorators.
+  Migration placed function decorators on all 131 formerly listed functions,
+  preserving the exact node-ID membership of all three groups. Future guards
+  should verify the documented marker expressions partition real collection
+  disjointly and exhaustively and include negative controls demonstrating that
+  removing markers changes membership. These permanent guards remain planned
+  coverage, not current verification.
+- **Quota-aware automatic workers and capacity evidence.** Group 1 uses xdist
+  `auto`, not the admission resolver's quota-aware capacity decision. Installed
+  xdist 3.8.0 without psutil normally respects `sched_getaffinity`, but does not
+  account for cgroup CPU quota; psutil and `PYTEST_XDIST_AUTO_NUM_WORKERS` can
+  change selection. Admission still bounds protected heavy regions by K, not
+  the total worker population. Workers may greatly exceed K under CPU quotas,
+  causing queues inside unchanged original deadlines; on unrestricted machines
+  both worker count and K may exceed the former eight-worker peak. Future work
+  should align automatic selection with the quota-aware capacity view and record
+  each group's resolved worker count and `CapacityDecision` reason in evidence.
+  Current G records command/status/cleanup, not these capacity observations;
+  a successful run on one machine does not establish quota-constrained safety.
+
 ## Future implementation
 
 Follow the change's RED → GREEN → INTROSPECT → VALIDATE phase gates. Register each
 new phase suite's exact command here before recording RED. Phase suites may
 select narrower test paths but do not replace the mandated full-suite G run.
 Every fenced pytest suite command must include `-n <N>` (an integer from 1
-through 1024) and `--dist worksteal`, with no disabled xdist or alternate worker
-count override. Document the exact mandated full-suite command once; additional
+through 1024, or `auto` for G group 1) and `--dist worksteal`, with no disabled
+xdist or alternate worker count override. Document each mandated group command
+once; additional
 parallel phase-suite examples are allowed. There is no fence-label bypass for
 serial commands. Intentionally serial policy probes remain in test code, not
 verification-suite examples. See `docs/python-checks.md` for the same contract.

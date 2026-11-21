@@ -121,6 +121,7 @@ def test_shared_safe_retention_is_not_runtime_success(fault):
     assert manifest == before
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "kind, mode, fault",
     [
@@ -374,6 +375,7 @@ def test_fixture_path_reconciliation_unlinks_not_follows_sentinel(tmp_path):
     assert p.read(sentinel / "keep") == b"untouched"
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
 def test_retained_run_output_handoff_has_one_release_authority(
     tmp_path, monkeypatch, fault
@@ -466,6 +468,7 @@ def test_cleanup_observation_retention_cannot_replace_active_failure(
     assert not boundary.live_sentinel
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
 def test_docker_scope_handoff_preserves_failure_and_independent_settlement(
     tmp_path, monkeypatch, fault
@@ -603,6 +606,7 @@ def test_allowlisted_deletion_failure_has_terminal_owners(tmp_path, monkeypatch,
     assert p.read(sentinel / "keep") == b"untouched"
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "fault",
     ["wrong-rm", "wrong-list", "nonzero", "read-failed", "nonempty", "extra-field"],
@@ -699,6 +703,7 @@ def test_host_flow_safe_retention_exception_requires_verified_reconciliation(
             flow.finish()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("publication", ["operation", "interruption"])
 def test_cleanup_summary_publication_failure_remains_unsuccessful_and_once_only(
     tmp_path, monkeypatch, publication
@@ -751,6 +756,7 @@ def test_missing_sentinel_identity_is_unresolved_and_never_guessed(
     assert summary["sentinel_path_removed"]
 
 
+@pytest.mark.sleepy
 def test_observer_spending_cannot_renew_original_helper_budget(tmp_path, monkeypatch):
     import time
     from types import SimpleNamespace
@@ -803,6 +809,7 @@ def test_sentinel_must_remain_running_not_merely_listed(tmp_path, monkeypatch):
     assert not boundary.live_sentinel and producer.sentinel_tree.removed
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("kind", ["ORDINARY", "UNEXPECTED"])
 def test_settled_owner_failure_does_not_suppress_independent_domain_reconciliation(
     tmp_path, monkeypatch, kind

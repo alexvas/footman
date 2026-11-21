@@ -3,8 +3,10 @@
 Read and follow [docs/testing.md](docs/testing.md) for testing instructions.
 Run `scripts/check-green` from the repository root on the final candidate state;
 it runs the Ruff lint, Ruff format, syntax-compilation and `ty` checks over one
-deterministic Python inventory, then the mandated full-suite parallel pytest
-command. After Python code changes, format production, host support, tests and
+deterministic Python inventory, then the three mandated full-suite parallel
+pytest groups sequentially (`auto`, `8`, `8` workers). Stop pytest groups at the
+first failure and retain one complete gate log with command/status/cleanup
+records plus the overall exit status. After Python code changes, format production, host support, tests and
 scripts with Ruff before G; formatting is a separate write step, never part of G.
 Attempt all four fast checks even after a failure, preserve the first failing
 status, and do not launch pytest unless the entire fast block passes. A failed

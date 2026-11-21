@@ -10,6 +10,7 @@ that runs it, and ``docs/python-checks.md`` records the commanded scope.
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import shlex
 import shutil
@@ -27,24 +28,31 @@ from tests.python_check_fixtures import (
     write_source,
 )
 
+
+def documented_groups(text):
+    """Read runnable full-suite commands; documentation owns allocations."""
+    return tuple(
+        tuple(argv)
+        for body in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S)
+        for line in body.splitlines()
+        if (argv := shlex.split(line))[:4]
+        == [".venv/bin/python", "-m", "pytest", "tests"]
+    )
+
+
 EXPECTED_COMMANDS = (
     ("scripts/check-python-lint",),
     ("scripts/check-python-format",),
     ("scripts/check-python-compile",),
     ("scripts/check-types",),
-    (
-        ".venv/bin/python",
-        "-m",
-        "pytest",
-        "tests",
-        "-n",
-        "8",
-        "--dist",
-        "worksteal",
-        "--tb=short",
-        "-q",
-    ),
+    *documented_groups((REPO_ROOT / "docs/testing.md").read_text()),
 )
+
+
+def gate_examples():
+    return "\n".join(shlex.join(command) for command in EXPECTED_COMMANDS[4:])
+
+
 ENTRY_POINTS = (
     "check-green",
     "check-python-lint",
@@ -73,8 +81,9 @@ DOCUMENTED_GATE_PATHS = ("docs/testing.md", "docs/python-checks.md", "README.md"
 
 
 def assert_documented_suite(text):
-    command = " ".join(EXPECTED_COMMANDS[-1])
-    assert text.count(command) == 1, "document the exact full-suite command once"
+    assert documented_groups(text) == EXPECTED_COMMANDS[4:], (
+        "document each full-suite group exactly once in the registered order"
+    )
     # Runnable phase-suite examples may narrow scope, but remain parallel.
     # Prose describing intentionally serial policy probes is not a suite command.
     for body in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S):
@@ -114,8 +123,11 @@ def assert_documented_suite(text):
                     distributions.append(value)
                 index += 1
             assert len(workers) == 1, "use exactly one parallel worker setting"
-            assert workers[0].isascii() and workers[0].isdecimal()
-            assert 1 <= int(workers[0]) <= 1024
+            assert workers[0] == "auto" or (
+                workers[0].isascii()
+                and workers[0].isdecimal()
+                and 1 <= int(workers[0]) <= 1024
+            )
             assert distributions == ["worksteal"], "use exactly one worksteal setting"
             assert not any("no:xdist" in arg for arg in args)
 
@@ -154,7 +166,7 @@ def assert_registered_suite(text, modules):
 @pytest.mark.parametrize("workers", [1, 2, 8, 16, 32])
 @pytest.mark.parametrize("spelling", ["-n {}", "-n{}", "-n={}"])
 def test_registered_suite_observes_documented_worker_allocation(workers, spelling):
-    gate = " ".join(EXPECTED_COMMANDS[-1])
+    gate = gate_examples()
     phase = (
         ".venv/bin/python -m pytest tests/test_scaffold.py "
         f"{spelling.format(workers)} --dist=worksteal --tb=short -q"
@@ -168,7 +180,7 @@ def test_registered_suite_observes_documented_worker_allocation(workers, spellin
     ["missing", "duplicate", "extra-module", "filtered", "wrong-module", "prose"],
 )
 def test_registered_suite_still_requires_one_complete_runnable_scope(mutation):
-    gate = " ".join(EXPECTED_COMMANDS[-1])
+    gate = gate_examples()
     phase = (
         ".venv/bin/python -m pytest tests/test_scaffold.py "
         "-n 16 --dist worksteal --tb=short -q"
@@ -208,15 +220,9 @@ def test_instruction_referenced_testing_guides_exist(relative):
         assert relative in tasks.read_text()
 
 
-def test_documented_worker_override_matches_gate_contract():
-    text = " ".join((REPO_ROOT / "docs/python-checks.md").read_text().split())
-    assert "`scripts/check-green` uses eight workers by default." in text
-    assert (
-        "`GREEN_CHECKS_WORKERS` changes only the pytest parallelism, never the suite "
-        "or the other checks, and accepts any integer from `1` through `1024`; "
-        "an invalid value fails before any check runs:"
-    ) in text
-    assert "GREEN_CHECKS_WORKERS=4 scripts/check-green" in text
+def test_command_constants_match_documentation_with_worker_environment_set(monkeypatch):
+    monkeypatch.setenv("GREEN_CHECKS_WORKERS", "1")
+    assert load_gate().COMMANDS == EXPECTED_COMMANDS
 
 
 @pytest.mark.parametrize(
@@ -246,14 +252,14 @@ def test_documentation_command_drift_is_detected(replacement):
     ("-n 8 --dist worksteal", "-n8 --dist=worksteal", "-n=8 --dist=worksteal"),
 )
 def test_parallel_phase_suite_is_allowed(launcher, options):
-    command = " ".join(EXPECTED_COMMANDS[-1])
+    command = gate_examples()
     phase = f"{launcher} tests/test_scaffold.py {options} --tb=short -q"
     assert_documented_suite(f"```sh\n{command}\n{phase}\n```\n")
 
 
 @pytest.mark.parametrize("probe", ("pytest --version", "pytest --help"))
 def test_pure_pytest_tool_probe_is_allowed(probe):
-    command = " ".join(EXPECTED_COMMANDS[-1])
+    command = gate_examples()
     assert_documented_suite(f"```sh\n{command}\n{probe}\n```\n")
 
 
@@ -285,7 +291,7 @@ def test_pure_pytest_tool_probe_is_allowed(probe):
     ),
 )
 def test_direct_and_attached_option_bypasses_are_rejected(launcher, options):
-    command = " ".join(EXPECTED_COMMANDS[-1])
+    command = gate_examples()
     phase = f"{launcher} tests/test_scaffold.py {options}"
     with pytest.raises(AssertionError):
         assert_documented_suite(f"```sh\n{command}\n{phase}\n```\n")
@@ -303,7 +309,7 @@ def test_direct_and_attached_option_bypasses_are_rejected(launcher, options):
     ),
 )
 def test_invalid_phase_suite_is_rejected_even_with_old_escape_hatch(phase):
-    command = " ".join(EXPECTED_COMMANDS[-1])
+    command = gate_examples()
     with pytest.raises(AssertionError):
         assert_documented_suite(
             f"```sh\n{command}\n```\n```sh non-mandated\n{phase}\n```\n"
@@ -311,7 +317,7 @@ def test_invalid_phase_suite_is_rejected_even_with_old_escape_hatch(phase):
 
 
 def test_duplicate_full_suite_example_is_rejected():
-    command = " ".join(EXPECTED_COMMANDS[-1])
+    command = gate_examples()
     with pytest.raises(AssertionError):
         assert_documented_suite(f"```sh\n{command}\n{command}\n```\n")
 
@@ -338,17 +344,12 @@ def test_gate_runs_all_fast_checks_and_stops_before_pytest_on_failure(failed):
         )
 
     assert gate.main(run=run) == 7
-    expected = (
-        EXPECTED_COMMANDS
-        if failed == len(EXPECTED_COMMANDS) - 1
-        else EXPECTED_COMMANDS[:-1]
-    )
+    expected = EXPECTED_COMMANDS[: max(4, failed + 1)]
     assert tuple(calls) == expected
 
 
-@pytest.mark.parametrize("workers", ["1", "2", "3", "8", "16", "1024", "0002"])
 @pytest.mark.parametrize("status", [0, 7])
-def test_worker_counts_preserve_full_scope_and_failure_status(workers, status):
+def test_groups_preserve_full_scope_and_failure_status(status, capsys):
     gate = load_gate()
     checks = load_check_module()
     calls = []
@@ -360,23 +361,24 @@ def test_worker_counts_preserve_full_scope_and_failure_status(workers, status):
         code = status if tuple(argv)[0] == ".venv/bin/python" else 0
         return checks.CommandResult(code, b"", b"", True)
 
-    assert gate.main(run=run, workers=workers) == status
-    expected = list(EXPECTED_COMMANDS[-1])
-    expected[expected.index("-n") + 1] = str(int(workers))
-    assert tuple(calls) == (*EXPECTED_COMMANDS[:-1], tuple(expected))
+    assert gate.main(run=run) == status
+    assert tuple(calls) == (EXPECTED_COMMANDS if status == 0 else EXPECTED_COMMANDS[:5])
     assert gate.COMMANDS == EXPECTED_COMMANDS
-
-
-@pytest.mark.parametrize(
-    "workers",
-    ["", "0", "-1", "1025", "999999999999999999999", "1.5", "auto", "2 --ignore=tests"],
-)
-def test_invalid_worker_counts_fail_before_running_checks(workers, capsys):
-    def unexpected_run(*args, **kwargs):
-        pytest.fail("invalid worker setting must not execute checks")
-
-    assert load_gate().main(run=unexpected_run, workers=workers) == 2
-    assert "must be an integer from 1 to 1024" in capsys.readouterr().err
+    output = capsys.readouterr().out
+    records = [
+        json.loads(line.removeprefix("G-record "))
+        for line in output.splitlines()
+        if line.startswith("G-record ")
+    ]
+    assert len(records) == 2 * len(calls)
+    for index, argv in enumerate(calls):
+        start, end = records[2 * index : 2 * index + 2]
+        assert start["event"] == "start" and end["event"] == "end"
+        assert shlex.split(start["command"]) == list(argv)
+        assert end["command"] == start["command"]
+        assert end["group"] == (index - 3 if index >= 4 else None)
+        assert end["raw_status"] == (status if index >= 4 else 0)
+        assert end["clean"] is True and end["lifecycle_failures"] == []
 
 
 def test_gate_does_not_swallow_interruption():
@@ -427,7 +429,7 @@ def test_fast_failure_keeps_first_status_and_never_runs_slow_checks(
         return checks.CommandResult(9 if index > failed else 0, b"", b"", True)
 
     assert gate.main(run=run) == expected
-    assert tuple(calls) == EXPECTED_COMMANDS[:-1]
+    assert tuple(calls) == EXPECTED_COMMANDS[:4]
     diagnostic = capsys.readouterr().err
     assert "Fast checks failed; pytest was not run." in diagnostic
     if not clean:

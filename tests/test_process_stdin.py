@@ -187,6 +187,7 @@ def test_timeout_validation_preserves_live_owner_and_observation(
     assert owner.capture().stdout == b"valid"
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "data", [None, "text", bytearray(b"bytes"), memoryview(b"bytes"), 1, True]
 )
@@ -235,6 +236,7 @@ def test_short_writes_are_completed_on_caller_thread_with_bounded_slices(child_o
     assert owner.capture().stdout == b"abcdefghijk"
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "error",
     [
@@ -294,6 +296,7 @@ def test_partial_failure_identity_progress_no_retry_and_no_exception_mutation(
     owner.close_stdin(timeout_seconds=1)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("error", [OSError("write failed"), KeyboardInterrupt("stop")])
 def test_waiting_writer_rejects_failed_channel_preserving_observation(
     child_owner, error
@@ -442,6 +445,7 @@ def test_empty_write_rechecks_state_and_deadline_after_gate_wait(fake_launch, st
     assert any(f.error is error.cause for f in owner.cleanup_status.failures)
 
 
+@pytest.mark.sleepy
 def test_backpressure_timeout_has_exact_prefix_and_no_retry():
     owner = process.OwnedProcess.launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -465,6 +469,7 @@ def test_backpressure_timeout_has_exact_prefix_and_no_retry():
     assert not workers()
 
 
+@pytest.mark.sleepy
 def test_eof_request_rejects_even_empty_write_without_replacing_observation(
     child_owner,
 ):
@@ -795,6 +800,7 @@ def test_eof_timeout_retains_owner_no_close_beneath_writer_and_no_new_budget(
     assert child.stdin.attempts == 1
 
 
+@pytest.mark.sleepy
 def test_shutdown_cancels_backpressure_writer_without_close_race():
     owner = process.OwnedProcess.launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -959,6 +965,7 @@ def test_deterministic_same_ident_distinct_thread_objects_never_share_records(
             assert first not in owner._stdin_observations
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("state", ["shutdown", "reap"])
 def test_reap_or_shutdown_reads_do_not_retire_pending_observations(fake_launch, state):
     owner, child = fake_launch()
@@ -1017,6 +1024,7 @@ def test_unexpected_write_defect_is_not_demoted(fake_launch):
     assert match.kind is process.FailureKind.UNEXPECTED
 
 
+@pytest.mark.sleepy
 def test_concurrent_eof_shutdown_close_winner_settles_once(fake_launch):
     owner, child = fake_launch()
     entered, release = threading.Event(), threading.Event()

@@ -224,6 +224,7 @@ def test_manifest_syncs_directory_after_replacement(config, monkeypatch):
         assert manifest.finalized
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fault_type", [OSError, KeyboardInterrupt])
 def test_directory_sync_failure_is_publication_failure(
     config, tmp_path, monkeypatch, fault_type
@@ -450,6 +451,7 @@ def prepared(config, tmp_path, *, status=0, output=None, fault=None):
     return run, sequence, output
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("status", [0, 7, 127])
 def test_dev_exec_status_and_streams_persisted_manifest(config, tmp_path, status):
     run, sequence, output = prepared(config, tmp_path, status=status)
@@ -543,6 +545,7 @@ def test_dev_exec_status_and_streams_persisted_manifest(config, tmp_path, status
     assert set(p.name for p in output.directory.iterdir()) == FILES
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fault", ["timeout", "removal", "storage", "interruption"])
 def test_code_zero_cannot_mask_other_failures(config, tmp_path, monkeypatch, fault):
     run, sequence, output = prepared(config, tmp_path)
@@ -609,6 +612,7 @@ def test_code_zero_cannot_mask_other_failures(config, tmp_path, monkeypatch, fau
     assert json.loads(read_bytes(output.paths["result.json"]))["outcome"] == expected
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("stage", ["startup", "command"])
 def test_launch_acquisition_failure_is_dispatch_failure(config, tmp_path, stage):
     run, sequence, output = prepared(config, tmp_path)
@@ -637,6 +641,7 @@ def test_launch_acquisition_failure_is_dispatch_failure(config, tmp_path, stage)
     assert manifest["return_code"] is None
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("flush_stream", ["stdout.txt", "stderr.txt"])
 def test_write_interruption_survives_flush_failure(
     config, tmp_path, monkeypatch, flush_stream
@@ -678,6 +683,7 @@ def test_write_interruption_survives_flush_failure(
     assert run.command.failure is control
 
 
+@pytest.mark.sleepy
 def test_copy_failure_has_null_command_status_and_pending_records(config, tmp_path):
     run, sequence, output = prepared(config, tmp_path, fault="copy")
     response = run.execute()
@@ -720,6 +726,7 @@ def test_initial_manifest_exists_before_capture_and_interruption_is_unsuccessful
     assert run.response["outcome"] == "interrupted"
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("boundary", ["replace", "write", "close"])
 def test_finalization_failure_cannot_report_success(
     config, tmp_path, monkeypatch, boundary
@@ -762,6 +769,7 @@ def test_finalization_failure_cannot_report_success(
     assert run.manifest.failure is not None
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("close_kind", [OSError, KeyboardInterrupt])
 @pytest.mark.parametrize("prior", [False, True])
 def test_retained_output_close_failure_is_once_only_and_unsuccessful(
@@ -899,6 +907,7 @@ def test_manifest_serialization_failure_is_recorded_and_not_retried(config):
             manifest.finalize({"outcome": "succeeded"})
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "stage", ["initial", "initial_directory", "checkpoint", "known_id", "final"]
 )
@@ -1079,6 +1088,7 @@ def test_publication_error_retains_prior_operation_authority(
     assert not sequence.parameters
 
 
+@pytest.mark.sleepy
 def test_publication_failure_retained_when_directory_release_interrupts(
     config, tmp_path, monkeypatch
 ):

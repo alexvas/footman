@@ -427,6 +427,7 @@ def stalled(api, child, **kw):
     return owner, pipe
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("join_error", [OSError, RuntimeError, KeyboardInterrupt])
 def test_join_failure_cannot_skip_safe_cleanup_and_reap(api, join_error):
     child = Child((None, OSError("sibling")))
@@ -444,6 +445,7 @@ def test_join_failure_cannot_skip_safe_cleanup_and_reap(api, join_error):
     assert pipe.attempts == 1
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("late_error", [None, OSError, RuntimeError, KeyboardInterrupt])
 @pytest.mark.real_process_time
 def test_incomplete_retains_same_owner_and_late_outcome_without_mutation(
@@ -483,6 +485,7 @@ def test_incomplete_retains_same_owner_and_late_outcome_without_mutation(
         assert failure in failure_errors(final)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("active", [False, True])
 def test_incomplete_context_exit_exposes_observation(api, active):
     child = Child()
@@ -503,6 +506,7 @@ def test_incomplete_context_exit_exposes_observation(api, active):
         assert owner.wait_cleanup(1).complete
 
 
+@pytest.mark.sleepy
 def test_failed_launch_exposes_retained_cleanup(api):
     child = Child()
     pipe = StalledPipe()
@@ -536,6 +540,7 @@ def test_failed_launch_exposes_retained_cleanup(api):
                 assert owner.wait_cleanup(1).complete
 
 
+@pytest.mark.sleepy
 def test_reap_failure_is_incomplete_and_does_not_skip_pipes(api):
     child = Child()
     error = OSError("wait")
@@ -586,6 +591,7 @@ def test_real_stream_callbacks_are_isolated_and_receive_only_bytes(api, caplog):
     assert result.lifecycle.complete and not workers()
 
 
+@pytest.mark.sleepy
 @pytest.mark.real_process_time
 def test_real_descendant_held_pipe_and_deadline_are_bounded(api):
     start = time.monotonic()
@@ -602,6 +608,7 @@ def test_real_descendant_held_pipe_and_deadline_are_bounded(api):
     assert result.timed_out and result.returncode is not None and not workers()
 
 
+@pytest.mark.sleepy
 @pytest.mark.real_process_time
 def test_real_partial_startup_and_reader_failure_do_not_corrupt_unrelated_fd(api):
     failure = OSError("reader")
@@ -710,6 +717,7 @@ def test_blocking_close_retains_winning_outcome_without_unbounded_caller_wait(ap
     assert child.stdout.error in failure_errors(final) and not result.complete
 
 
+@pytest.mark.sleepy
 def test_descriptorless_close_unblocks_internal_reader(api):
     child = Child()
     entered, released = threading.Event(), threading.Event()
@@ -743,6 +751,7 @@ def test_both_ordinary_close_failures_retained_once(api):
     assert secondary(first) == []
 
 
+@pytest.mark.sleepy
 def test_no_callbacks_after_incomplete_delivery(api):
     child = Child()
     owner, pipe = stalled(api, child)
@@ -761,6 +770,7 @@ def test_no_callbacks_after_incomplete_delivery(api):
         assert owner.wait_cleanup(1).complete
 
 
+@pytest.mark.sleepy
 @pytest.mark.real_process_time
 def test_real_ignored_termination_transitions_to_kill_without_cleanup_defect(api):
     with real(
@@ -1021,6 +1031,7 @@ def test_primary_merged_between_status_publication_and_phase_completion(
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.real_process_time
 def test_real_deadline_concurrent_shutdown(api):
     owner = real(api, "import time; time.sleep(10)", deadline_seconds=0.05)

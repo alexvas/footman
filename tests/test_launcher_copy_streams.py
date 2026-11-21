@@ -20,6 +20,7 @@ from tests.launcher_support import DockerSequence
 __all__ = ["source"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("stage", [0, 1, 2, 3])
 @pytest.mark.parametrize("status", [1, 125])
 def test_failure_suppresses_downstream_calls(tmp_path, source, stage, status):
@@ -38,6 +39,7 @@ def test_failure_suppresses_downstream_calls(tmp_path, source, stage, status):
     sequence.assert_settled()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "destination", ["/work space/source", "/work:space/source", "/work\nspace/source"]
 )
@@ -81,6 +83,7 @@ def test_summary_raw_prefix_chunk_independent(ending, width):
     assert summary.outcome is ending
 
 
+@pytest.mark.sleepy
 def test_summary_continues_real_drain(tmp_path, source):
     script = steps(source)
     raw = b"https://credential@host\xff" + b"x" * 20000 + b"TRAILING"

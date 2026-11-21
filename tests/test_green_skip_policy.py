@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PARALLEL_ARGS = ("-p", "xdist", "-n", "2", "--dist", "worksteal")
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "source, expected",
     [

@@ -10,8 +10,10 @@ import json
 import os
 import re
 import stat
+import uuid
 from pathlib import Path
 
+from footman.filesystem.cleanup import CleanupFailures
 from footman.filesystem.descriptors import DirectoryDescriptor, OwnedDescriptor
 from footman.filesystem.operations import PosixDescriptorOps
 
@@ -98,13 +100,57 @@ def write(path, data):
 
 
 def write_observation(path, data):
-    """Ephemeral CLI observation: complete exclusive write/close, NOT durable evidence.
+    """Atomically publish an ephemeral observation after its complete write/close.
 
     Keep diagnostic durability barriers out of short native helper allowances.
-    Write/close errors still fail; callers/parents still require complete records.
-    Never use this for verified provenance, lifecycle journals or run evidence.
+    A private sibling is exclusively written and closed before a hard link
+    atomically publishes it at *path*, so concurrent readers never observe an
+    incomplete record. Write/close/publication errors still fail; callers and
+    parents still require complete records. Never use this for verified
+    provenance, lifecycle journals or run evidence.
     """
-    return _write(path, data, synchronize=False)
+    path = Path(path)
+    temporary = f".{path.name}.{uuid.uuid4().hex}.tmp"
+    with DirectoryDescriptor.open_secure_path(OPS, path.parent) as parent:
+        target = parent.child_basename(path.name)
+        try:
+            parent.stat_child(target, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise FileExistsError(errno.EEXIST, "observation already exists", target)
+        temporary = parent.child_basename(temporary)
+        created = False
+        primary = None
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            fd = os.open(temporary, flags, 0o600, dir_fd=parent.fd)
+            created = True
+            with OwnedDescriptor(OPS, fd, label="stub observation") as owner:
+                remaining = memoryview(data)
+                while remaining:
+                    count = os.write(owner.fd, remaining)
+                    require(count > 0, "evidence write made no progress")
+                    remaining = remaining[count:]
+            os.link(
+                temporary,
+                target,
+                src_dir_fd=parent.fd,
+                dst_dir_fd=parent.fd,
+                follow_symlinks=False,
+            )
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            if created:
+                failures = CleanupFailures(primary)
+                failures.run(
+                    lambda: parent.unlink_child(temporary), ordinary=(OSError,)
+                )
+                result = failures.complete()
+                if result is not None:
+                    raise result
 
 
 def _write(path, data, *, synchronize):

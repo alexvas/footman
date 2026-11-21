@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -183,10 +184,17 @@ def main():
     )
 
 
+def report_error(error: Exception) -> None:
+    """Write the full exception tree into the captured client stderr."""
+    for line in str(error).splitlines():
+        print("wheel-client: " + line, file=sys.stderr)
+    print("wheel-client: traceback follows", file=sys.stderr)
+    traceback.print_exception(error, file=sys.stderr)
+
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        for line in str(error).splitlines():
-            print("wheel-client: " + line, file=sys.stderr)
+        report_error(error)
         raise SystemExit(1) from error

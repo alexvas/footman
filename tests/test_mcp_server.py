@@ -51,6 +51,7 @@ def test_publication_error_real_mcp_and_next_request_same_server(tmp_path, stage
     support("mcp_contract_support").exercise_publication(ROOT, tmp_path, stage)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "scenario",
     ["disconnect", "concurrent", "partial-frame", "eof-timeout", "envelope-expired"],

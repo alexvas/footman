@@ -161,6 +161,7 @@ def test_helper_retains_same_owner_and_result_on_incomplete_cleanup(
     assert len(owners) == 1
 
 
+@pytest.mark.sleepy
 def test_stub_deadline_retains_settled_owner_without_restarting_work(
     tmp_path, monkeypatch
 ):
@@ -217,6 +218,7 @@ def test_stub_deadline_retains_settled_owner_without_restarting_work(
     assert (stub.calls() if record_exists else []) == calls
 
 
+@pytest.mark.sleepy
 def test_helper_interruption_settles_owner(tmp_path, monkeypatch):
     owners = []
     launch = harness.OwnedProcess.launch

@@ -308,6 +308,7 @@ print('released', flush=True)
 """
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "case",
     [
@@ -1794,6 +1795,7 @@ def test_capacity_reports_conservative_fallback(tmp_path, case):
         assert_released(ops)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "case",
     [
@@ -1812,6 +1814,7 @@ def test_capacity_reports_conservative_fallback(tmp_path, case):
         "repeat",
     ],
 )
+@pytest.mark.auto_stress
 def test_session_workers_share_admission(tmp_path, case, monkeypatch):
     from tests import admission_session_support as session
     from tests.admission_support import SessionAdmission
@@ -2152,6 +2155,7 @@ def test_session_configuration_prerequisites(tmp_path, case):
     assert b"NotImplementedError" not in observation["stdout"] + observation["stderr"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "case",
     [
@@ -2290,6 +2294,7 @@ def test_invalid_session_configuration_fails_setup(tmp_path, case):
     assert observations[0]["basetemp"] != observations[1]["basetemp"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "case",
     [
@@ -2308,6 +2313,7 @@ def test_invalid_session_configuration_fails_setup(tmp_path, case):
         "nested-repeat",
     ],
 )
+@pytest.mark.auto_stress
 def test_worker_installation_uses_session_admission(
     tmp_path, tmp_path_factory, monkeypatch, admission, case
 ):
@@ -2646,6 +2652,7 @@ def test_worker_installation_uses_session_admission(
     assert_released(ops)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "case",
     [
@@ -2664,6 +2671,7 @@ def test_worker_installation_uses_session_admission(
         "nested-repeat",
     ],
 )
+@pytest.mark.auto_stress
 def test_host_preparation_uses_session_admission(
     tmp_path, tmp_path_factory, monkeypatch, admission, case
 ):
@@ -3041,6 +3049,7 @@ def test_host_preparation_uses_session_admission(
     assert_released(ops)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("kind", ["invoke", "prepared"])
 @pytest.mark.parametrize(
     "case",
@@ -3060,6 +3069,7 @@ def test_host_preparation_uses_session_admission(
         "nested-repeat",
     ],
 )
+@pytest.mark.auto_stress
 def test_host_wrapper_uses_session_admission(
     tmp_path, tmp_path_factory, monkeypatch, admission, kind, case
 ):
@@ -3505,10 +3515,10 @@ def test_host_wrapper_uses_session_admission(
     "case",
     [
         "missing",
-        "direct",
+        pytest.param("direct", marks=pytest.mark.sleepy),
         "elapsed",
-        "repeat",
-        "cross-preparation",
+        pytest.param("repeat", marks=pytest.mark.sleepy),
+        pytest.param("cross-preparation", marks=pytest.mark.sleepy),
         "metadata-operation-close",
         "metadata-interruption",
         "flock-operation-close",
@@ -3516,10 +3526,17 @@ def test_host_wrapper_uses_session_admission(
         "body-operation-close",
         "body-interruption",
         "sole-close",
-        "nested",
-        "nested-operation-close",
-        "nested-sole-close",
-        "nested-interruption",
+        pytest.param("nested", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]),
+        pytest.param(
+            "nested-operation-close",
+            marks=[pytest.mark.auto_stress, pytest.mark.sleepy],
+        ),
+        pytest.param(
+            "nested-sole-close", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
+        pytest.param(
+            "nested-interruption", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
     ],
 )
 def test_workspace_preserves_admission_envelope(
@@ -3536,9 +3553,9 @@ def test_workspace_preserves_admission_envelope(
     "case",
     [
         "missing",
-        "direct",
+        pytest.param("direct", marks=pytest.mark.sleepy),
         "elapsed",
-        "repeat",
+        pytest.param("repeat", marks=pytest.mark.sleepy),
         "cross-preparation",
         "forwarding",
         "metadata-operation-close",
@@ -3548,10 +3565,17 @@ def test_workspace_preserves_admission_envelope(
         "body-operation-close",
         "body-interruption",
         "sole-close",
-        "nested",
-        "nested-operation-close",
-        "nested-sole-close",
-        "nested-interruption",
+        pytest.param("nested", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]),
+        pytest.param(
+            "nested-operation-close",
+            marks=[pytest.mark.auto_stress, pytest.mark.sleepy],
+        ),
+        pytest.param(
+            "nested-sole-close", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
+        pytest.param(
+            "nested-interruption", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
     ],
 )
 def test_clone_copy_uses_session_admission(
@@ -3567,10 +3591,10 @@ def test_clone_copy_uses_session_admission(
 @pytest.mark.parametrize(
     "case",
     [
-        "direct",
+        pytest.param("direct", marks=pytest.mark.sleepy),
         "elapsed",
-        "repeat",
-        "cross-execution",
+        pytest.param("repeat", marks=pytest.mark.sleepy),
+        pytest.param("cross-execution", marks=pytest.mark.sleepy),
         "metadata-operation-close",
         "metadata-interruption",
         "flock-operation-close",
@@ -3578,10 +3602,17 @@ def test_clone_copy_uses_session_admission(
         "body-operation-close",
         "body-interruption",
         "sole-close",
-        "nested",
-        "nested-operation-close",
-        "nested-sole-close",
-        "nested-interruption",
+        pytest.param("nested", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]),
+        pytest.param(
+            "nested-operation-close",
+            marks=[pytest.mark.auto_stress, pytest.mark.sleepy],
+        ),
+        pytest.param(
+            "nested-sole-close", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
+        pytest.param(
+            "nested-interruption", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
     ],
 )
 def test_policy_suite_provisioning_uses_admission(
@@ -3598,9 +3629,9 @@ def test_policy_suite_provisioning_uses_admission(
     "case",
     [
         "missing",
-        "direct",
+        pytest.param("direct", marks=pytest.mark.sleepy),
         "elapsed",
-        "repeat",
+        pytest.param("repeat", marks=pytest.mark.sleepy),
         "cross-preparation",
         "metadata-operation-close",
         "metadata-interruption",
@@ -3609,10 +3640,17 @@ def test_policy_suite_provisioning_uses_admission(
         "body-operation-close",
         "body-interruption",
         "sole-close",
-        "nested",
-        "nested-operation-close",
-        "nested-sole-close",
-        "nested-interruption",
+        pytest.param("nested", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]),
+        pytest.param(
+            "nested-operation-close",
+            marks=[pytest.mark.auto_stress, pytest.mark.sleepy],
+        ),
+        pytest.param(
+            "nested-sole-close", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
+        pytest.param(
+            "nested-interruption", marks=[pytest.mark.auto_stress, pytest.mark.sleepy]
+        ),
     ],
 )
 def test_private_support_copy_uses_session_admission(

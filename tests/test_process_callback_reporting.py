@@ -137,6 +137,7 @@ def test_diagnostic_policy_and_fixed_safe_fallback(caplog, reporter_mode):
         assert owner.wait_cleanup(1).complete
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fallback_error", [None, OSError("sink failed")])
 @pytest.mark.parametrize("operation_failure", [False, True])
 def test_reporter_failure_uses_independent_once_only_nonrecursive_fallback(

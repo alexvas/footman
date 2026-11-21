@@ -19,6 +19,7 @@ from footman.server import BorrowedText
 
 @pytest.mark.parametrize("lifecycle", [False, True])
 @pytest.mark.parametrize("partial", [b"", b"partial frame", b"\xc3"])
+@pytest.mark.sleepy
 def test_sdk_stdout_failure_joins_reader_with_stdin_still_open(
     partial, lifecycle, monkeypatch
 ):

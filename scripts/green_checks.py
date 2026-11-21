@@ -6,7 +6,8 @@ and its existing OwnedProcess path. This module acquires no descriptors or pipes
 
 from __future__ import annotations
 
-import os
+import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -21,40 +22,78 @@ COMMANDS = (
     ("scripts/check-python-format",),
     ("scripts/check-python-compile",),
     ("scripts/check-types",),
-    (
-        ".venv/bin/python",
-        "-m",
-        "pytest",
-        "tests",
-        "-n",
-        "8",
-        "--dist",
-        "worksteal",
-        "--tb=short",
-        "-q",
+    *(
+        (
+            ".venv/bin/python",
+            "-m",
+            "pytest",
+            "tests",
+            "-m",
+            marker,
+            "-n",
+            workers,
+            "--dist",
+            "worksteal",
+            "--tb=short",
+            "-q",
+        )
+        for marker, workers in (
+            ("not sleepy and not auto_stress", "auto"),
+            ("auto_stress", "8"),
+            ("sleepy and not auto_stress", "8"),
+        )
     ),
 )
 
 
-def main(*, run=run_streaming, workers="8") -> int:
+def main(*, run=run_streaming) -> int:
     """Run all fast checks; run full pytest only after a successful fast block."""
-    try:
-        worker_count = int(workers)
-    except ValueError:
-        worker_count = 0
-    if not 1 <= worker_count <= 1024:
-        print("GREEN_CHECKS_WORKERS must be an integer from 1 to 1024", file=sys.stderr)
-        return 2
-    pytest_command = list(COMMANDS[-1])
-    pytest_command[pytest_command.index("-n") + 1] = str(worker_count)
-    commands = (*COMMANDS[:-1], tuple(pytest_command))
     status = 0
-    for index, argv in enumerate(commands):
-        if index == len(commands) - 1 and status:
+    for index, argv in enumerate(COMMANDS):
+        if index >= 4 and status:
             print("Fast checks failed; pytest was not run.", file=sys.stderr)
             break
-        print("\n$ " + " ".join(argv), flush=True)
-        result = run(argv, root=ROOT)
+        command = shlex.join(argv)
+        record = {
+            "check": index + 1,
+            "group": index - 3 if index >= 4 else None,
+            "command": command,
+        }
+        print("\n$ " + command, flush=True)
+        print("G-record " + json.dumps({**record, "event": "start"}), flush=True)
+        try:
+            result = run(argv, root=ROOT)
+        except BaseException as exc:
+            print(
+                "G-record "
+                + json.dumps(
+                    {
+                        **record,
+                        "event": "end",
+                        "raw_status": None,
+                        "clean": None,
+                        "lifecycle_failures": [],
+                        "exception": repr(exc),
+                    }
+                ),
+                flush=True,
+            )
+            raise
+        print(
+            "G-record "
+            + json.dumps(
+                {
+                    **record,
+                    "event": "end",
+                    "raw_status": result.returncode,
+                    "clean": result.clean,
+                    "lifecycle_failures": [
+                        repr(failure) for failure in result.failures
+                    ],
+                }
+            ),
+            flush=True,
+        )
         code = result.returncode
         if not result.clean or code is None:
             code = code or 1
@@ -62,10 +101,12 @@ def main(*, run=run_streaming, workers="8") -> int:
                 print(f"check lifecycle failure: {failure}", file=sys.stderr)
         if code and not status:
             status = code if code > 0 else 128 - code
+        if index >= 4 and status:
+            break
     return status
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 1:
         sys.exit("check-green does not support narrowing or mutation arguments")
-    sys.exit(main(workers=os.environ.get("GREEN_CHECKS_WORKERS", "8")))
+    sys.exit(main())

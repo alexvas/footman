@@ -12,6 +12,7 @@ from tests.launcher_support import DockerSequence
 __all__ = ["source"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "listing",
     [
@@ -65,6 +66,7 @@ def test_unconfirmed_listing_retains_snapshot(tmp_path, source, listing):
     assert all(helper.collections == helper.context_exits == 1 for helper in helpers)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "listing",
     [
@@ -109,6 +111,7 @@ def test_settled_real_child_without_record_is_not_wire_evidence(tmp_path):
         sequence.assert_settled()
 
 
+@pytest.mark.sleepy
 def test_rm_failure_does_not_suppress_confirmation(tmp_path, source):
     run, sequence = run_case(
         tmp_path,
@@ -134,6 +137,7 @@ def test_rm_failure_does_not_suppress_confirmation(tmp_path, source):
     sequence.assert_settled()
 
 
+@pytest.mark.sleepy
 def test_snapshot_permission_failure_after_confirmation_is_unsuccessful(
     tmp_path, source, monkeypatch
 ):
@@ -158,6 +162,7 @@ def test_snapshot_permission_failure_after_confirmation_is_unsuccessful(
     sequence.assert_settled()
 
 
+@pytest.mark.sleepy
 def test_prior_snapshot_removal_failure_cannot_be_upgraded(
     tmp_path, source, monkeypatch
 ):
@@ -179,6 +184,7 @@ def test_prior_snapshot_removal_failure_cannot_be_upgraded(
     sequence.assert_settled()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "startup",
     [

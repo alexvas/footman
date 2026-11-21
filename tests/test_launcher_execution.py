@@ -11,6 +11,7 @@ from tests.launcher_case_support import ID, IMAGE, config, dispatch, source, ste
 __all__ = ["source"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("executable", ["tool", "./wrapper"])
 def test_dev_exec_image_and_wrapper_argv(tmp_path, source, executable):
     cfg = config(command_argv=(executable, "two words", "; $literal"))
@@ -32,6 +33,7 @@ def test_dev_exec_image_and_wrapper_argv(tmp_path, source, executable):
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("status", [0, 1, 126, 127])
 def test_dev_exec_status_and_streams(tmp_path, source, status):
     script = steps(source)
@@ -51,6 +53,7 @@ def test_dev_exec_status_and_streams(tmp_path, source, status):
     assert bytes(startup[ProcessStream.STDOUT]) == (ID + "\n").encode()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "reason",
     [
@@ -70,6 +73,7 @@ def test_nonroot_prerequisite_error_status(tmp_path, source, reason):
     assert seq.parameters[-1][0][3] == "worker"
 
 
+@pytest.mark.sleepy
 def test_dev_snapshot_copy_identity(tmp_path, source):
     assert read_bytes(source.path / "payload") == b"staged\n"
     assert (source.path / "wrapper").stat().st_mode & 0o777 == 0o755

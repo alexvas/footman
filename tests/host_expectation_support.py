@@ -206,7 +206,8 @@ def execute_fixture(tmp, workspace, ini, suite):
         ],
         cwd=workspace,
         env=wheel.clean_environment(),
-        timeout_seconds=60,
+        timeout_seconds=180,
+        cleanup_reserve_seconds=6,
     )
     p.write(tmp / "fixture-operation.json", p.canonical(h.operation_record(result)))
     return result

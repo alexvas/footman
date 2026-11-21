@@ -429,7 +429,11 @@ def install_docker(w, *, failure="command", status=0, delay=0):
 
 
 def records(directory):
-    return [p.load(path) for path in sorted(directory.iterdir())]
+    return [
+        p.load(path)
+        for path in sorted(directory.iterdir())
+        if not path.name.startswith(".")
+    ]
 
 
 def response_check(result, *, status, succeeded):

@@ -661,6 +661,7 @@ def test_real_owner_cleanup_failure_is_not_clean_and_repeats_no_release(
     assert owner.cleanup_status.complete is True
 
 
+@pytest.mark.sleepy
 def test_streaming_callback_interruption_survives_cleanup_failure(
     checks, monkeypatch, tmp_path
 ):

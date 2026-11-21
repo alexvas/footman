@@ -156,11 +156,17 @@ def clean_environment(extra=None):
     return env
 
 
-def command(argv, *, cwd, env, timeout_seconds):
+def command(argv, *, cwd, env, timeout_seconds, cleanup_reserve_seconds=None):
     if type(timeout_seconds) not in {int, float}:
         raise TypeError("helper timeout must be numeric and not boolean")
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("helper timeout must be finite and positive")
+    if cleanup_reserve_seconds is not None and (
+        type(cleanup_reserve_seconds) not in {int, float}
+        or not math.isfinite(cleanup_reserve_seconds)
+        or not 0 < cleanup_reserve_seconds < timeout_seconds
+    ):
+        raise ValueError("helper cleanup reserve must be finite and within timeout")
     started = time.monotonic()
     data = {stream: bytearray() for stream in ProcessStream}
     terminals = {}
@@ -177,7 +183,11 @@ def command(argv, *, cwd, env, timeout_seconds):
             if not isinstance(error, Exception):
                 raise
 
-    reserve = min(2.0, timeout_seconds / 4)
+    reserve = (
+        min(2.0, timeout_seconds / 4)
+        if cleanup_reserve_seconds is None
+        else cleanup_reserve_seconds
+    )
     with OwnedProcess.launch(
         list(map(str, argv)),
         deadline_seconds=timeout_seconds - reserve,

@@ -134,18 +134,24 @@ scripts/check-green
 ```
 
 The gate runs `scripts/check-python-lint`, `scripts/check-python-format`,
-`scripts/check-python-compile`, `scripts/check-types`, and the exact full-suite
-parallel pytest command in [testing.md](testing.md). It attempts all four fast
+`scripts/check-python-compile`, `scripts/check-types`, and the three full-suite
+parallel pytest groups in [testing.md](testing.md). It attempts all four fast
 checks, even after an earlier fast failure, and preserves their first failing
 status. If any fast check fails, has no status or leaves incomplete process
 cleanup, the gate stops before pytest and remains unsuccessful. Only a fully
-successful fast block launches the complete mandated pytest command, whose
-failure status is also preserved. An interruption keeps its identity and stops
+successful fast block launches the three mandated pytest groups sequentially.
+Stop at the first nonzero group status and preserve that status; later groups
+are not run, not passing. Retain one complete combined stdout/stderr log and
+its overall gate exit status. The runner emits `G-record` JSON start/end records
+with check/group index and `shlex.join` command; end records include raw child
+status, cleanup `clean` state and lifecycle failures. An exception records null
+status/cleanup and is re-raised; unknown or incomplete evidence is not passing.
+Groups without start records were not run. An interruption keeps its identity and stops
 execution. Tests not run are not passing verification; after correction rerun
 the complete G. No scope or fix
 arguments are supported: `scripts/check-green --fix` exits nonzero rather than
 narrowing the gate. `tests/test_green_gate.py` pins the commanded plan, the
-worker-count range and the preserved statuses.
+group allocations and the preserved statuses.
 
 G additionally requires the skip review in [testing.md](testing.md): no skips,
 xfails or xpasses, and no approved skip exceptions in this repository. A phase
@@ -158,16 +164,25 @@ build metadata change.
 
 ### Parallel test running
 
-The mandated suite command uses **work stealing** across eight workers:
+G partitions the complete suite into three disjoint groups and runs them in
+this order, using **work stealing** within each group:
 
 ```sh
-.venv/bin/python -m pytest tests -n 8 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests -m 'not sleepy and not auto_stress' -n auto --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests -m 'auto_stress' -n 8 --dist worksteal --tb=short -q
+.venv/bin/python -m pytest tests -m 'sleepy and not auto_stress' -n 8 --dist worksteal --tb=short -q
 ```
 
-Document the exact mandated full-suite command above once in each testing
+A test bearing both markers runs only in group 2. Unmarked tests run in group 1.
+Marker deselection in these complementary groups is not a skip or an exclusion
+from G: all three groups must succeed to establish complete passing coverage.
+Any nonzero status, including no tests collected, is unsuccessful verification.
+
+Document the exact three mandated group commands above once in each testing
 guide or README. Additional phase-suite commands may select narrower test
 paths for RED/regression recording, but do not replace G. Every fenced pytest
-suite example must use `-n <N>` (an integer from 1 through 1024) and
+suite example must use `-n <N>` (an integer from 1 through 1024, or `auto`
+for G group 1) and
 `--dist worksteal`, without disabling xdist or overriding the worker count with
 another option. Bare serial suite commands and fence-label bypasses are not
 accepted; intentionally serial policy probes belong in test code, not as
@@ -190,21 +205,21 @@ invocations. See the [historical adoption record](testing-worksteal.md) for the
 it is missing, a parallel invocation fails at argument parsing instead of
 degrading to a serial run.
 
-`scripts/check-green` uses eight workers by default. `GREEN_CHECKS_WORKERS`
-changes only the pytest parallelism, never the suite or the other checks, and
-accepts any integer from `1` through `1024`; an invalid value fails before any
-check runs:
-
-```sh
-GREEN_CHECKS_WORKERS=4 scripts/check-green
-```
+G's worker allocations are fixed by group: `auto`, `8`, `8`.
+Automatic selection is not cgroup-quota-aware even where xdist respects CPU
+affinity. Admission K limits protected heavy regions, not worker count; excess
+workers can queue inside unchanged deadlines. Quota-aware worker selection and
+per-group capacity evidence are future improvements, not current guarantees;
+see [the testing guide](testing.md#future-improvements-to-grouped-g).
+`GREEN_CHECKS_WORKERS` does not override this plan. Regression guards read the
+group commands from the testing guide and compare the runner and other guides
+against them, rather than maintaining separate worker allocations.
 
 When validation also requires specialised phase suites, use the
 [working schedule in the testing guide](testing.md#working-schedule-gate-plus-specialised-suites):
-on machines with at least 32 available logical CPUs (respecting affinity and CPU
-quotas), the gate's eight workers run alongside a separate eight-worker budget
-for the exact registered specialised commands. Below that capacity, or when it
-cannot be established, run gate then specialised commands sequentially. The
+run the grouped gate to settlement before specialised commands. Automatic
+worker selection invalidates the old fixed eight-worker gate allocation;
+do not overlap it with the specialised queue under that historical budget. The
 linked Phase-11 real-base serialization exception also applies at higher CPU
 capacity: its registered command must wait for the unscoped gate to settle,
 because both collect the same shared-base contract. Neither mode narrows this

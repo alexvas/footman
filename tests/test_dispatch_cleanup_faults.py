@@ -18,6 +18,7 @@ from footman.process import (
     StopContext,
     StreamOutcome,
 )
+from tests.clock_support import ManualClock, module_clock
 from tests.dispatch_support import api, removal
 from tests.dispatcher_harness import read_bytes, write_bytes
 from tests.launcher_case_support import ID, source
@@ -78,6 +79,13 @@ class Helper:
         )
 
 
+def wait_for_action(action, timeout):
+    assert action._finished.wait(timeout), "container cleanup action did not settle"
+    result = action.observe()
+    assert result.done
+    return result
+
+
 def action_case(helpers, *, allowance=1):
     module = api()
     calls = []
@@ -89,10 +97,7 @@ def action_case(helpers, *, allowance=1):
     action = module.ContainerCleanup(ID, launch=launch)
     action.prepare()
     action.start(StopContext("test", 0, time.monotonic() + allowance))
-    end = time.monotonic() + 2
-    while not action.observe().done and time.monotonic() < end:
-        time.sleep(0.001)
-    assert action.observe().done
+    wait_for_action(action, 2)
     return action, calls
 
 
@@ -198,11 +203,7 @@ def test_collector_failure_survives_zero_status_and_close_failure(
     monkeypatch.setattr(InfrastructureCollector, "_retain", retain)
     action.prepare()
     action.start(StopContext("test", 0, time.monotonic() + 1))
-    end = time.monotonic() + 2
-    while not action.observe().done and time.monotonic() < end:
-        time.sleep(0.001)
-    assert action.observe().done
-    errors = [f.error for f in action.observe().failures]
+    errors = [f.error for f in wait_for_action(action, 2).failures]
     assert error in errors and close in errors
     assert selected.failure is error
     assert action.operations[operation].failure is error
@@ -224,11 +225,7 @@ def test_helper_launch_failure_has_no_guessed_confirmation(operation):
     action = module.ContainerCleanup(ID, launch=launch)
     action.prepare()
     action.start(StopContext("test", 0, time.monotonic() + 1))
-    end = time.monotonic() + 2
-    while not action.observe().done and time.monotonic() < end:
-        time.sleep(0.001)
-    assert action.observe().done
-    assert any(f.error is error for f in action.observe().failures)
+    assert any(f.error is error for f in wait_for_action(action, 2).failures)
     assert action.confirmed_absent is (operation == 0)
     assert len(calls) == 2
 
@@ -318,10 +315,7 @@ def test_cancel_prepared_idle_action_settles_without_renewal():
     action = module.ContainerCleanup(ID, launch=lambda *a, **k: calls.append(a))
     action.prepare()
     action.cancel(time.monotonic() - 1)
-    end = time.monotonic() + 1
-    while not action.observe().done and time.monotonic() < end:
-        time.sleep(0.001)
-    assert action.observe().done and action.observe().cleanup_complete
+    assert wait_for_action(action, 1).cleanup_complete
     action.start(StopContext("late", 0, time.monotonic() + 100))
     assert calls == [] and not action.confirmed_absent
 
@@ -344,10 +338,7 @@ def test_exhausted_action_never_acquires_or_renews_budget():
     action = module.ContainerCleanup(ID, launch=lambda *a, **k: calls.append(a))
     action.prepare()
     action.start(StopContext("expired", None, time.monotonic() - 1))
-    end = time.monotonic() + 1
-    while not action.observe().done and time.monotonic() < end:
-        time.sleep(0.001)
-    assert action.observe().done and action.observe().cleanup_complete
+    assert wait_for_action(action, 1).cleanup_complete
     for _ in range(3):
         action.start(StopContext("new", None, time.monotonic() + 100))
         action.cancel(time.monotonic() + 100)
@@ -382,11 +373,7 @@ def test_context_exit_cannot_mask_domain_collector_failure(monkeypatch, operatio
     monkeypatch.setattr(InfrastructureCollector, "_retain", retain)
     action.prepare()
     action.start(StopContext("test", 0, time.monotonic() + 1))
-    end = time.monotonic() + 2
-    while not action.observe().done and time.monotonic() < end:
-        time.sleep(0.001)
-    result = action.observe()
-    assert result.done
+    result = wait_for_action(action, 2)
     assert action.operations[operation].failure is domain
     assert result.failures[0].error is domain
     assert any(f.error is release for f in result.failures)
@@ -484,18 +471,25 @@ def capability_path(capability):
 
 def test_snapshot_cleanup_consumes_only_remaining_allowance(source, monkeypatch):
     api()
+    import footman.snapshot as snapshot
     from footman.filesystem.descriptors import DirectoryDescriptor
 
     original = DirectoryDescriptor.list_names
+    clock = ManualClock(origin=100)
+    deadline = clock.monotonic() + 0.001
+    real_monotonic = time.monotonic
 
-    def slow_listing(self):
+    def delayed_listing(self):
         names = original(self)
-        time.sleep(0.03)
+        clock.advance(0.002, label="snapshot cleanup directory listing")
         return names
 
-    monkeypatch.setattr(DirectoryDescriptor, "list_names", slow_listing)
-    with pytest.raises(Exception, match="allowance"):
-        source.remove(deadline=time.monotonic() + 0.01)
+    monkeypatch.setattr(DirectoryDescriptor, "list_names", delayed_listing)
+    with module_clock(snapshot, clock):
+        assert time.monotonic is real_monotonic
+        with pytest.raises(Exception, match="allowance"):
+            source.remove(deadline=deadline)
+    assert clock.elapsed() == 0.002
     assert read_bytes(source.path / "payload") == b"staged\n"
     assert source.removal_failure is not None
     source.remove()

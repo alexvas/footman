@@ -20,6 +20,7 @@ from footman.server import BorrowedText
 
 @pytest.mark.parametrize("failure", ["read", "cancel"])
 @pytest.mark.parametrize("size", [1, 32768])
+@pytest.mark.sleepy
 def test_sdk_input_failure_joins_backpressured_output_without_drain(failure, size):
     ops = PosixDescriptorOps()
     read_fd, write_fd = os.pipe()

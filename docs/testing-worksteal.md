@@ -10,11 +10,17 @@ still name `loadfile`; they must not be relabelled as worksteal executions.
 
 ## Decision
 
-Use `pytest-xdist --dist worksteal` for the full gate, registered specialised
-suites and parallel skip-policy probes. Keep the gate at eight workers and retain
-registered specialised worker counts. Worksteal balances pending tests inside
-a pytest invocation; the separate gate-plus-specialised admission budget and
-its minimum-32-available-CPU condition remain unchanged.
+At adoption time, the decision was to use `pytest-xdist --dist worksteal` for
+the full gate, registered specialised suites and parallel skip-policy probes,
+retaining the then-current eight-worker gate allocation and registered
+specialised worker counts. That adoption also retained the former separate
+gate-plus-specialised admission budget and minimum-32-available-CPU condition.
+These are historical decisions, not current scheduling instructions.
+
+Worksteal balances pending tests inside a pytest invocation. For the current
+three-group gate allocation (`auto`, `8`, `8`) and the requirement to settle G
+before starting the specialised queue, follow
+[the current testing schedule](testing.md#working-schedule-gate-plus-specialised-suites).
 
 Tests from a single file may run in different interpreters. Module/session
 fixtures can initialize in several workers; they are not globally unique.

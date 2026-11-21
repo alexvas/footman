@@ -138,6 +138,7 @@ def test_wait_failure_retains_bounded_output_and_known_returncode(method, kind):
         assert owner.wait_cleanup(1).complete
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("method", ["capture", "stream"])
 @pytest.mark.real_process_time
 def test_real_live_reader_value_and_late_release_are_isolated(method):

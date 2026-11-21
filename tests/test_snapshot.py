@@ -491,6 +491,7 @@ def test_linked_worktree_capture(repository, storage, tmp_path):
     assert fixture.git("ls-files", "--stage", "-z").stdout == before
 
 
+@pytest.mark.sleepy
 def test_unresolved_index_is_rejected(repository, storage):
     blob = repository.git("rev-parse", "HEAD:payload").stdout.strip().decode()
     repository.git("update-index", "--force-remove", "payload")
@@ -514,6 +515,7 @@ def test_unresolved_index_is_rejected(repository, storage):
     repository.assert_unchanged(before)
 
 
+@pytest.mark.sleepy
 def test_split_index_explicit_policy(repository, storage):
     repository.git("update-index", "--split-index")
     before = repository.identity()
@@ -528,6 +530,7 @@ def test_split_index_explicit_policy(repository, storage):
     repository.assert_unchanged(before)
 
 
+@pytest.mark.sleepy
 def test_dev_snapshot_mount_identity(repository, storage):
     write_bytes(repository.path / "payload", b"staged replacement\x00\xff")
     repository.git("add", "payload")

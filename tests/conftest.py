@@ -21,6 +21,11 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "own_process_time: scenario installs its own shared process clock"
     )
+    config.addinivalue_line(
+        "markers",
+        "auto_stress: nested pytest admission scenario excluded from auto stress diagnostics",
+    )
+    config.addinivalue_line("markers", "sleepy: scenario directly waits with sleep")
 
 
 @pytest.fixture(scope="session")

@@ -1,6 +1,7 @@
 """Docker-free integrated acceptance; stub observations are not Docker proofs."""
 
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -183,6 +184,7 @@ def test_loss_collector_incomplete_cleanup_retains_original_objects(
     thread.join.assert_called_once_with(timeout=2)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("after_start", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_loss_collector_start_failure_settles_real_owner(
@@ -496,6 +498,125 @@ def test_post_dispatch_controls_require_successful_baseline(change):
             portability()._require_completed_dispatches(runs, 2, checkpoint)
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "link",
+        "link-race",
+        "unlink",
+        "link-unlink",
+        "interruption",
+        "interruption-unlink",
+    ],
+)
+def test_observation_writer_publishes_only_complete_bytes(tmp_path, monkeypatch, fault):
+    if fault != "none":
+        target = tmp_path / "record.json"
+        data = provenance.canonical({"ok": True})
+        raced = b"another publisher"
+        link_error = OSError("observation link failed")
+        unlink_error = OSError("observation temporary unlink failed")
+        interruption = KeyboardInterrupt("interrupted before publication")
+        original_link = os.link
+        original_unlink = provenance.DirectoryDescriptor.unlink_child
+        original_cleanup = provenance.CleanupFailures
+        links, unlinks, cleanups = [], [], []
+
+        class Cleanup(original_cleanup):
+            def __init__(self, primary):
+                super().__init__(primary)
+                cleanups.append(self)
+
+        def link(source, destination, **kwargs):
+            links.append((source, destination))
+            # Publication starts only after the complete temporary write/close.
+            assert provenance.read(tmp_path / source) == data
+            assert not target.exists()
+            if fault == "link-race":
+                provenance.write(target, raced)
+                return original_link(source, destination, **kwargs)
+            if fault.startswith("interruption"):
+                raise interruption
+            if fault.startswith("link"):
+                raise link_error
+            return original_link(source, destination, **kwargs)
+
+        def unlink(parent, name):
+            unlinks.append(name)
+            if "unlink" in fault:
+                raise unlink_error
+            return original_unlink(parent, name)
+
+        monkeypatch.setattr(os, "link", link)
+        monkeypatch.setattr(provenance.DirectoryDescriptor, "unlink_child", unlink)
+        monkeypatch.setattr(provenance, "CleanupFailures", Cleanup)
+        with pytest.raises(BaseException) as caught:
+            provenance.write_observation(target, data)
+        assert len(links) == 1 and unlinks == [links[0][0]]
+        if fault == "link-race":
+            assert isinstance(caught.value, FileExistsError)
+            assert provenance.read(target) == raced
+        elif fault.startswith("interruption"):
+            assert caught.value is interruption
+        elif fault.startswith("link"):
+            assert caught.value is link_error
+        else:
+            assert caught.value is unlink_error
+        if fault != "unlink" and fault != "link-race":
+            assert not target.exists()
+        if fault == "unlink":
+            assert provenance.read(target) == data
+        if "unlink" in fault:
+            assert provenance.read(tmp_path / links[0][0]) == data
+            if fault != "unlink":
+                assert getattr(caught.value, "_transaction_secondary", ()) == [
+                    unlink_error
+                ]
+        else:
+            assert list(tmp_path.glob(".*.tmp")) == []
+        assert len(cleanups) == 1
+        before = list(unlinks)
+        # The accumulator rejects repeat completion without retrying unlink.
+        for _ in range(2):
+            with pytest.raises(RuntimeError, match="already complete"):
+                cleanups[0].complete()
+        assert unlinks == before
+        if "unlink" in fault:
+            # Explicit test teardown, not a retry by the publication owner.
+            original_unlink_path = tmp_path / links[0][0]
+            original_unlink_path.unlink()
+        return
+
+    original_write = os.write
+    started = threading.Event()
+    release = threading.Event()
+    failures = []
+    target = tmp_path / "record.json"
+
+    def pause_before_write(fd, data):
+        started.set()
+        assert release.wait(5)
+        return original_write(fd, data)
+
+    def write():
+        try:
+            provenance.write_observation(target, provenance.canonical({"ok": True}))
+        except BaseException as error:
+            failures.append(error)
+
+    monkeypatch.setattr(os, "write", pause_before_write)
+    writer = threading.Thread(target=write)
+    writer.start()
+    assert started.wait(5)
+    assert not target.exists() and service.records(tmp_path) == []
+    release.set()
+    writer.join(5)
+    assert not writer.is_alive() and not failures
+    assert provenance.load(target) == {"ok": True}
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
 @pytest.mark.parametrize("writer", ["write", "write_observation"])
 def test_observation_and_durable_writers_keep_distinct_sync_contracts(
     tmp_path, monkeypatch, writer
@@ -688,6 +809,7 @@ raise SystemExit(module.main())
     assert origins[0]["context"] == "wheel"
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "case",
     [
@@ -798,6 +920,7 @@ def test_relocated_exact_wheel_acceptance(relocated_worker, tmp_path, case):
         assert result["stub_attribution"]["context"] == "wheel"
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "stage",
     [
@@ -1363,6 +1486,7 @@ def test_acceptance_registration_and_documented_commands():
 
 @pytest.mark.parametrize("phase", [None, "review_2"])
 @pytest.mark.parametrize("status", [0, 7])
+@pytest.mark.sleepy
 def test_staged_fixture_real_mcp_manifest_flow(tmp_path, phase, status):
     world = service.world(ROOT, tmp_path)
     repo = world["repo"]

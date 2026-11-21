@@ -312,6 +312,7 @@ def test_unknown_identity_timeout_cleanup_verdict(defect):
             )
 
 
+@pytest.mark.sleepy
 def test_real_timeout_is_stage_independent(tmp_path, source):
     """Actual sole-owned children; no synthetic records or forced timeout stage."""
     from tests.dispatch_deadline_support import (
@@ -441,6 +442,7 @@ def test_successful_helper_cannot_inherit_timeout_record_tolerance(phase, kind):
         support.validate_timeout_record(successful, expected=expected)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("index", range(4), ids=["startup", "inspect", "mkdir", "cp"])
 def test_controlled_timeout_identity_branches_use_real_supervisor(source, index):
     """Synthetic early timeouts retain production results and identity handling."""
@@ -1510,6 +1512,7 @@ def test_logical_cumulative_oracle_rejects_renewed_budget():
         support.assert_allowances((0.0,), (0.0,))
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("exit_kind", ["normal", "assertion", "interruption"])
 def test_logical_scenario_restores_only_container_clock(source, exit_kind):
     import footman.container as container
@@ -1541,6 +1544,7 @@ def test_logical_scenario_restores_only_container_clock(source, exit_kind):
     assert (container.time, process.time, supervision.time) == originals
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("position", [1, 2, 3])
 @pytest.mark.parametrize("spent", [0.3, 0.4, 0.125], ids=["exact", "past", "positive"])
 def test_shared_deadline_suppresses_downstream_work(source, position, spent):
@@ -1587,6 +1591,7 @@ def test_shared_deadline_suppresses_downstream_work(source, position, spent):
         scenario.assert_helpers_settled()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("stage", [1, 2, 3, 4])
 def test_nonzero_terminal_path_removes_only_recorded_id(tmp_path, source, stage):
     script = steps(source)[: stage + 1]
@@ -1603,6 +1608,7 @@ def test_nonzero_terminal_path_removes_only_recorded_id(tmp_path, source, stage)
     sequence.assert_settled()
 
 
+@pytest.mark.sleepy
 def test_cumulative_deadline_not_fresh_per_child(source):
     support = _logical_support()
     charges = (
@@ -1638,6 +1644,7 @@ def test_cumulative_deadline_not_fresh_per_child(source):
         scenario.assert_helpers_settled()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("stage", [0, 4])
 def test_interruption_retains_authority_and_known_identity_cleanup(
     tmp_path, source, stage
@@ -1680,6 +1687,7 @@ def test_cleanup_observation_requires_bounded_timeout(source, timeout):
         run.wait_cleanup(timeout)
 
 
+@pytest.mark.sleepy
 def test_command_setup_failure_still_removes_known_container(tmp_path, source):
     from footman.process import OwnedProcess
 
@@ -1707,6 +1715,7 @@ def test_command_setup_failure_still_removes_known_container(tmp_path, source):
     sequence.assert_settled()
 
 
+@pytest.mark.sleepy
 def test_independent_requests_do_not_share_cleanup_state(tmp_path):
     from footman.snapshot import reserve_snapshot
     from tests.dispatcher_harness import GitFixture

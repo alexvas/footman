@@ -1226,6 +1226,7 @@ def test_public_runner_isolates_host_suite_and_preserves_policy_status(
     assert attribution.dist_identity(h.ROOT) == before
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "fault",
     [
@@ -1316,6 +1317,7 @@ def test_scripted_tool_attempt_records_detect_a_second_execution(tmp_path):
         assert p.load(attempts / name)["argv"] == ["build"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "scope,changed",
     [
@@ -1859,6 +1861,7 @@ def test_install_tool_proxy_preserves_first_status_and_attempts_independent_deli
     diagnostic.assert_called_once_with(operation["stderr"])
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "fault", ["stale-module", "stale-entry", "self-consistent-stale", "swapped-copy"]
 )
@@ -3018,6 +3021,7 @@ def test_fixture_expectation_schema_roundtrip_and_no_observation_mutation(case):
         assert value["expected_override"] == ["tool", "two words"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
 def test_copied_fixture_negative_controls_reach_shared_assertions_with_raw_status(
     simulated_host_run, tmp_path, case
@@ -3390,6 +3394,7 @@ def test_negative_attribution_rejects_missing_or_ambiguous_outcome_records(fault
     }
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
 @pytest.mark.parametrize(
     "fault", ["teardown", "additional-failure", "additional-setup-error"]
@@ -3949,6 +3954,7 @@ def test_orchestrator_core_requires_normal_suite_policy_evidence_and_reconciliat
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "status,output",
     [
@@ -4063,6 +4069,7 @@ def test_orchestrator_probe_refuses_self_reexec_and_shell_before_os_execution(
     assert calls == [] and names == [] and observed["legs"] == []
 
 
+@pytest.mark.sleepy
 def test_orchestrator_prepared_leg_probe_exercises_typed_profiles_without_future_code(
     tmp_path,
 ):
@@ -4083,6 +4090,7 @@ def test_orchestrator_prepared_leg_probe_exercises_typed_profiles_without_future
     assert calls == [] and sorted(names) == ["cleanup", "normal"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "argv",
     [
@@ -4187,6 +4195,7 @@ def test_orchestrator_core_missing_foundation_has_no_editable_fallback(tmp_path)
     )
 
 
+@pytest.mark.sleepy
 def test_orchestrator_core_wrong_root_runner_is_refused_before_exec_module(tmp_path):
     from tests import host_orchestration_support as core
 
@@ -6709,6 +6718,7 @@ def test_orchestrator_report_has_handoff_identity_counts_warnings_and_resource_s
         assert p.read(leg["stderr_path"]) is not None
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("case", ["staged_bytes", "argv", "command_status", "cleanup"])
 @pytest.mark.parametrize("teardown", [False, True])
 def test_delivered_negative_suite_uses_copied_assertions_and_exact_outcomes(
@@ -6744,6 +6754,7 @@ def test_delivered_negative_suite_uses_copied_assertions_and_exact_outcomes(
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "control", ["normal", "normal-input", "unknown", "boolean", "duplicate", "missing"]
 )

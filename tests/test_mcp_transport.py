@@ -20,6 +20,17 @@ def support(name):
     return importlib.import_module(f"tests.{name}")
 
 
+def test_wheel_client_reports_full_exception_group_traceback(capsys):
+    from tests.mcp_wheel_client import report_error
+
+    report_error(ExceptionGroup("client task failure", [ValueError("inner failure")]))
+
+    stderr = capsys.readouterr().err
+    assert "wheel-client: client task failure" in stderr
+    assert "wheel-client: traceback follows" in stderr
+    assert "ValueError: inner failure" in stderr
+
+
 @pytest.mark.parametrize(
     "fault",
     ["nonzero-build", "successful-build", "post-interruption", "collection-failure"],
@@ -225,6 +236,7 @@ def test_actual_protocol_peer_transport_scenarios(tmp_path, scenario):
     support("mcp_contract_support").exercise_peer(ROOT, tmp_path, scenario)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "fault",
     [
@@ -461,6 +473,7 @@ def test_scripted_profile_setup_errors_do_not_count_as_attribution_rejection(
     support("mcp_contract_support").exercise_profile_setup_error(ROOT, tmp_path, fault)
 
 
+@pytest.mark.sleepy
 def test_real_write_bridge_reports_os_prefix_under_backpressure(tmp_path):
     import sys
 
@@ -490,6 +503,7 @@ def test_real_write_bridge_reports_os_prefix_under_backpressure(tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["oversized", "many-frames"])
+@pytest.mark.sleepy
 def test_transport_framing_and_queue_backpressure_are_bounded(
     tmp_path, monkeypatch, mode
 ):
@@ -970,6 +984,8 @@ def test_build_admission_does_not_renew_setup_deadline(monkeypatch, tmp_path):
     assert_released(ops)
 
 
+@pytest.mark.sleepy
+@pytest.mark.auto_stress
 def test_real_builds_use_invocation_shared_admission(
     tmp_path, tmp_path_factory, monkeypatch, admission
 ):
@@ -1080,6 +1096,7 @@ main()
             assert result["stdout"] == b""
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "fault", ["operation-close", "sole-close", "interruption-close", "repeat"]
 )
@@ -1260,6 +1277,7 @@ def test_mutable_installation_clone_has_private_inodes_and_relocated_launcher(
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "fault", ["operation-close", "sole-close", "interruption", "repeat", "independent"]
 )

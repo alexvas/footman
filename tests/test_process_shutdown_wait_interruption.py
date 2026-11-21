@@ -11,6 +11,7 @@ from tests.test_process_lifecycle import Child, stalled
 pytestmark = pytest.mark.process_time
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("method", ["capture", "stream"])
 @pytest.mark.parametrize("operation", ["shutdown", "context"])
 @pytest.mark.real_process_time

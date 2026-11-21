@@ -93,6 +93,7 @@ class DescriptorlessPipe:
             raise self.error
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("primary_kind", [None, ValueError, KeyboardInterrupt])
 @pytest.mark.parametrize("close_kind", [None, OSError, RuntimeError, KeyboardInterrupt])
 @pytest.mark.parametrize("position", [0, 1])

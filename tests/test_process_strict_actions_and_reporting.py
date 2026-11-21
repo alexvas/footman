@@ -122,6 +122,7 @@ def test_direct_action_boundary_and_void_return_validation(method, error):
         settle(owner)
 
 
+@pytest.mark.sleepy
 def test_cumulative_action_failures_are_not_duplicated_or_erased():
     error = OSError("known before done")
     failure = info(error)
@@ -193,6 +194,7 @@ def test_helper_snapshot_and_parent_context_are_orthogonal():
         settle(owner)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "malformed", ["bare", "wrong_kind", "wrong_phase", "wrong_stream"]
 )
@@ -468,6 +470,7 @@ def test_clean_eof_is_not_deferred_or_revised_by_sibling_failure(monkeypatch):
         settle(owner)
 
 
+@pytest.mark.sleepy
 @pytest.mark.real_process_time
 def test_aborted_live_descriptor_reader_retains_owner_until_barrier(monkeypatch):
     entered, resume = threading.Event(), threading.Event()
@@ -551,6 +554,7 @@ def test_completion_racing_dispatch_has_once_only_end_attempt(
         settle(owner)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("site", ["failures", "error"])
 @pytest.mark.parametrize(
     "interrupt",

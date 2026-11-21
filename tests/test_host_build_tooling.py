@@ -372,6 +372,7 @@ def test_runner_preflight_failure_finalizes_outputs_status_and_report(
         assert owner.shutdown() == before
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("status", [0, 17])
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 @pytest.mark.parametrize("interrupted", [False, True])
@@ -440,6 +441,8 @@ def test_build_stream_failure_still_publishes_operation_once(
     assert not manifest.exists()
 
 
+@pytest.mark.sleepy
+@pytest.mark.auto_stress
 def test_host_and_mcp_use_one_nonvacuous_admission_path(
     tmp_path, tmp_path_factory, monkeypatch, admission
 ):
@@ -889,6 +892,7 @@ def test_real_command_retains_binary_streams_status_and_settled_owner(tmp_path, 
         assert before.complete and not before.failures
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("fault", ["operation-close", "close", "interruption-close"])
 def test_command_sink_and_stream_close_failures_keep_owner_and_primary(
     tmp_path, monkeypatch, fault

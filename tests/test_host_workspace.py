@@ -69,10 +69,11 @@ def test_delivered_runner_passes_orchestrator_target_and_import_preflight(
     orchestrator._import_safe(ast.parse(delivered).body)
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "collector,admitted",
     [
-        (name, True)
+        pytest.param(name, True, marks=pytest.mark.auto_stress)
         for name in (
             "test_mcp_transport.py",
             "test_mcp_server.py",

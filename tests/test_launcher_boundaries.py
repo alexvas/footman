@@ -150,6 +150,7 @@ def test_startup_sink_failure_does_not_stop_id_parser():
     assert run.container_id == ID
 
 
+@pytest.mark.sleepy
 def test_revalidate_source_after_mkdir_before_copy(tmp_path, source):
     module = api()
     seq = DockerSequence(tmp_path, steps(source))
@@ -177,6 +178,7 @@ def test_revalidate_source_after_mkdir_before_copy(tmp_path, source):
     seq.assert_settled()
 
 
+@pytest.mark.sleepy
 def test_repeat_attempt_cannot_relaunch(tmp_path, source):
     module = api()
     seq = DockerSequence(tmp_path, steps(source))
@@ -188,6 +190,7 @@ def test_repeat_attempt_cannot_relaunch(tmp_path, source):
     seq.assert_settled()
 
 
+@pytest.mark.sleepy
 def test_independent_sequences_concurrent_unique_identity(tmp_path, source):
     module = api()
 

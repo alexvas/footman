@@ -14,6 +14,7 @@ from tests.launcher_support import DockerSequence
 __all__ = ["source"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("boundary", ["rm", "listing", "finalization"])
 @pytest.mark.parametrize("prior_interruption", [False, True])
 def test_supervisor_cleanup_interruption_retains_state_and_continuation(
@@ -105,6 +106,7 @@ def test_supervisor_cleanup_interruption_retains_state_and_continuation(
     assert len(sequence.calls()) == 4
 
 
+@pytest.mark.sleepy
 def test_dev_survivor_removal_order(tmp_path, source):
     script = [*steps(source), *removal()]
     script[4]["delay"] = 2
@@ -159,6 +161,7 @@ def test_dev_survivor_removal_order(tmp_path, source):
     assert sequence.parameters == before
 
 
+@pytest.mark.sleepy
 def test_dev_cleanup_sentinel_identity(tmp_path, source):
     sentinel = tmp_path / "unrelated"
     sentinel.mkdir()

@@ -8,6 +8,7 @@ from tests import mcp_wheel_support as wheel
 from tests.python_check_fixtures import REPO_ROOT
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "body", ["pass", "pytest.skip('no')", "pytest.xfail('no')", "pass  # xpass"]
 )

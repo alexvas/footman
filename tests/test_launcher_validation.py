@@ -17,6 +17,7 @@ from tests.launcher_support import DockerSequence
 __all__ = ["source"]
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "output",
     [
@@ -42,6 +43,7 @@ def test_invalid_startup_forbids_inspection(tmp_path, source, output):
     seq.assert_settled()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize(
     "record",
     [
@@ -70,6 +72,7 @@ def test_invalid_inspection_forbids_copy(tmp_path, source, record):
     seq.assert_settled()
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("metadata", ["", "|", "|bad", "|sha256:123", "|" + IMAGE])
 @pytest.mark.parametrize("newline", ["", "\n"])
 def test_inspection_unknown_image_is_diagnostic_only(
@@ -85,6 +88,7 @@ def test_inspection_unknown_image_is_diagnostic_only(
     )
 
 
+@pytest.mark.sleepy
 @pytest.mark.parametrize("image", ["d9e853e87e55", IMAGE])
 @pytest.mark.parametrize("resolution", ["error", "hex-name-collision", "retagged"])
 def test_dev_image_id_forms(tmp_path, source, image, resolution):

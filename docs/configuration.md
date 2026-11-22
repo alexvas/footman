@@ -149,6 +149,9 @@ fail explicitly. The Docker CLI connection transfers bytes; the daemon need not
 access the host snapshot path. Actual local/remote Docker environment support,
 byte/mode/symlink preservation and fresh-destination semantics remain subject to
 real-Docker host acceptance, not established by a scripted development CLI.
+Follow the [operator-only host protocol](testing.md#operator-only-host-acceptance)
+for the single manual command and exact-path evidence handoff; documented
+Docker-free controls are not observations that these host semantics passed.
 
 Root mkdir and ordinary docker cp produce root-owned destination/copy entries.
 A non-root configured user needs traversal/read/execute permissions and whatever

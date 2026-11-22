@@ -1066,6 +1066,281 @@ The full-suite command includes:
   non-Markdown fragment targets are unsupported and must not be used in these
   guides. Remote URLs are not checked for availability.
 
+## Operator-only host acceptance
+
+These are operating instructions, not an assertion that host acceptance has run.
+Docker-free development, implementation/integration and documentation work do
+not authorize the Agent to invoke Docker, execute the candidate's host script,
+arrange remote/background host execution or mark host tasks complete.
+
+### Prerequisites and the single manual host command
+
+After Docker-free GREEN, introspection and readiness handoff, the operator alone
+runs this command **on the Docker-capable host**, from any cwd. Replace
+`footman-sandbox:latest` with the operator's prepared local image tag:
+
+```sh
+/home/aavasiljev/work/home/footman.git/scripts/verify_host_acceptance.py footman-sandbox:latest
+status=$?
+printf 'Host aggregate status: %s\n' "$status"
+```
+
+No `cd` or checkout venv is required; there is no results-dir argument or
+results-path environment override. Prerequisites are Linux/POSIX with readable
+`/proc`, PATH `python3.14`, `uv`, Git, Docker CLI and access to its running daemon,
+locked dependency/index access, and writable external evidence/storage with
+sufficient disk space. The operator must prepare the existing directory-only,
+symlink-free parent chain `/tmp/gorshochek/ephemeral/footman.git` with suitable
+permissions. A missing/unusable parent is a nonzero prerequisite failure before
+any run directory exists: no printed run path and no `report.json`.
+
+The ambient build environment must also satisfy the reviewed static build
+profile: no `HATCH_*` or non-allowlisted `UV_*` variables, no discovered
+`uv.toml` at `$XDG_CONFIG_HOME/uv/uv.toml` (default
+`~/.config/uv/uv.toml`), `/etc/uv/uv.toml`, any configured
+`$XDG_CONFIG_DIRS/uv/uv.toml` location or the selected repository root, and no
+`[tool.uv]` configuration. Violations fail the controlled build nonzero before
+uv runs, even if ordinary uv commands work on that host. See the earlier
+[controlled-build fixture instructions](#phase-9-mcp-transport-and-server-suite)
+(the paragraph beginning “The reviewed static build profile rejects ambient
+Hatch settings”) for the reviewed restrictions. The image
+must already exist locally, support root, `python3`, POSIX `sh`/signals,
+`sleep infinity`, and `mkdir` supporting `--`, with an existing directory-only,
+symlink-free `/tmp` parent kept stable during transfer. The operator supplies
+image tools, identities and permissions; no helper builds or pulls images.
+See [configuration prerequisites](configuration.md#operator-prerequisites) and
+[authored execution](#authored-host-execution-scenarios) and
+[cleanup scenarios](#authored-timeout-and-cleanup-scenarios) for the assertions.
+
+The single-file orchestrator resolves the tag once using local
+`docker image inspect --format {{.Id}} <tag>`, records the actual inspect
+command/streams/status and requires one full image ID. It passes only that ID
+into immutable acceptance configuration; subsequent launches substitute it
+literally, with `--pull=never`. This convenience does not broaden the unchanged
+low-level ID-only interface or add an image-resolution preflight there.
+Configured ID and full observed image identity/available digests are separate
+attribution; image metadata is diagnostic, not an equality gate. Docker launch
+errors remain unsuccessful with their real diagnostics. Avoid conflicting local
+hexadecimal-name tags as described in the configuration guide.
+
+### What executes and what counts as success
+
+The operator invokes only `verify_host_acceptance.py`. It invokes its selected
+root's `scripts/build-acceptance-wheel --manifest <external-manifest>`, validates
+that successful manifest's exact wheel binding, then calls
+`_execute_prepared_leg` → `_load_host_runner` → `_execute_prepared_host_leg`
+in-process for **both** profiles. The sibling loader records validated module
+path/spec origin/source SHA-256 and checks runner/bootstrap root equality before
+`exec_module`. Neither runner CLI main nor the four-option
+`scripts/run-host-acceptance` wrapper is executed by this host workflow.
+Dedicated subprocess/bootstrap/missing-tool-127 results for that wrapper are
+**Docker-free contract-only evidence**, not an additional required manual host
+leg and not real-host proof. Its public CLI and environment contract are unchanged.
+
+Each of four independent negative workspaces selects the explicit copied
+`host_tests/test_negative_expectations.py` path. Copied conftest alone consumes
+fixed-path `host_tests/expectation_input.json` before flow acquisition: schema 1
+has exactly `schema_version`, `case_id` and case-typed `expected_override` for
+`staged_bytes`, `argv`, `command_status` or `cleanup`. Overrides alter only
+expected observations, never commands, paths or service configuration. These are
+recorded generated workspace inputs, not source edits or public CLI/env controls.
+Both profiles copy `tests/host_acceptance_assertions.py` and its declared closure;
+normal selects the complete explicit normal suite and contains neither the
+negative module nor expectation JSON. Unexpected normal overrides fail closed.
+The exact common tests-package closure is `tests/__init__.py`,
+`tests/green_skip_policy.py`, `tests/host_acceptance_assertions.py`,
+`tests/mcp_provenance.py`, `tests/mcp_server_child.py`, `tests/mcp_transport.py`
+and `tests/mcp_lifecycle.py`, alongside the selected `host_tests/` profile.
+All are six-root source-identity inputs with byte-verified copy and completion
+rechecks; generated JSON/ini/expected-origin files are separate external outputs.
+Normal real-host support contains **no Docker stub**, relocated client/stub loader,
+or development-only `tests/mcp_protocol_child.py` dependency.
+
+Phase-10 portability separately copies `tests/mcp_relocated_client.py`,
+`tests/relocated_docker_child.py`, `tests/docker_cli_stub.py` and
+`tests/dispatcher_harness.py` plus declared dependencies. Its fresh-venv client
+and stub explicitly resolve only the recorded copied tests package: this narrow
+recorded-copy-root import exception never applies to the service bootstrap or
+permits ambient checkout/cwd injection. Current loaders use explicit by-path
+package loading, not sys.path insertion. Record development orchestrator,
+installed-wheel client, copied stub and service origins separately; stub origins
+are simulation attribution, never service-child provenance or real Docker proof.
+
+Every negative leg must first verify the unmodified shared baseline, then fail
+at its intended assertion with actual pytest status 1 and exactly one valid
+controller `FIXTURE_OUTCOMES=` record proving setup, intended call failure and
+successful teardown. Bare diagnostics, missing/duplicate/malformed records,
+prerequisite/setup/unrelated failures and unsettled cleanup never count as a
+detection. These four actual nonzero statuses are expected-negative observations,
+not four passing host suites. The separate normal suite must pass with positive
+collection, no skips/xfails/xpasses/exclusions, complete evidence and reconciled
+resources. Aggregate zero requires all four detections **and** normal acceptance,
+evidence retention/readback and reconciliation; otherwise preserve the first
+unexpected failing status, not a later success. Missing prerequisites are
+nonzero failures, never skips. Structured Python call outcomes, returned values,
+exceptions and interruptions are recorded separately from actual child
+argv/cwd/environment attribution/full separate stdout/stderr/raw statuses/cleanup.
+There is no runner process for these calls and no invented wrapper-process status.
+
+Installed service children use the fresh venv's absolute interpreter with `-P`,
+copied `tests/mcp_server_child.py`, archive-derived expected origins and the
+absolute installed console script, from neutral cwd with PYTHONPATH omitted.
+Ordinary host argv omits `--lifecycle`; that option belongs to nested relocated
+contracts. The bootstrap verifies the full Footman-package source set, including
+`__main__`/`filesystem/`, before dispatching the installed script in the **same**
+sole `OwnedProcess` child. The immediate parent matches its bounded stderr
+attestation, retains/reads back the complete verified set and records installed
+client imports separately. Dependencies/stdlib are outside package-byte proof;
+generated launcher digest is attribution, not an archive-member expectation.
+
+Dispatch exports only staged Git bytes/modes/actual internal symlinks, not later
+workdir edits, untracked inputs or `.git`. The image/startup prepares destination
+parents; Footman creates each fresh final destination using `mkdir` without `-p`,
+then copies snapshot contents with `docker cp <snapshot>/. <id>:<destination>/`.
+Missing parents, existing destinations or partial copy forbid command execution;
+there is no stale image-file merge. Real container cleanup removes only recorded
+IDs and confirms absence before confined host-snapshot deletion. Safe-retention
+fault cases remain unsuccessful runtime observations and require explicit
+fixture reconciliation; genuinely unresolved resources block acceptance.
+
+### Selected roots, controlled builds and fresh reruns
+
+The two existing shell/Python pairs are `scripts/build-acceptance-wheel` →
+`scripts/build_acceptance_wheel.py` and `scripts/run-host-acceptance` →
+`scripts/run_host_acceptance.py`. Both shell paths remain recorded non-Python
+exclusions. They select PATH `python3.14`/`uv` rather than checkout `.venv/bin`,
+diagnose missing tools with 127, and replace bootstrap-only PYTHONPATH with
+exactly their physically resolved repository's `src/`. Each Python implementation
+independently validates the same wrapper/implementation/import root before
+managed acquisitions. Missing foundation fails closed, without ambient fallback.
+Install/help/import/pytest/service children receive explicit clean environments
+without that bootstrap injection.
+
+`verify_host_acceptance.py` instead has exact shebang
+`#!/usr/bin/env python3.14` and no shell wrapper or extra shell exclusion.
+Missing interpreter is env's pre-script diagnostic/127, not a script-authored
+check; the script separately diagnoses missing PATH uv. Before footman imports,
+its single validated root/src sys.path bootstrap records `bootstrap_import_root`:
+no ambient fallback, self-re-exec, scripts-package import or second root. The
+by-path runner reuses it without loader-side sys.path/PYTHONPATH changes.
+See [entry-point exceptions](python-checks.md#installation).
+
+The build helper runs exactly bare `uv build` with cwd at its own physically
+resolved wrapper repository root, identical to the validated bootstrap root.
+Caller cwd is allowed to differ and is recorded but never selects build/dist,
+revision or identity inputs; there is no public root argument. The runner
+independently selects its own wrapper root for identity/source comparisons, not
+its external install/test workspace. Operator invocation may create attributed
+`dist/` outputs in that selected root; development scripted/relocation and
+complete-profile integration builds use only recorded disposable prepared roots.
+Those profiles include src/, tests/, delivered host_tests/, scripts/ with full
+wrapper dependencies, pyproject.toml, uv.lock, matching README.md and resolvable
+synthetic HEAD recorded separately from candidate revision. Core doubles remain
+separate from real-uv integration; both preserve candidate dist and source/build
+identities through success/failure. Neither is Docker proof.
+
+Before uv, the reviewed static profile predicts **both** destinations (currently
+`dist/footman-0.1.0.tar.gz` and `dist/footman-0.1.0-py3-none-any.whl`). Any existing
+entry, including a dangling link, causes refusal naming the root and exact
+conflicts; no build/deletion/replacement occurs. Every prior output is unowned
+by the new invocation even if its digest matches. For every fresh host rerun:
+
+- Retain evidence first, then the operator removes **only the named conflicting
+  paths outside the helper**, or selects a different clean matching-input/revision
+  root's wrapper and matching runner/orchestrator. If both outputs conflict,
+  resolving only the wheel is insufficient. Changing caller cwd is not a remedy.
+- Record the external operator action or selected new root, pre-existing dist
+  inventory, predicted/conflicting/produced paths, independent sdist/wheel digests
+  and actual statuses; preflight refusal means uv not attempted, not exit zero.
+- Never broad-clean dist, overwrite prior evidence, reuse a stale artifact or
+  select by glob/newest/mtime. Bind only that successful invocation's attributed
+  wheel path/SHA-256. The independent
+  `tests/acceptance_build_support.py::build_and_bind_wheel` parity surface retains
+  the same bare repository-root form and guards; production never imports it.
+  Fixture-owned disposable build/object creation is separately recorded, not
+  dispatcher mutation or permission to alter unowned candidate artifacts.
+
+### Cross-environment inputs and evidence handoff
+
+Keep **development-container** and **operator-host** validation legs separately
+labeled. Development requires the full unscoped G, documented build/help and
+applicable fresh exact-wheel installation smoke; host requires the single manual
+orchestrator run above. Neither substitutes for the other. Record each leg's
+runtime/dependency/Git/OS versions, exact commands/statuses/counts/warnings and
+cleanup; development records Docker unavailability, host additionally records
+Docker/image observations. Keep separate development-smoke and host-acceptance
+wheel paths/digests. Independent build digest equality is **not required** and
+is not a reproducibility claim; each installed wheel must match its own binding.
+
+The versioned schema-1 source-to-wheel build manifest includes revision, separate
+local-change diagnostics, six-root `source_identity` plus full inventory and the
+exact attributed artifact paths/digests. Source scope is exactly `src/`, `tests/`,
+`host_tests/`, `scripts/`, `pyproject.toml`, `uv.lock`, including untracked scoped
+files, relative paths/kinds/executable bits/bytes/link targets without following
+links. Planning `openspec/**`, `docs/**`, dist, generated external evidence and
+tooling caches are excluded; static Python roots are a different list.
+`build_input_identity` separately requires schema 1 and ordered roots `src/`,
+`pyproject.toml`, `README.md`, with its own inventory. Transfer/match README as
+well as all six source roots, executable bits/link targets/untracked scoped files
+and Git revision metadata; a checkout of HEAD alone does not reproduce local
+scoped changes. Keep generated development evidence and manifests outside the
+checkout. Transfer the six source roots plus README.md and matching Git revision
+metadata to the host root, **never the development `dist/` directory**. The host
+root must not already contain either predicted `dist/footman-0.1.0.tar.gz` or
+`dist/footman-0.1.0-py3-none-any.whl`: both names currently exist in the candidate
+checkout, so copying that checkout wholesale would block a fresh host build.
+Operator invocation may create those attributed build outputs in its selected
+root, subject to the collision guards and explicit remedies above. Transfer exact
+wheel and manifest together as separate external evidence, preserving the recorded absolute
+wheel path if consumed by a matching runner; never hand-edit a manifest to bless
+a relocated/swapped artifact. The single host command builds its own fresh bound
+wheel, not the transferred development artifact. Rebuild old manifests lacking
+build_input_identity. Pre/post build and independent runner preflight/copy/
+completion checks compare both identities; README-only stale inputs fail even
+when revision and six-root identity match. Staging/checkbox/evidence-only changes
+do not invalidate provenance, but changed documentation checks still need reruns.
+
+The operator prepares the existing directory-only, symlink-free parent chain
+`/tmp/gorshochek/ephemeral/footman.git`. Within that parent, the script creates
+only the final `host-acceptance` base component if absent and exclusively reserves
+and prints a fresh absolute per-run directory under that fixed shared base.
+These are single-component creations, not recursive `mkdir -p`. Missing/unusable
+parents fail nonzero before any run directory, printed run path or `report.json`
+exists. File/symlink/unwritable bases also fail safely. No path override or
+separate operator mount-confirmation declaration exists; operator mkdir is not
+required for the base/run components, but parent preparation is a prerequisite.
+Retain the exact printed path and actual shell status, including failed or
+interrupted runs. Schema-1 `report.json` distinguishes `final` from `incomplete`;
+final does not imply success. Preserve complete separate streams, build manifest,
+call/child records, inventories/provenance and cleanup observations. Operator
+run directories are retained evidence, not test-cleanup residue. Restrict access:
+raw output may be sensitive and large. Independently reconcile only recorded
+resource IDs/paths; unknown resources never grant deletion or a second owner.
+
+The stop/resume/fix/re-run protocol (planning tasks 11.14–11.18) is:
+
+1. After current development GREEN and introspection, publish readiness and stop
+   the Agent. Host acceptance remains pending; documentation is not a handoff.
+2. The operator manually runs the one command, retains status/path and resumes
+   the Agent **inside the container** with basic results and that exact directory,
+   even on failure/interruption. This submission is the implicit shared-mount
+   handoff; no separate operator visibility/readability declaration is needed.
+3. The Agent attempts readback of only that supplied directory, never newest or
+   mtime selection. Missing/inaccessible/truncated/inconsistent/stale evidence is
+   an evidence/handoff issue, not a missing mount declaration or passing run.
+   Independently compare current revision/both identities, wheel binding,
+   intended negative outcomes, normal collection/policy, streams and resources;
+   distinguish operator-only observations from container-verifiable facts.
+4. Diagnose prerequisites/environment separately from assertion/cleanup defects.
+   Preserve every failed attempt as historical. For fixes, add Docker-free RED
+   regressions where possible, fix, repeat full GREEN/introspection/readiness,
+   stop again and have **only the operator** rerun in a fresh directory after
+   the explicit build-collision remedies. No automatic host retry/background run.
+5. Final validation requires both currently applicable environment legs, all
+   intended controls/normal assertions and reconciled resources. Relevant input
+   changes or missing/stale evidence require affected-leg re-verification; stub
+   success cannot replace host-only observations or unresolved cleanup.
+
 ## Phase 11 host-runner RED contracts
 
 Register the Docker-free runner/build/inventory contracts before Phase-11 RED:
@@ -1085,11 +1360,10 @@ interfaces/tools/foundation isolation, exact wrapper-selected roots and relocati
 source versus README-inclusive build identity, public build attribution/collisions,
 post-check failure precedence, isolated runner policy/provisioning, archive and
 full-package provenance/evidence controls, static inventory/typing, and collection
-isolation. Wrapper-dependent bodies stop at an explicit missing-interface
-assertion until GREEN supplies the interfaces: their build/repeat/parity/runner
-outcomes must not be reported as observed behavior before that implementation.
-Missing public interfaces are implementation RED, never a passing expected build
-rejection. Broken profiles, tools, copied dependencies or synthetic HEADs are
+isolation. Wrapper-dependent bodies first require the delivered interfaces: a missing
+public interface remains an implementation failure, never a passing expected
+build rejection. Historical RED records retain their actual missing-interface
+failures; current results must identify the implementation actually exercised. Broken profiles, tools, copied dependencies or synthetic HEADs are
 setup errors, not attribution-case rejections; direct preparation/instrumentation
 self-tests exercise those distinctions independently of the missing wrappers.
 
@@ -1106,8 +1380,11 @@ Scripted tools exercise attribution only; their artifacts/manifests never feed a
 installation. Unsafe-archive controls additionally install a blocking tool spy
 so even an erroneous runner cannot install those scripted artifacts.
 
-The separately discovered real-Docker suite is named `host_tests/`. Its public
-interfaces, registered before RED and now implemented, are:
+The separately discovered real-Docker suite is named `host_tests/`. These
+low-level public interface signatures were registered before RED and are now
+implemented; they are not additional required manual host legs. The single
+operator command above invokes the build helper but calls runner functions;
+runner-wrapper subprocess results are Docker-free contract-only evidence:
 
 ```sh
 scripts/build-acceptance-wheel --manifest <build-manifest>
@@ -1133,9 +1410,10 @@ mismatch tree/argv/status/cleanup and related observations without changing
 production code or the developer repository. Actual optimized subprocesses check
 that invalid evidence remains rejected under `python -O`. These are assertion
 sensitivity controls, not proof of in-container copy, execution or removal.
-The future host suite must explicitly copy this assertion module in addition to
-the normal transport/bootstrap closure if it reuses it; it is not a dependency
-of that existing closure.
+Both delivered host profiles explicitly copy this assertion module and its
+`tests/mcp_provenance.py` dependency alongside the normal transport/bootstrap
+closure. The assertion module is not a transport dependency; the runner declares
+it independently and checks the complete copied closure at copy and completion.
 
 Task 11.2 extends this same registered suite with copied-fixture controls in
 `tests/host_expectation_support.py`. These disposable profiles copy the assertion
@@ -1186,8 +1464,8 @@ negative control or fixture error. Core executions select only a complete
 prepared root by copied script location, with recorded synthetic HEAD, full
 inventory, source/build-input identities and candidate-dist preservation. A
 loaded-module probe patches only `_RESULTS_BASE` and `_execute_prepared_leg`;
-it adds no production option/environment channel, never loads the future real
-runner and never runs runner CLI main. Patched-base core contracts use
+it adds no production option/environment channel and uses a prepared-leg double
+rather than the delivered runner. It never runs runner CLI main. Patched-base core contracts use
 fixture-owned external bases; the separate unpatched contract below retains
 the production literal. The missing-interpreter check separately executes the exact
 shebang through `/usr/bin/env` from unrelated cwd and must fail with status 127
@@ -1294,17 +1572,23 @@ unrelated record present, and reject partial, incomplete, missing or inaccessibl
 supplied evidence without falling back. They test this shared helper only, not
 the full independent candidate/provenance/resource verification required at
 operator resumption or actual host-to-container mount access. The separate
-orchestrator readback-denial probe remains an implementation-dependent RED
-contract. No separate operator mount-confirmation declaration is required. Finalization/readback and
-unsafe/unwritable/collision-base contracts remain RED until the orchestrator
-is implemented. If the results base is absent, the orchestrator must create
-it automatically through secure directory capabilities, then reserve a fresh
-run directory. A file or symlink in its place is not a reusable base; denied
-creation fails before Docker/build execution and grants no ownership. The
+orchestrator readback-denial probe exercises the delivered finalization boundary.
+No separate operator mount-confirmation declaration is required. Current
+finalization/readback and unsafe/unwritable/collision-base contracts execute the
+delivered orchestrator; historical RED failures remain historical. If the results
+base is absent, the orchestrator creates only that final component through
+secure directory capabilities, then exclusively reserves a fresh run directory.
+The operator must already have prepared the directory-only, symlink-free parent
+chain `/tmp/gorshochek/ephemeral/footman.git`; it is not created recursively.
+A missing/unusable parent is a nonzero prerequisite failure before any run
+directory, printed run path or `report.json` exists. A file or symlink in the
+base's place is not reusable; denied creation fails before Docker/build execution
+and grants no ownership. The
 missing-base RED contract records successful base/run mkdir receipts and
 preserves inventories and results before exact test-owned cleanup. Its separate
-inert-marker readiness case exercises that driver without pretending the
-orchestrator is delivered. No operator mkdir step or path override is required.
+inert-marker readiness case independently exercises that driver without relying
+on the orchestrator implementation. No operator mkdir step is required for the
+base/run components once the parent is prepared; no results-path override exists.
 
 The core boundary receives one typed dataclass with `wheel`, `source_identity`
 (the controlled manifest path), `image`, `evidence`, `workspace`, `profile`,
@@ -1319,11 +1603,12 @@ confirmation from the retained baseline marker, and `detected` to require that
 confirmation plus the target diagnostic/count/status checks. Neither is inferred
 from a matching diagnostic or the double's assertion failure kind alone.
 A matching diagnostic without baseline confirmation must yield `detected=false`
-and `failure_kind="invalid-observation/setup"`. This remains an unimplemented
-orchestrator contract, not passing execution. Zero requires every targeted detection and the normal suite,
-evidence and reconciliation. The double's outputs/counts are explicitly
-synthetic, not observations of host tests or installation. The planned core
-report uses `report.json`, schema 1, `state`, `success`, `first_unexpected_status`,
+and `failure_kind="invalid-observation/setup"`. Missing structured controller
+outcomes also forbids detection, even with a valid baseline and bare diagnostic;
+the observed assertion kind/status remain separate from acceptance. Zero requires
+every targeted detection and the normal suite, evidence and reconciliation.
+The double's outputs/counts/controller records are explicitly synthetic, not
+observations of host tests or installation. The delivered core report uses `report.json`, schema 1, `state`, `success`, `first_unexpected_status`,
 root/bootstrap/revision/both-identity attribution, `commands` with complete
 stream paths and `legs` with raw `pytest_status` and detection observations.
 
@@ -1335,17 +1620,17 @@ output is inert wheel-labelled bytes with a matching synthetic manifest: no uv
 build, install or usable-wheel claim is made. No image build/pull or service
 launch is possible through the scripted Docker double's exact inspect grammar.
 Independent readiness tests execute these tools and the stdlib probe against an
-inert marker without the absent orchestrator, distinguishing working fixture
-setup from RED due to missing implementation. The registered core RED contracts
+inert marker without depending on the orchestrator, distinguishing fixture
+readiness from implementation behavior and historical missing-interface RED. The registered core RED contracts
 in this same suite pin tag/ID parsing, build/binding rejection, all four negative
 legs plus the separate normal profile, unrelated/prerequisite/policy/zero-collection
 failures, first-status precedence, independent leg attempts, incomplete
 cleanup/evidence, interruption, wrong-root/missing foundation, runner-root refusal
 before execution, import/env poisoning and fresh repeated evidence without
-prior-artifact/report reuse. The orchestrator-dependent contracts currently fail
-at the missing single-file interface assertion; their passing implementation
-belongs to the implementation/integration tasks. These existing pins establish
-neither passing orchestration execution nor real-host success.
+prior-artifact/report reuse. The orchestrator-dependent contracts now execute the delivered single-file
+interface. Their synthetic boundary results establish core decision behavior,
+not actual installed-suite execution or real-host success; the separately
+registered complete-profile integration exercises delivered dependencies.
 Copied-support path insertion in the separate test-tool child is an attributed
 stub-loader exception only; the orchestrator probe adds no second sys.path root,
 and no test-tool bootstrap authority may reach an installed service.
@@ -1362,12 +1647,13 @@ Failure before versus after complete attestation is distinct from retained
 provenance. Source/README/support mutations also target completion rechecks.
 
 The probe is independently executed using the retained Phase-9 real-wheel fixture
-before its use behind the future runner. Private mutable installation clones are
+as an independent control as well as behind the delivered runner. Private mutable installation clones are
 attributed as clones, not fresh installs. A separate isolated pytest fixture adds
 locked pytest/xdist dependencies only to its private clone and executes positive,
 skip/xfail/xpass/failure/empty controls with explicit config and host suite paths.
 Nested policy violations remain deliberately unsuccessful inner commands, not
-passing host acceptance. This validates fixture readiness, not the absent runner.
+passing host acceptance. Independent fixture readiness and delivered runner
+execution have separately attributed contract results; neither proves Docker.
 
 `tests/host_install_proxy.py` is a development tool spy, never an installed-wheel
 client or production dependency. It delegates native uv through the existing
@@ -1416,9 +1702,13 @@ xpasses, missing prerequisites and unresolved cleanup. Host execution requires
 an operator-prepared local image and a Docker-capable host; no automatic image
 build/pull or development-container socket access is permitted. Docker-free
 contracts do not prove real Docker semantics or establish real-host negative
-control success. Host support is included in the four-root static inventory;
+control success. Contract authoring and fixed-results/handoff controls are
+Docker-free (planning tasks 11.2/11.3); host package/static-root work is delivered
+by 11.5, and implementation plus complete-profile integration through 11.10.1
+remains simulation. Host support is included in the four-root static inventory;
 ty checks `src/` and `host_tests/`, not development tests. Full development GREEN
-and operator-only host acceptance remain separate gates.
+(11.12), subsequent review/readiness and the operator-only host run (11.15) are
+separate gates. Historical RED registration does not imply any current host proof.
 
 ### Recorded wrapper contract formats
 
@@ -1513,13 +1803,14 @@ The delivered complete-profile Docker-free integration is registered separately
 and remains simulation, not host proof; real-host execution is operator-only task
 11.15.
 The core checks do not authorize running the operator script on the candidate
-checkout or using Docker in development. Existing RED contracts for later
-implementation tasks remain required and unsuccessful, not passing GREEN.
+checkout or using Docker in development. Historical RED observations remain unsuccessful historical evidence, not current
+passing GREEN; current core and integration results require their own complete
+output, raw statuses and resource reconciliation.
 
 ### Isolated host-workspace contracts
 
 `scripts/run_host_acceptance.py` supplies private workspace preparation and
-provisioning independently of the later public bootstrap and provenance work.
+provisioning as a component of the delivered public bootstrap and provenance flow.
 Run its Docker-free contracts with:
 
 ```sh
@@ -1546,8 +1837,8 @@ the declared support closure, the real runner's compatibility with orchestrator
 import preflight, and refusal to launch after the original workspace deadline.
 Source and copied bytes are rechecked before/after execution. Real fresh-wheel
 policy/import tests and omission/mutation/ownership fault controls are simulations,
-not host acceptance. Public CLI/binding/provenance and real host scenarios remain
-separate deliverables.
+not host acceptance. Public CLI/binding/provenance contracts are separately
+registered below; actual real-Docker execution remains operator-only.
 
 ### Archive-authoritative host provenance
 
@@ -1568,8 +1859,9 @@ options through the existing sole-owned transport, and keeps provisional
 attestation separate from final clean-EOF confirmation. Only a confirmed matching
 set can be written/read back as complete provenance evidence. Process/protocol
 failure and evidence or support failure independently prevent acceptance; valid
-provenance can remain retained after an unsuccessful child. No public runner
-entry point or actual Docker scenario is delivered by this layer.
+provenance can remain retained after an unsuccessful child. This component's
+provenance checks alone establish neither public runner wiring nor actual Docker
+semantics; the delivered runner and authored scenarios have separate contracts.
 
 Run its Docker-free contracts and workspace regressions with:
 
@@ -1653,8 +1945,9 @@ Docker-free subprocess contracts; those checks do not establish real-host proof.
 The independent Phase-9/10 attribution implementations remain parity surfaces,
 not imports or substitutes for the controlled production helper. All scripted
 and real-uv development build contracts use disposable prepared roots and prove
-the candidate checkout's dist artifacts unchanged. Host suites and full
-orchestration integration are separate delivery work.
+the candidate checkout's dist artifacts unchanged. The delivered complete-profile integration exercises this wiring with actual
+copied suites and Docker simulated at its CLI boundary; only the operator host
+leg can establish real Docker semantics.
 
 ### Authored host execution scenarios
 
@@ -1677,9 +1970,10 @@ for the exact dedicated negative module; normal/mixed selection rejects it.
 All four controls first complete the unmodified shared baseline, then change
 only the selected expectation. Controller outcomes preserve setup/call/teardown
 and independently reject cleanup/unrelated failures. This registration does not
-execute or establish real Docker behavior: operator task 11.15 is still pending,
-as is full orchestration integration. The authored timeout/cleanup scenarios
-are described below; their real execution remains pending.
+execute or establish real Docker behavior: operator task 11.15 is still pending.
+The delivered Docker-free complete-profile integration executes these copied
+bodies as simulation. The authored timeout/cleanup scenarios are described
+below; their real-Docker execution remains pending.
 
 Generated source fixtures, Git command streams/statuses, per-service provenance,
 bounded diagnostic stderr tails (65536-byte limit, not full raw stderr), MCP
@@ -2152,8 +2446,9 @@ That suite is not part of development discovery; missing host prerequisites fail
 host acceptance, never become skips. Passing development checks does not establish
 final host acceptance. The host package and support are now present in the
 four-root static inventory (`src/`, `tests/`, `host_tests/`, `scripts/`), and ty
-checks `src/` plus `host_tests/`; `tests/` remains untyped. Host test scenarios
-and installed-wheel runner execution are separate later deliverables.
+checks `src/` plus `host_tests/`; `tests/` remains untyped. Host test scenarios and installed-wheel runner execution are delivered and
+simulated by the registered Docker-free integration; their real-Docker proof
+remains pending the operator-only host gate.
 Never exercise index mutation or broad container cleanup against this repository;
 use disposable repositories and recorded fixture-owned container IDs.
 

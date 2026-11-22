@@ -105,4 +105,7 @@ Git repositories and filesystem resources without Docker. Its
 proves staged-byte identity, not a mount. Phase 5's `dev_snapshot_copy_identity`
 checks this host export as the literal Docker copy source. Actual in-container
 copy visibility, bytes/modes/symlinks and execution remain real-Docker host
-acceptance obligations.
+acceptance obligations. The [operator-only host protocol](testing.md#operator-only-host-acceptance)
+describes the single manual command, independent wheel/input attribution and
+exact-path handoff; neither export tests nor Docker-free complete-profile
+integration may be reported as that real-Docker proof.

@@ -37,7 +37,16 @@ resolved from the interpreter running it (`.venv/bin/ruff`) first and only then
 from `PATH`. Python 3.14+ and `uv` are prerequisites.
 
 These acceptance-tool PATH exceptions do not change the existing check entry
-points or the independently typed `src/` and `host_tests/` boundary.
+points or the independently typed `src/` and `host_tests/` boundary. For the
+[operator-only host workflow](testing.md#operator-only-host-acceptance), the
+operator invokes only `verify_host_acceptance.py`: it invokes the controlled
+build helper and calls the by-path-loaded runner functions in-process for normal
+and negative profiles. It does not execute the four-option runner wrapper or
+runner CLI main. Dedicated wrapper subprocess/bootstrap/127 results are
+Docker-free contract-only evidence, not another manual host leg or Docker proof.
+The single-file script records its one validated `bootstrap_import_root` before
+footman imports; the runner must match that root before exec_module and adds no
+second import root. Missing foundation fails closed, without ambient fallback.
 
 ## Commands
 

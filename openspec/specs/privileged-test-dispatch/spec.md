@@ -1,10 +1,10 @@
-# Spec Delta
+# privileged-test-dispatch Specification
 
 ## Purpose
 
 Execute an operator-configured command as a privileged container user against a fixed staged source snapshot through stdio MCP, with attributable retained results.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Operator configuration
 The dispatcher SHALL validate versioned configuration once at startup, immutable until restart. It SHALL define repository, launch argv template, required `image_id`, user, command argv, snapshot destination, cwd, snapshot storage, output template and positive bounded `timeout_seconds`/`cleanup_grace_seconds`. Static field, value and path errors SHALL prevent startup. Requests SHALL NOT override command or environment. TOML edits SHALL take effect only after restart.
@@ -500,6 +500,14 @@ flowchart TB
 - **THEN** only a disposable prepared complete-profile copy selects its own root by script location, with declared src/, tests/, host_tests/, scripts/, pyproject.toml, uv.lock, matching README.md bytes, complete available wrapper/foundation dependencies and recorded resolvable synthetic HEAD; 11.4 supplies a case-owned host_tests marker and future-runner loader fixtures/doubles without prematurely changing production roots, whereas 11.10.1 copies delivered real suites/helpers and loads its real sibling runner
 - **WHEN** real uv or by-path integration runs
 - **THEN** it builds/loads only in that prepared root and records full per-leg inventory, prepared root, synthetic versus candidate revision, both scoped pre/post identities and dist inventories; independent candidate-checkout dist and source/build-input identities must remain unchanged on success and failure, and missing profile roots/dependencies/HEAD are setup errors rather than expected rejections
+
+#### Scenario: Narrow default-base test repair within final acceptance
+- **WHEN** task 11.17 repairs the test's total-base-size assumption
+- **THEN** the existing direct/default-loaded integration selects only its exact exclusively acquired run path/receipt checked against no-follow before/after inventories, preserves a separately fixture-owned deterministic sentinel and all operator evidence, rejects unknown additions/mutations without deletion, and cleans only recorded test-owned resources through their sole owners with relevant lifecycle fault controls; never use newest/mtime, unchecked deltas or total base size one
+- **WHEN** the narrow repair and final validation proceed
+- **THEN** this change owns that fix/regression and original 11.17–11.19, without dependency on the follow-up's Admission mutex, shared-UID or dist enhancements or archive; retain existing suite exclusivity and manual dist remedies, require fresh full G and applicable checks, and determine operator host repetition from affected behavior and source/build identity comparisons, including scoped test/support changes, not merely planning edits
+- **WHEN** follow-up features have been delivered in the candidate being accepted
+- **THEN** their explicit rerun contract supplies the narrow orchestrator-preparation exception to the baseline manual-conflict policy, while the helper and independent fixture collision guards remain unchanged; current affected checks and identities are required, and neither historical success nor moving tasks establishes final acceptance
 
 #### Scenario: Docker-free preparation and manual host handoff
 - **WHEN** the Agent prepares Phase 11 inside the development container

@@ -30,6 +30,8 @@ None.
 
 ## Impact
 
+Task 11.17 owns the narrow default-base test correction: select only its exclusively acquired run/receipt, reconcile before/after inventories and preserve a separately owned deterministic pre-existing sentinel and all operator evidence. This requires no new Admission API, shared-UID policy or dist preparation. Follow-up `fix-shared-host-acceptance-reruns` owns those separate enhancements and their acceptance; this change does not depend on its group 2 or archive. Original final acceptance 11.17–11.19 remains pending until the narrow fix and applicable current verification succeed. Changes to checked tests/source/configuration require fresh affected checks and source/build identity comparison; host repetition is decided by that applicability, not merely by editing planning. Neither historical failed G nor prior host success is relabeled.
+
 This repository is the standalone dispatcher project; implementation belongs at its root. The plan is portable and requires no knowledge of any consumer's workflow, test organization, domain, packaging or permission model.
 
 The resource-lifecycle foundation is already present; its helper tests do not establish dispatcher completion. This change integrates those primitives without moving Docker, Git, recursive snapshot cleanup or manifest-publication policy into the filesystem foundation.

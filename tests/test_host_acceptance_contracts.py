@@ -4487,11 +4487,99 @@ def test_default_results_base_setup_owner_failure_and_repeat_matrix(
     assert base.is_dir(), "setup failure does not grant a new cleanup claim"
 
 
+@pytest.mark.parametrize("primary_kind", ["none", "operation", "interruption"])
+@pytest.mark.parametrize("close_failure", [False, True])
+@pytest.mark.parametrize("close_target", ["child", "parent"])
+def test_retained_results_sentinel_has_independent_once_only_cleanup(
+    tmp_path, monkeypatch, primary_kind, close_failure, close_target
+):
+    from tests import host_orchestration_support as core
+    from tests import host_results_support as results
+
+    base, evidence = tmp_path / "base", tmp_path / "evidence"
+    base.mkdir()
+    evidence.mkdir()
+    p.write(base / "operator-evidence", b"unrelated retained bytes")
+    before = results.inventory(base)
+    primary = (
+        None
+        if primary_kind == "none"
+        else OSError("sentinel publication failed")
+        if primary_kind == "operation"
+        else KeyboardInterrupt("sentinel publication interrupted")
+    )
+    refused = OSError("sentinel capability close failed")
+    opening = results.DirectoryDescriptor.open_secure_path
+    creating = results.DirectoryDescriptor.create_directory
+    closing, writing = p.OPS.close, p.write
+    owners, live, released, sentinel, parents = [], {}, [], [], []
+
+    def track(owner):
+        owners.append(owner)
+        live[owner.fd] = owner
+        return owner
+
+    def open_path(*args, **kwargs):
+        return track(opening(*args, **kwargs))
+
+    def create(parent, name, **kwargs):
+        owner = track(creating(parent, name, **kwargs))
+        sentinel.append(owner)
+        parents.append(parent)
+        return owner
+
+    def close(fd):
+        owner = live.pop(fd, None)
+        closing(fd)
+        if owner is not None:
+            released.append(owner)
+            targets = sentinel if close_target == "child" else parents
+            if targets and owner is targets[0] and close_failure:
+                raise refused
+
+    def write(path, data):
+        if path == base / "prior-run-sentinel/report.json" and primary is not None:
+            raise primary
+        return writing(path, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(results.DirectoryDescriptor, "open_secure_path", open_path)
+        patch.setattr(results.DirectoryDescriptor, "create_directory", create)
+        patch.setattr(type(p.OPS), "close", lambda self, fd: close(fd))
+        patch.setattr(p, "write", write)
+        expected = (
+            primary if primary is not None else refused if close_failure else None
+        )
+        try:
+            with core.retained_results_sentinel(base, evidence) as ledger:
+                assert p.read(base / "prior-run-sentinel/report.json") == (
+                    b"retained sentinel\x00\xff"
+                )
+                assert set(ledger.claims) == {"prior-run-sentinel"}
+            ledger.finish()
+        except BaseException as error:
+            assert expected is not None and error is expected
+        else:
+            assert expected is None
+        assert sentinel and all(owner.released for owner in owners)
+        assert len(released) == len(owners) and len(set(map(id, released))) == len(
+            owners
+        )
+        for owner in owners:
+            owner.close()
+        assert len(released) == len(owners), "repeat release must not close again"
+        assert not live
+    assert results.inventory(base) == before
+    assert p.load(evidence / "reconciled.json")["complete"] is True
+
+
 def test_orchestrator_unpatched_default_direct_and_loaded_legs_reconcile_exact_runs(
     tmp_path,
     _account_for_orchestrator_results,
     admission,
 ):
+    from contextlib import ExitStack
+
     from footman.filesystem.descriptors import DirectoryDescriptor
     from tests import host_orchestration_support as core
     from tests import host_results_support as results
@@ -4506,8 +4594,14 @@ def test_orchestrator_unpatched_default_direct_and_loaded_legs_reconcile_exact_r
     )
     base = results.DEFAULT_BASE
     reconciliation_entries = []
+    sentinel_scope = ExitStack()
     made_base = core.prepare_default_results_base(base)
     try:
+        sentinel_evidence = tmp_path / "prior-run-evidence"
+        sentinel_evidence.mkdir()
+        sentinel_scope.enter_context(
+            core.retained_results_sentinel(base, sentinel_evidence)
+        )
         for mode in ("loaded", "direct", "unknown-option"):
             evidence = tmp_path / ("default-" + mode)
             evidence.mkdir()
@@ -4737,6 +4831,8 @@ def _execute_prepared_host_leg(leg):
                 ),
                 ordinary=(Exception,),
             )
+        failures.run(sentinel_scope.close, ordinary=(Exception,))
+        sentinel_scope.close()  # A repeat exit must not repeat any release.
         if made_base:
             # rmdir only, after reconciliation: unknown residue explicitly fails.
             def remove_base():
@@ -6920,8 +7016,28 @@ def _delivered_orchestrator_integration(tmp_path, admission, real_base):
             for state in observed["leg_states"]:
                 assert state["globals_restored"]
                 assert state["candidate_before"] == state["candidate_after"]
-            assert len(names) == 1
-            report = p.load(prepared["base"] / names[0] / "report.json")
+            receipts = core.reservation_receipts(prepared)
+            assert len(receipts) == 1
+            receipt = receipts[0]
+            assert receipt["operation"] == "exclusive-mkdir-success"
+            assert observed["exclusive_reservations"] == [
+                {key: receipt[key] for key in ("path", "device", "inode")}
+            ]
+            run = Path(receipt["path"])
+            identity = (receipt["device"], receipt["inode"])
+            assert run.parent == prepared["base"]
+            assert ledger.claims == {run.name: identity}
+            before_names = {item["path"].split("/")[0] for item in ledger.before}
+            assert set(names) == before_names | {run.name}
+            after = results.inventory(prepared["base"])
+            assert [
+                item for item in after if item["path"].split("/")[0] != run.name
+            ] == ledger.before
+            root = next(item for item in after if item["path"] == run.name)
+            assert root["kind"] == "directory"
+            assert (root["device"], root["inode"]) == identity
+            report = results.read_accepted_report(run / "report.json")
+            assert report["repository_root"] == str(prepared["root"])
             assert report["state"] == "final" and report["success"] is True
             assert report["first_unexpected_status"] is None
             assert [leg["case_id"] for leg in report["legs"]] == [*core.CASES, None]
@@ -6957,7 +7073,7 @@ def _delivered_orchestrator_integration(tmp_path, admission, real_base):
         for relative in preservation["omitted_venv_payloads"]:
             assert not (retained / "retained" / relative).exists()
             profile = Path(relative).parts[1]
-            saved = retained / "retained" / names[0] / profile
+            saved = retained / "retained" / run.name / profile
             leg_report = p.load(saved / "evidence/report.json")
             assert leg_report["cleanup_complete"]
             commands = [
@@ -6976,7 +7092,7 @@ def _delivered_orchestrator_integration(tmp_path, admission, real_base):
                 assert len(paths) == 1
             assert len(set(paths)) == len(paths)
             for path in paths:
-                relative = Path(path).relative_to(prepared["base"] / names[0] / profile)
+                relative = Path(path).relative_to(run / profile)
                 assert p.load(saved / relative)["context"] == "wheel"
             if profile == "normal":
                 assert not (saved / "workspace/provenance.json").exists()

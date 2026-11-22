@@ -213,6 +213,29 @@ def prepare_default_results_base(base):
     return None
 
 
+@contextmanager
+def retained_results_sentinel(base, evidence):
+    """Own one deterministic prior run independently of integration ledgers."""
+    from tests import host_results_support as results
+
+    ledger = results.ResultsLedger(base, evidence)
+    with accounting_scope(ledger.finish):
+        with DirectoryDescriptor.open_secure_path(p.OPS, base) as parent:
+            name = "prior-run-sentinel"
+            with parent.create_directory(name, mode=0o700) as child:
+                info = os.fstat(child.fd)
+                ledger.claim_receipt(
+                    {
+                        "operation": "exclusive-mkdir-success",
+                        "path": str(Path(base) / name),
+                        "device": info.st_dev,
+                        "inode": info.st_ino,
+                    }
+                )
+                p.write(Path(base) / name / "report.json", b"retained sentinel\x00\xff")
+        yield ledger
+
+
 def isolated_environment(prepared, tmp):
     """Explicit approved tools only; no ambient Docker/PATH fallback."""
     bootstrap = h.isolated_path(tmp, uv=False)
